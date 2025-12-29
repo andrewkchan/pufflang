@@ -1,7 +1,7 @@
 import * as ast from "./nodes"
 import { UTF8Codec } from "./util"
 
-type LlvmType = "i1" | "i8" | "i32" | "float" | "double" | "i8*" | `%struct.${string}*`
+type LlvmType = "i1" | "i8" | "i32" | "i64" | "float" | "double" | "i8*" | `%struct.${string}*`
 
 interface ArrayInfo {
   elem: LlvmType // base element LLVM type (non-array)
@@ -163,6 +163,9 @@ class LlvmModuleBuilder {
     this.declare("declare i64 @write(i32, i8*, i64)")
     // read
     this.declare("declare i64 @read(i32, i8*, i64)")
+    // open/close
+    this.declare("declare i32 @open(i8*, i32, i32)")
+    this.declare("declare i32 @close(i32)")
     // malloc/free
     this.declare("declare i8* @malloc(i64)")
     this.declare("declare void @free(i8*)")
@@ -333,6 +336,8 @@ class FunctionBuilder {
       case "i32":
       case "float":
         return 4
+      case "i64":
+        return 8
       case "double":
       case "i8*":
         return 8
@@ -1000,12 +1005,10 @@ class FunctionBuilder {
           if (name === "__write__") {
             const fd = this.cast(this.emitExpr(c.args[0]), "i32")
             const buf = this.emitExpr(c.args[1])
-            const len = this.cast(this.emitExpr(c.args[2]), "i32")
-            const len64 = this.fresh("len64")
-            this.emit(`${len64} = sext i32 ${len.repr} to i64`)
+            const len = this.cast(this.emitExpr(c.args[2]), "i64")
             const ptr = this.cast(buf, "i8*")
             const out = this.fresh("write")
-            this.emit(`${out} = call i64 @write(i32 ${fd.repr}, i8* ${ptr.repr}, i64 ${len64})`)
+            this.emit(`${out} = call i64 @write(i32 ${fd.repr}, i8* ${ptr.repr}, i64 ${len.repr})`)
             const out32 = this.fresh("write32")
             this.emit(`${out32} = trunc i64 ${out} to i32`)
             return { type: "i32", repr: out32 }
@@ -1013,15 +1016,27 @@ class FunctionBuilder {
           if (name === "__read__") {
             const fd = this.cast(this.emitExpr(c.args[0]), "i32")
             const buf = this.emitExpr(c.args[1])
-            const len = this.cast(this.emitExpr(c.args[2]), "i32")
-            const len64 = this.fresh("len64")
-            this.emit(`${len64} = sext i32 ${len.repr} to i64`)
+            const len = this.cast(this.emitExpr(c.args[2]), "i64")
             const ptr = this.cast(buf, "i8*")
             const out = this.fresh("read")
-            this.emit(`${out} = call i64 @read(i32 ${fd.repr}, i8* ${ptr.repr}, i64 ${len64})`)
+            this.emit(`${out} = call i64 @read(i32 ${fd.repr}, i8* ${ptr.repr}, i64 ${len.repr})`)
             const out32 = this.fresh("read32")
             this.emit(`${out32} = trunc i64 ${out} to i32`)
             return { type: "i32", repr: out32 }
+          }
+          if (name === "__open__") {
+            const path = this.cast(this.emitExpr(c.args[0]), "i8*")
+            const flags = this.cast(this.emitExpr(c.args[1]), "i32")
+            const mode = this.cast(this.emitExpr(c.args[2]), "i32")
+            const out = this.fresh("openfd")
+            this.emit(`${out} = call i32 @open(i8* ${path.repr}, i32 ${flags.repr}, i32 ${mode.repr})`)
+            return { type: "i32", repr: out }
+          }
+          if (name === "__close__") {
+            const fd = this.cast(this.emitExpr(c.args[0]), "i32")
+            const out = this.fresh("close")
+            this.emit(`${out} = call i32 @close(i32 ${fd.repr})`)
+            return { type: "i32", repr: out }
           }
 
           const sig =
@@ -1199,6 +1214,11 @@ class FunctionBuilder {
       this.emit(`${out} = ptrtoint ${value.type} ${value.repr} to i32`)
       return { type: "i32", repr: out }
     }
+    if (isPtr(value.type) && target === "i64") {
+      const out = this.fresh("ptrtoi64")
+      this.emit(`${out} = ptrtoint ${value.type} ${value.repr} to i64`)
+      return { type: "i64", repr: out }
+    }
     const out = this.fresh("cast")
     if (value.type === "i1" && target === "i32") {
       this.emit(`${out} = zext i1 ${value.repr} to i32`)
@@ -1207,6 +1227,10 @@ class FunctionBuilder {
     if (value.type === "i8" && target === "i32") {
       this.emit(`${out} = zext i8 ${value.repr} to i32`)
       return { type: "i32", repr: out }
+    }
+    if (value.type === "i8" && target === "i64") {
+      this.emit(`${out} = zext i8 ${value.repr} to i64`)
+      return { type: "i64", repr: out }
     }
     if (value.type === "i8" && target === "float") {
       const ext = this.fresh("castzext")
@@ -1222,6 +1246,18 @@ class FunctionBuilder {
     }
     if (value.type === "i32" && target === "i8") {
       this.emit(`${out} = trunc i32 ${value.repr} to i8`)
+      return { type: "i8", repr: out }
+    }
+    if (value.type === "i32" && target === "i64") {
+      this.emit(`${out} = sext i32 ${value.repr} to i64`)
+      return { type: "i64", repr: out }
+    }
+    if (value.type === "i64" && target === "i32") {
+      this.emit(`${out} = trunc i64 ${value.repr} to i32`)
+      return { type: "i32", repr: out }
+    }
+    if (value.type === "i64" && target === "i8") {
+      this.emit(`${out} = trunc i64 ${value.repr} to i8`)
       return { type: "i8", repr: out }
     }
     if (value.type === "float" && target === "double") {
@@ -1757,8 +1793,10 @@ export function emitLlvm(context: ast.Context): string {
   fnSigs.set("__free__/1", { ret: "void", params: ["i8*"], retAst: ast.VoidType, mangled: "__free__" })
   fnSigs.set("__exit__/1", { ret: "void", params: ["i32"], retAst: ast.VoidType, mangled: "exit" })
   fnSigs.set("__putchar__/1", { ret: "i32", params: ["i32"], retAst: ast.IntType, mangled: "putchar" })
-  fnSigs.set("__write__/3", { ret: "i32", params: ["i32", "i8*", "i32"], retAst: ast.IntType, mangled: "write" })
-  fnSigs.set("__read__/3", { ret: "i32", params: ["i32", "i8*", "i32"], retAst: ast.IntType, mangled: "read" })
+  fnSigs.set("__write__/3", { ret: "i64", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "write" })
+  fnSigs.set("__read__/3", { ret: "i64", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "read" })
+  fnSigs.set("__open__/3", { ret: "i32", params: ["i8*", "i32", "i32"], retAst: ast.IntType, mangled: "open" })
+  fnSigs.set("__close__/1", { ret: "i32", params: ["i32"], retAst: ast.IntType, mangled: "close" })
   fnSigs.set("__write__/3", { ret: "i32", params: ["i32", "i8*", "i32"], retAst: ast.IntType, mangled: "write" })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {

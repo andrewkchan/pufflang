@@ -1173,6 +1173,26 @@ export class Context {
       symbol: null
     })
     readFn.symbol = this.functionSymbol(readFn)
+    const openFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__open__"),
+      params: [
+        { name: fakeToken(TokenType.IDENTIFIER, "path"), type: ptrType(ByteType) },
+        { name: fakeToken(TokenType.IDENTIFIER, "flags"), type: IntType },
+        { name: fakeToken(TokenType.IDENTIFIER, "mode"), type: IntType }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    openFn.symbol = this.functionSymbol(openFn)
+    const closeFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__close__"),
+      params: [
+        { name: fakeToken(TokenType.IDENTIFIER, "fd"), type: IntType }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    closeFn.symbol = this.functionSymbol(closeFn)
     this.global.define(memcpy.name.lexeme, memcpy.symbol)
     this.global.define(sqrt.name.lexeme, sqrt.symbol)
     this.global.define(mallocFn.name.lexeme, mallocFn.symbol)
@@ -1181,6 +1201,8 @@ export class Context {
     this.global.define(putcharFn.name.lexeme, putcharFn.symbol)
     this.global.define(writeFn.name.lexeme, writeFn.symbol)
     this.global.define(readFn.name.lexeme, readFn.symbol)
+    this.global.define(openFn.name.lexeme, openFn.symbol)
+    this.global.define(closeFn.name.lexeme, closeFn.symbol)
   }
 
   variableSymbol(node: VarStmt, isGlobal: boolean): VariableSymbol {
