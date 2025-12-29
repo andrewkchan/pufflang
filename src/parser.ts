@@ -117,14 +117,18 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
 
   function topDecl(): ast.TopStmt {
     const exported = match(TokenType.EXPORT)
-    if (match(TokenType.DEF)) return funDecl(exported)
+    if (match(TokenType.IMPORT)) {
+      if (match(TokenType.DEF)) return funDecl(exported, true)
+      throw parseError("Only 'def' imports are supported.")
+    }
+    if (match(TokenType.DEF)) return funDecl(exported, false)
     if (match(TokenType.STRUCT)) return structDecl(exported)
     if (match(TokenType.VAR)) return varDecl(exported)
 
     throw parseError("Only variable declarations and function definitions allowed at the top-level.")
   }
 
-  function funDecl(isExported: boolean = false): ast.FunctionStmt {
+  function funDecl(isExported: boolean = false, isImported: boolean = false): ast.FunctionStmt {
     const name = consume(TokenType.IDENTIFIER, "Expect identifier after 'def'.")
 
     consume(TokenType.LEFT_PAREN, "Expect '(' after function name.")
@@ -152,29 +156,41 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
       returnType = type()
     }
 
-    consume(TokenType.LEFT_BRACE, "Expect '{' before function body.")
-    pushScope()
-    params.forEach((param) => {
-      const scope = peekScope()
-      if (scope.hasDirect(param.name.lexeme)) {
-        // Don't throw; Function body will be parsed + resolved as if duplicate doesn't exist.
-        // Calls will still be parsed + resolved with arity including duplicate.
-        parseErrorForToken(param.name, `'${param.name.lexeme}' is already declared in this scope.`)
-      } else {
-        scope.define(param.name.lexeme, context.paramSymbol(param))
-      }
-    })
-    const statements = block()
-    const scope = popScope()
+    let node: ast.FunctionStmt
+    if (isImported) {
+      consume(TokenType.SEMICOLON, "Expect ';' after imported function declaration.")
+      node = ast.importedFunctionStmt({
+        name,
+        params,
+        returnType,
+        symbol: null
+      })
+    } else {
+      consume(TokenType.LEFT_BRACE, "Expect '{' before function body.")
+      pushScope()
+      params.forEach((param) => {
+        const scope = peekScope()
+        if (scope.hasDirect(param.name.lexeme)) {
+          // Don't throw; Function body will be parsed + resolved as if duplicate doesn't exist.
+          // Calls will still be parsed + resolved with arity including duplicate.
+          parseErrorForToken(param.name, `'${param.name.lexeme}' is already declared in this scope.`)
+        } else {
+          scope.define(param.name.lexeme, context.paramSymbol(param))
+        }
+      })
+      const statements = block()
+      const scope = popScope()
 
-    const node = ast.functionStmt({
-      name,
-      params,
-      returnType,
-      block: statements,
-      scope,
-      symbol: null
-    })
+      node = ast.functionStmt({
+        name,
+        params,
+        returnType,
+        block: statements,
+        scope,
+        symbol: null
+      })
+    }
+    node.isImported = isImported
     node.isExported = isExported
     const outerScope = peekScope()
     const symbol = context.functionSymbol(node)

@@ -770,6 +770,7 @@ export interface FunctionStmt extends Node {
   // scope itself.
   hoistedLocals: Set<VariableSymbol> | null // filled in by resolver
   isExported?: boolean
+  isImported?: boolean
 }
 
 export function functionStmt(
@@ -792,7 +793,8 @@ export function functionStmt(
     },
     symbol,
     hoistedLocals: null,
-    isExported: false
+    isExported: false,
+    isImported: false
   }
 }
 
@@ -811,7 +813,8 @@ export function importedFunctionStmt(
     body: null,
     symbol,
     hoistedLocals: null,
-    isExported: false
+    isExported: false,
+    isImported: true
   }
 }
 

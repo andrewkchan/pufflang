@@ -1701,7 +1701,7 @@ export function emitLlvm(context: ast.Context): string {
       params = [`${elemTy}*` as LlvmType, ...params]
     }
     const key = `${fn.name.lexeme}/${fn.params.length}`
-    const mangled = fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`
+    const mangled = fn.isImported ? fn.name.lexeme : (fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`)
     fnSigs.set(key, { ret, params, retAst: fn.returnType, mangled })
   })
   // Built-ins
@@ -1732,8 +1732,15 @@ export function emitLlvm(context: ast.Context): string {
   }
 
   functions.forEach((fn) => {
+    if (!fn.body) {
+      // imported function: declare externally
+      const sig = fnSigs.get(`${fn.name.lexeme}/${fn.params.length}`)!
+      const paramSig = sig.params.map((t, i) => `${t} %p${i}`).join(", ")
+      module.addFunction(`declare ${sig.ret} @${sig.mangled}(${paramSig})`)
+      return
+    }
     const fnBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName, structInfos)
-    const mangled = fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`
+    const mangled = fn.isImported ? fn.name.lexeme : (fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`)
     module.addFunction(fnBuilder.buildFunction(fn, mangled, !!fn.isExported || fn.name.lexeme === "main"))
   })
   return module.build()
