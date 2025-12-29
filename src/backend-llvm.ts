@@ -54,13 +54,13 @@ function llvmReturnTypeFromAst(type: ast.Type): LlvmType | "void" {
   return llvmTypeFromAst(type)
 }
 
-function formatFloatLiteral(value: number): string {
-  const buf = new ArrayBuffer(8)
-  const view = new DataView(buf)
-  view.setFloat64(0, value, /* littleEndian */ false)
-  const high = view.getUint32(0, false).toString(16).padStart(8, "0")
-  const low = view.getUint32(4, false).toString(16).padStart(8, "0")
-  return `0x${high}${low}`
+function formatDoubleLiteral(value: number): string {
+  if (Number.isFinite(value)) {
+    // Emit with enough precision for double; LLVM accepts decimal for doubles.
+    return value.toPrecision(17)
+  }
+  if (Number.isNaN(value)) return "0x7ff8000000000000"
+  return value > 0 ? "0x7ff0000000000000" : "-0x7ff0000000000000"
 }
 
 class LlvmModuleBuilder {
@@ -160,6 +160,7 @@ class FunctionBuilder {
   private globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>
   private globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>
   private structs: Map<string, StructInfo>
+  private loopStack: { breakLabel: string; continueLabel: string }[] = []
 
   constructor(
     private readonly module: LlvmModuleBuilder,
@@ -314,7 +315,9 @@ class FunctionBuilder {
           case ast.TypeCategory.BOOL:
             return { type: "i1", repr: lit.value ? "1" : "0" }
           case ast.TypeCategory.FLOAT:
-            return { type: "float", repr: `${formatFloatLiteral(lit.value)}` }
+            const trunc = this.fresh("flt")
+            this.emit(`${trunc} = fptrunc double ${formatDoubleLiteral(lit.value)} to float`)
+            return { type: "float", repr: trunc }
           case ast.TypeCategory.ARRAY: {
             if (ast.isEqual(lit.type.elementType, ast.ByteType)) {
               const strPtr = this.module.gepStringPtr(String(lit.value))
@@ -927,7 +930,7 @@ class FunctionBuilder {
       }
       case ast.TypeCategory.FLOAT: {
         const widened = this.cast(val, "double")
-        const fmtPtr = this.module.gepStringPtr("%f\n")
+        const fmtPtr = this.module.gepStringPtr("%.9g\n")
         this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, double ${widened.repr})`)
         break
       }
@@ -991,7 +994,7 @@ class FunctionBuilder {
         break
       }
       case "float": {
-        const fmtPtr = this.module.gepStringPtr("%f")
+        const fmtPtr = this.module.gepStringPtr("%.9g")
         const widened = this.cast(val, "double")
         this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, double ${widened.repr})`)
         break
@@ -1086,18 +1089,25 @@ class FunctionBuilder {
         const w = stmt as ast.WhileStmt
         const condLabel = this.freshLabel("loop.cond")
         const bodyLabel = this.freshLabel("loop.body")
+        const incLabel = w.increment ? this.freshLabel("loop.inc") : condLabel
         const endLabel = this.freshLabel("loop.end")
         this.emit(`br label %${condLabel}`)
         this.emitLabel(condLabel)
         const cond = this.emitCondition(w.expression)
         this.emit(`br i1 ${cond}, label %${bodyLabel}, label %${endLabel}`)
+        this.loopStack.push({ breakLabel: endLabel, continueLabel: incLabel })
         this.emitLabel(bodyLabel)
         this.emitStmt(w.body)
-        if (w.increment) {
-          if (!this.terminated) this.emitExpr(w.increment.expression)
+        if (!this.terminated) {
+          this.emit(`br label %${incLabel}`)
         }
-        if (!this.terminated) this.emit(`br label %${condLabel}`)
         this.terminated = false
+        if (w.increment) {
+          this.emitLabel(incLabel)
+          this.emitExpr(w.increment.expression)
+          this.emit(`br label %${condLabel}`)
+        }
+        this.loopStack.pop()
         this.emitLabel(endLabel)
         break
       }
@@ -1106,8 +1116,23 @@ class FunctionBuilder {
         b.statements.forEach((s) => this.emitStmt(s))
         break
       }
+      case ast.NodeKind.LOOP_CONTROL_STMT: {
+        const lc = stmt as ast.LoopControlStmt
+        if (this.loopStack.length === 0) {
+          throw new Error("Loop control used outside of loop")
+        }
+        const top = this.loopStack[this.loopStack.length - 1]
+        if (lc.keyword.lexeme === "break") {
+          this.emit(`br label %${top.breakLabel}`)
+        } else {
+          this.emit(`br label %${top.continueLabel}`)
+        }
+        this.terminated = true
+        break
+      }
       default:
-        throw new Error(`Unsupported statement kind ${ast.NodeKind[stmt.kind]} in minimal LLVM backend.`)
+        const _exhaustive: never = stmt as never
+        throw new Error(`Unsupported statement kind in LLVM backend.`)
     }
   }
 

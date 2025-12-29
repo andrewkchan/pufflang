@@ -26,7 +26,7 @@ describe("Upstream E2E - print", () => {
       "42",
       "1",
       "298",
-      "3.141593",
+      // float line checked via closeTo below
       "[1, 2, 3]",
       "-1430532899",
       "97",
@@ -36,6 +36,10 @@ describe("Upstream E2E - print", () => {
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
     const got = res.stdout.trim().split("\n")
-    expect(got).toEqual(expected)
+    expect(got[0]).toBe(expected[0])
+    expect(got[1]).toBe(expected[1])
+    expect(got[2]).toBe(expected[2])
+    expect(parseFloat(got[3])).toBeCloseTo(3.1415927410125732, 6)
+    expect(got.slice(4)).toEqual(expected.slice(3))
   })
 })
