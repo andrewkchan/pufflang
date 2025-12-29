@@ -118,11 +118,19 @@ class FunctionBuilder {
   private fnReturnTypeAst: ast.Type | null = null
   private terminated = false
   private paramArgsByName: Map<string, { type: LlvmType; repr: string }> = new Map()
+  private currentFunctionName: string = ""
+  private globals: Map<number, { ptr: string; type: LlvmType }>
+  private globalsByName: Map<string, { ptr: string; type: LlvmType }>
 
   constructor(
     private readonly module: LlvmModuleBuilder,
-    private readonly fnSigs: Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>
-  ) {}
+    private readonly fnSigs: Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>,
+    globals: Map<number, { ptr: string; type: LlvmType }>,
+    globalsByName: Map<string, { ptr: string; type: LlvmType }>
+  ) {
+    this.globals = globals
+    this.globalsByName = globalsByName
+  }
 
   fresh(prefix = "t"): string {
     return `%${prefix}${this.tempCounter++}`
@@ -144,6 +152,14 @@ class FunctionBuilder {
   }
 
   private getLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, fallbackType?: LlvmType): { ptr: string; type: LlvmType } {
+    if (symbol.kind === ast.SymbolKind.VARIABLE) {
+      const name = (symbol as ast.VariableSymbol).node.name.lexeme
+      const g = this.globalsByName.get(name) ?? this.globals.get(symbol.id)
+      if (g) return g
+      if ((symbol as ast.VariableSymbol).isGlobal) {
+        throw new Error(`Missing global slot for symbol ${name}`)
+      }
+    }
     const existing = this.locals.get(symbol.id)
     if (existing) return existing
     if (!fallbackType) throw new Error("Missing local slot for symbol")
@@ -151,6 +167,9 @@ class FunctionBuilder {
   }
 
   private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType, init?: Value): { ptr: string; type: LlvmType } {
+    if (symbol.kind === ast.SymbolKind.VARIABLE && (symbol as ast.VariableSymbol).isGlobal) {
+      return this.getLocal(symbol, type)
+    }
     const existing = this.locals.get(symbol.id)
     if (existing) return existing
     const ptr = this.fresh("var")
@@ -172,6 +191,16 @@ class FunctionBuilder {
     const out = this.fresh("ld")
     this.emit(`${out} = load ${slot.type}, ${slot.type}* ${slot.ptr}`)
     return { type: slot.type, repr: out }
+  }
+
+  private toBool(val: Value): Value {
+    if (val.type === "i1") return val
+    if (val.type === "i8" || val.type === "i32") {
+      const out = this.fresh("tobool")
+      this.emit(`${out} = icmp ne ${val.type} ${val.repr}, 0`)
+      return { type: "i1", repr: out }
+    }
+    throw new Error("Cannot convert to bool")
   }
 
   emitExpr(node: ast.Expr): Value {
@@ -235,6 +264,43 @@ class FunctionBuilder {
         const inner = this.emitExpr(c.value)
         const target = llvmTypeFromAst(c.type)
         return this.cast(inner, target)
+      }
+      case ast.NodeKind.LEN_EXPR: {
+        const lenExpr = node as ast.LenExpr
+        const lenVal = lenExpr.resolvedLength ?? 0
+        return { type: "i32", repr: `${lenVal}` }
+      }
+      case ast.NodeKind.LOGICAL_EXPR: {
+        const l = node as ast.LogicalExpr
+        const left = this.toBool(this.emitExpr(l.left))
+        const result = this.fresh("logic")
+        const evalRight = this.freshLabel("logic.right")
+        const endLabel = this.freshLabel("logic.end")
+        if (l.operator.lexeme === "&&") {
+          const falseLabel = this.freshLabel("logic.false")
+          this.emit(`br i1 ${left.repr}, label %${evalRight}, label %${falseLabel}`)
+          this.emitLabel(evalRight)
+          const right = this.toBool(this.emitExpr(l.right))
+          this.emit(`br label %${endLabel}`)
+          this.emitLabel(falseLabel)
+          this.emit(`br label %${endLabel}`)
+          this.emitLabel(endLabel)
+          this.emit(`${result} = phi i1 [ ${right.repr}, %${evalRight} ], [ 0, %${falseLabel} ]`)
+          return { type: "i1", repr: result }
+        } else if (l.operator.lexeme === "||") {
+          const trueLabel = this.freshLabel("logic.true")
+          this.emit(`br i1 ${left.repr}, label %${trueLabel}, label %${evalRight}`)
+          this.emitLabel(evalRight)
+          const right = this.toBool(this.emitExpr(l.right))
+          this.emit(`br label %${endLabel}`)
+          this.emitLabel(trueLabel)
+          this.emit(`br label %${endLabel}`)
+          this.emitLabel(endLabel)
+          this.emit(`${result} = phi i1 [ 1, %${trueLabel} ], [ ${right.repr}, %${evalRight} ]`)
+          return { type: "i1", repr: result }
+        } else {
+          throw new Error("Unknown logical operator")
+        }
       }
       case ast.NodeKind.GROUP_EXPR: {
         const g = node as ast.GroupExpr
@@ -456,7 +522,7 @@ class FunctionBuilder {
         if (!symbol) throw new Error("VarStmt missing symbol")
         const ty = llvmTypeFromAst(v.type!)
         const initVal = this.emitExpr(v.initializer)
-        const slot = this.ensureLocal(symbol, ty)
+        const slot = this.getLocal(symbol, ty)
         this.storeValue(slot, initVal)
         break
       }
@@ -560,6 +626,7 @@ class FunctionBuilder {
   }
 
   buildFunction(fn: ast.FunctionStmt): string {
+    this.currentFunctionName = fn.name.lexeme
     // Force main to return i32 for proper process exit codes.
     if (fn.name.lexeme === "main") {
       this.functionRetType = "i32"
@@ -586,6 +653,9 @@ class FunctionBuilder {
       this.lines.push(`  store ${llvmTy} ${incoming}, ${llvmTy}* ${slot.ptr}`)
       this.paramArgsByName.set(p.name.lexeme, { type: llvmTy, repr: incoming })
     })
+    if (this.currentFunctionName === "main" && this.fnSigs.has("__init_globals__")) {
+      this.lines.push("  call void @__init_globals__()")
+    }
     // body
     if (fn.body) {
       for (const stmt of fn.body.block) {
@@ -617,6 +687,24 @@ export function emitLlvm(context: ast.Context): string {
     (s) => s.kind === ast.NodeKind.FUNCTION_STMT
   ) as ast.FunctionStmt[]
   const fnSigs = new Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>()
+  const globalsMap = new Map<number, { ptr: string; type: LlvmType }>()
+  const globalsByName = new Map<string, { ptr: string; type: LlvmType }>()
+
+  const globalVars = context.topLevelStatements.filter(
+    (s) => s.kind === ast.NodeKind.VAR_STMT
+  ) as ast.VarStmt[]
+
+  globalVars.forEach((v) => {
+    if (!v.symbol) return
+    if (!(v.symbol as ast.VariableSymbol).isGlobal) return
+    const llvmTy = llvmTypeFromAst(v.type!)
+    const name = v.name.lexeme
+    const zero = llvmTy === "float" || llvmTy === "double" ? "0.0" : "0"
+    module.addGlobal(`@${name} = global ${llvmTy} ${zero}`)
+    globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: llvmTy })
+    globalsByName.set(name, { ptr: `@${name}`, type: llvmTy })
+  })
+
   functions.forEach((fn) => {
     const ret = fn.name.lexeme === "main" ? ("i32" as const) : llvmReturnTypeFromAst(fn.returnType)
     const params = fn.params.map((p) => llvmTypeFromAst(p.type))
@@ -626,8 +714,27 @@ export function emitLlvm(context: ast.Context): string {
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
   }
+
+  if (context.globalInitOrder && context.globalInitOrder.length > 0) {
+    fnSigs.set("__init_globals__", { ret: "void", params: [] })
+    const initFn: ast.FunctionStmt = {
+      kind: ast.NodeKind.FUNCTION_STMT,
+      name: { lexeme: "__init_globals__" } as any,
+      params: [],
+      returnType: ast.VoidType,
+      body: {
+        block: context.globalInitOrder,
+        scope: new ast.Scope(null)
+      },
+      symbol: null,
+      hoistedLocals: null
+    }
+    const initBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName)
+    module.addFunction(initBuilder.buildFunction(initFn))
+  }
+
   functions.forEach((fn) => {
-    const fnBuilder = new FunctionBuilder(module, fnSigs)
+    const fnBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName)
     module.addFunction(fnBuilder.buildFunction(fn))
   })
   return module.build()
