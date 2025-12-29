@@ -279,34 +279,65 @@ export function resolve(context: ast.Context, reportError: ReportError) {
           if (!symbol) {
             // We already reported 'Undefined symbol' error earlier when resolving the callee VariableExpr
           } else if (
-              (symbol.kind === ast.SymbolKind.FUNCTION && op.paren.lexeme === '(') ||
+              ((symbol.kind === ast.SymbolKind.FUNCTION || symbol.kind === ast.SymbolKind.FUNCTION_OVERLOAD) && op.paren.lexeme === '(') ||
               (symbol.kind === ast.SymbolKind.STRUCT && op.paren.lexeme === '{')
           ) {
-            const fn = symbol
-            const params = fn.kind === ast.SymbolKind.FUNCTION ? fn.node.params : fn.node.members
-            const minArgs = params.filter((p) => !p.defaultValue).length
-            if (op.args.length < minArgs || op.args.length > params.length) {
-              resolveError(op.paren, `Expected ${minArgs}${minArgs === params.length ? "" : "-" + params.length} arguments but got ${op.args.length} in call to ${fn.node.name.lexeme}.`)
-            } else {
-              for (let i = 0; i < op.args.length; i++) {
-                const param = params[i]
-                op.args[i] = resolveNodeWithCoercion(op.args[i], isLiveAtEnd, param.type, op.paren)
-              }
-              if (op.args.length < params.length) {
-                for (let i = op.args.length; i < params.length; i++) {
-                  const param = params[i]
-                  if (!param.defaultValue) {
-                    resolveError(op.paren, `Missing argument ${i + 1} to ${fn.node.name.lexeme}.`)
-                    break
-                  }
-                  op.args.push(resolveNodeWithCoercion(param.defaultValue, isLiveAtEnd, param.type, op.paren))
+            let fnSym: ast.FunctionSymbol | null = null
+            if (symbol.kind === ast.SymbolKind.FUNCTION_OVERLOAD) {
+              const fo = symbol as ast.FunctionOverloadSymbol
+              const candidates = fo.overloads.filter((f) => {
+                const params = f.node.params
+                const minArgs = params.filter((p) => !p.defaultValue).length
+                return op.args.length >= minArgs && op.args.length <= params.length
+              })
+              if (candidates.length > 0) {
+                const exact = candidates.filter((c) => c.node.params.length === op.args.length)
+                if (exact.length > 0) {
+                  fnSym = exact[0]
+                } else {
+                  candidates.sort((a, b) => b.node.params.length - a.node.params.length)
+                  fnSym = candidates[0]
                 }
               }
+              if (!fnSym) {
+                resolveError(op.paren, `No overload of '${callee.name.lexeme}' matches ${op.args.length} arguments.`)
+              }
+            } else if (symbol.kind === ast.SymbolKind.FUNCTION) {
+              fnSym = symbol as ast.FunctionSymbol
             }
-            if (fn.kind === ast.SymbolKind.FUNCTION) {
-              op.resolvedType = fn.node.returnType
-            } else {
-              op.resolvedType = ast.resolvedStructType(fn.node)
+            if (fnSym) {
+              const params = fnSym.node.params
+              const minArgs = params.filter((p) => !p.defaultValue).length
+              if (op.args.length < minArgs || op.args.length > params.length) {
+                resolveError(op.paren, `Expected ${minArgs}${minArgs === params.length ? "" : "-" + params.length} arguments but got ${op.args.length} in call to ${fnSym.node.name.lexeme}.`)
+              } else {
+                for (let i = 0; i < op.args.length; i++) {
+                  const param = params[i]
+                  op.args[i] = resolveNodeWithCoercion(op.args[i], isLiveAtEnd, param.type, op.paren)
+                }
+                if (op.args.length < params.length) {
+                  for (let i = op.args.length; i < params.length; i++) {
+                    const param = params[i]
+                    if (!param.defaultValue) {
+                      resolveError(op.paren, `Missing argument ${i + 1} to ${fnSym.node.name.lexeme}.`)
+                      break
+                    }
+                    op.args.push(resolveNodeWithCoercion(param.defaultValue, isLiveAtEnd, param.type, op.paren))
+                  }
+                }
+              }
+              op.resolvedType = fnSym.node.returnType
+            }
+            if (symbol.kind === ast.SymbolKind.STRUCT) {
+              const params = (symbol as ast.StructSymbol).node.members
+              if (op.args.length !== params.length) {
+                resolveError(op.paren, `Expected ${params.length} arguments but got ${op.args.length} in call to ${symbol.node.name.lexeme}.`)
+              } else {
+                for (let i = 0; i < op.args.length; i++) {
+                  op.args[i] = resolveNodeWithCoercion(op.args[i], isLiveAtEnd, params[i].type, op.paren)
+                }
+              }
+              op.resolvedType = ast.resolvedStructType((symbol as ast.StructSymbol).node)
             }
           } else {
             const callMode = op.paren.lexeme === '{' ? 'construct' : 'call'
@@ -569,6 +600,7 @@ export function resolve(context: ast.Context, reportError: ReportError) {
           switch (sym.kind) {
             case ast.SymbolKind.PARAM:
             case ast.SymbolKind.FUNCTION:
+            case ast.SymbolKind.FUNCTION_OVERLOAD:
             case ast.SymbolKind.STRUCT: {
               return true
             }
@@ -576,6 +608,8 @@ export function resolve(context: ast.Context, reportError: ReportError) {
               const varSym = sym as ast.VariableSymbol
               return visited.has(varSym.node) || varSym.isGlobal
             }
+            default:
+              return false
           }
         })
         if (symbol === null) {

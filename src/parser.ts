@@ -175,13 +175,15 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
       symbol: null
     })
     const outerScope = peekScope()
-    if (outerScope.hasDirect(name.lexeme)) {
-      // Throw; we want to ignore this function and synchronize to next statement
-      throw parseErrorForToken(name, `'${name.lexeme}' is already declared in this scope.`)
-    } else {
-      const symbol = context.functionSymbol(node)
+    const symbol = context.functionSymbol(node)
+    try {
       outerScope.define(name.lexeme, symbol)
       node.symbol = symbol
+    } catch (e) {
+      if (e instanceof Error) {
+        throw parseErrorForToken(name, e.message)
+      }
+      throw e
     }
     return node
   }

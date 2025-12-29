@@ -935,11 +935,12 @@ export function whileStmt({ expression, body, increment }: { expression: Expr; b
 export enum SymbolKind {
   VARIABLE,
   FUNCTION,
+  FUNCTION_OVERLOAD,
   PARAM,
   STRUCT
 }
 
-export type Symbol = VariableSymbol | FunctionSymbol | ParamSymbol | StructSymbol
+export type Symbol = VariableSymbol | FunctionSymbol | FunctionOverloadSymbol | ParamSymbol | StructSymbol
 
 export interface VariableSymbol {
   kind: SymbolKind.VARIABLE
@@ -953,6 +954,11 @@ export interface FunctionSymbol {
   kind: SymbolKind.FUNCTION
   node: FunctionStmt
   id: number
+}
+
+export interface FunctionOverloadSymbol {
+  kind: SymbolKind.FUNCTION_OVERLOAD
+  overloads: FunctionSymbol[]
 }
 
 export interface ParamSymbol {
@@ -978,7 +984,35 @@ export class Scope {
   }
 
   define(name: string, symbol: Symbol): void {
-    this.map.set(name, symbol)
+    const existing = this.map.get(name)
+    if (!existing) {
+      this.map.set(name, symbol)
+      return
+    }
+    // Support function overloading by arity. Only functions can overload.
+    if (symbol.kind === SymbolKind.FUNCTION) {
+      if (existing.kind === SymbolKind.FUNCTION) {
+        // create overload
+        this.map.set(name, {
+          kind: SymbolKind.FUNCTION_OVERLOAD,
+          overloads: [existing, symbol]
+        } as FunctionOverloadSymbol)
+        return
+      } else if (existing.kind === SymbolKind.FUNCTION_OVERLOAD) {
+        const fo = existing as FunctionOverloadSymbol
+        const arity = symbol.node.params.length
+        const clash = fo.overloads.find((f) => f.node.params.length === arity)
+        if (clash) {
+          throw new Error(`Function '${name}' with arity ${arity} already declared.`)
+        }
+        fo.overloads.push(symbol)
+        return
+      }
+    } else if (symbol.kind === SymbolKind.FUNCTION_OVERLOAD) {
+      throw new Error("Cannot define FUNCTION_OVERLOAD directly")
+    }
+    // any other combo is a conflict
+    throw new Error(`'${name}' is already declared in this scope.`)
   }
 
   hasDirect(name: string): boolean {
@@ -994,7 +1028,11 @@ export class Scope {
   lookup(name: string, filter: (symbol: Symbol) => boolean): Symbol | null {
     if (this.map.has(name)) {
       const symbol = this.map.get(name)!
-      if (filter(symbol)) {
+      if (symbol.kind === SymbolKind.FUNCTION_OVERLOAD) {
+        const fo = symbol as FunctionOverloadSymbol
+        const match = fo.overloads.find((f) => filter(f))
+        if (match) return symbol
+      } else if (filter(symbol)) {
         return symbol
       }
     }

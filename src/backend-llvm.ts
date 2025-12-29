@@ -195,7 +195,7 @@ class FunctionBuilder {
 
   constructor(
     private readonly module: LlvmModuleBuilder,
-    private readonly fnSigs: Map<string, { ret: LlvmType | "void"; params: LlvmType[]; retAst: ast.Type }>,
+    private readonly fnSigs: Map<string, { ret: LlvmType | "void"; params: LlvmType[]; retAst: ast.Type; mangled: string }>,
     globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>,
     globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>,
     structs: Map<string, StructInfo>
@@ -977,7 +977,9 @@ class FunctionBuilder {
             return { type: "i32", repr: "0" }
           }
 
-          const sig = this.fnSigs.get(name)
+          const sig =
+            this.fnSigs.get(`${name}/${c.args.length}`) ||
+            this.fnSigs.get(name) // fallback for builtins or legacy
           if (!sig) {
             throw new Error(`Unknown function ${name}`)
           }
@@ -994,16 +996,16 @@ class FunctionBuilder {
             this.addAlloca(`${retAlloca} = alloca ${info.elem}, i32 ${total}`)
             const castedArgs = args.map((v, i) => `${sig.params[i + 1]} ${this.cast(v, sig.params[i + 1]).repr}`)
             const argStr = [`${info.elem}* ${retAlloca}`, ...castedArgs].join(", ")
-            this.emit(`call void @${name}(${argStr})`)
+            this.emit(`call void @${sig.mangled ?? name}(${argStr})`)
             return { type: `${info.elem}*` as LlvmType, repr: retAlloca, array: info }
           }
-          const argStr = args.map((v, i) => `${sig.params[i]} ${this.cast(v, sig.params[i]).repr}`).join(", ")
+            const argStr = args.map((v, i) => `${sig.params[i]} ${this.cast(v, sig.params[i]).repr}`).join(", ")
           if (sig.ret === "void") {
-            this.emit(`call void @${name}(${argStr})`)
+            this.emit(`call void @${sig.mangled ?? name}(${argStr})`)
             return { type: "i32", repr: "0" }
           } else {
             const out = this.fresh("call")
-            this.emit(`${out} = call ${sig.ret} @${name}(${argStr})`)
+            this.emit(`${out} = call ${sig.ret} @${sig.mangled ?? name}(${argStr})`)
             if (sig.retAst.category === ast.TypeCategory.POINTER) {
               return { type: sig.ret as LlvmType, repr: out, ptr: { elem: llvmTypeFromAst((sig.retAst as ast.PointerType).elementType) } }
             } else if (sig.retAst.category === ast.TypeCategory.STRUCT) {
@@ -1508,10 +1510,10 @@ class FunctionBuilder {
     throw new Error("Unsupported condition type")
   }
 
-  buildFunction(fn: ast.FunctionStmt): string {
+  buildFunction(fn: ast.FunctionStmt, mangledName: string): string {
     this.paramSlotsByName.clear()
     this.paramArgsByName.clear()
-    this.currentFunctionName = fn.name.lexeme
+    this.currentFunctionName = mangledName
     this.arrayReturnDest = null
     // Force main to return i32 for proper process exit codes.
     if (fn.name.lexeme === "main") {
@@ -1544,7 +1546,7 @@ class FunctionBuilder {
       }
     })
     const paramSig = paramTypes.map((t, i) => `${t} ${paramNames[i]}`).join(", ")
-    const realHeader = `define ${retTy} @${fn.name.lexeme}(${paramSig}) {`
+    const realHeader = `define ${retTy} @${mangledName}(${paramSig}) {`
     this.lines.push(realHeader)
     this.lines.push("entry:")
     // params allocas and stores
@@ -1621,7 +1623,7 @@ export function emitLlvm(context: ast.Context): string {
   const functions = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.FUNCTION_STMT
   ) as ast.FunctionStmt[]
-  const fnSigs = new Map<string, { ret: LlvmType | "void"; params: LlvmType[]; retAst: ast.Type }>()
+  const fnSigs = new Map<string, { ret: LlvmType | "void"; params: LlvmType[]; retAst: ast.Type; mangled: string }>()
   const globalsMap = new Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
   const globalsByName = new Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
   const structInfos = new Map<string, StructInfo>()
@@ -1697,19 +1699,21 @@ export function emitLlvm(context: ast.Context): string {
       const elemTy = llvmTypeFromAst(baseElemType(arr))
       params = [`${elemTy}*` as LlvmType, ...params]
     }
-    fnSigs.set(fn.name.lexeme, { ret, params, retAst: fn.returnType })
+    const key = `${fn.name.lexeme}/${fn.params.length}`
+    const mangled = fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`
+    fnSigs.set(key, { ret, params, retAst: fn.returnType, mangled })
   })
   // Built-ins
-  fnSigs.set("__sqrt__", { ret: "float", params: ["float"], retAst: ast.FloatType })
-  fnSigs.set("__malloc__", { ret: "i8*", params: ["i32"], retAst: ast.ptrType(ast.ByteType) })
-  fnSigs.set("__free__", { ret: "void", params: ["i8*"], retAst: ast.VoidType })
+  fnSigs.set("__sqrt__/1", { ret: "float", params: ["float"], retAst: ast.FloatType, mangled: "__sqrt__" })
+  fnSigs.set("__malloc__/1", { ret: "i8*", params: ["i32"], retAst: ast.ptrType(ast.ByteType), mangled: "__malloc__" })
+  fnSigs.set("__free__/1", { ret: "void", params: ["i8*"], retAst: ast.VoidType, mangled: "__free__" })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
   }
 
   if (context.globalInitOrder && context.globalInitOrder.length > 0) {
-    fnSigs.set("__init_globals__", { ret: "void", params: [], retAst: ast.VoidType })
+    fnSigs.set("__init_globals__", { ret: "void", params: [], retAst: ast.VoidType, mangled: "__init_globals__" })
     const initFn: ast.FunctionStmt = {
       kind: ast.NodeKind.FUNCTION_STMT,
       name: { lexeme: "__init_globals__" } as any,
@@ -1723,12 +1727,13 @@ export function emitLlvm(context: ast.Context): string {
       hoistedLocals: null
     }
     const initBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName, structInfos)
-    module.addFunction(initBuilder.buildFunction(initFn))
+    module.addFunction(initBuilder.buildFunction(initFn, "__init_globals__"))
   }
 
   functions.forEach((fn) => {
     const fnBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName, structInfos)
-    module.addFunction(fnBuilder.buildFunction(fn))
+    const mangled = fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`
+    module.addFunction(fnBuilder.buildFunction(fn, mangled))
   })
   return module.build()
 }
