@@ -1,0 +1,23 @@
+{
+  "name": "pufflang",
+  "version": "0.1.0",
+  "description": "Puffscript compiler, runtime, and CLI with I/O-enabled backend",
+  "license": "MIT",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "jest",
+    "lint": "echo \"no lint configured\""
+  },
+  "dependencies": {
+    "wabt": "^1.0.30",
+    "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.5",
+    "@types/node": "^18.19.68",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.3.3"
+  }
+}
