@@ -39,8 +39,8 @@ export function buildWithClang(irPath: string, outPath?: string): string {
   return output
 }
 
-export function runBinary(binPath: string): RunResult {
-  const res = spawnSync(binPath, { encoding: "utf8" })
+export function runBinary(binPath: string, input?: string): RunResult {
+  const res = spawnSync(binPath, { encoding: "utf8", input })
   return {
     stdout: res.stdout ?? "",
     stderr: res.stderr ?? "",
@@ -48,10 +48,10 @@ export function runBinary(binPath: string): RunResult {
   }
 }
 
-export function compileAndRun(source: string): RunResult {
+export function compileAndRun(source: string, input?: string): RunResult {
   const irPath = compileToLl(source)
   const binPath = buildWithClang(irPath)
-  return runBinary(binPath)
+  return runBinary(binPath, input)
 }
 
 export function runRawIR(ir: string): RunResult {

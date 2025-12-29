@@ -555,8 +555,13 @@ export function canCoerce(from: Type, to: Type): boolean {
   if (isEqual(from, to)) {
     return true
   }
+  if (from.category === TypeCategory.ARRAY && to.category === TypeCategory.POINTER) {
+    const fromArr = from as ArrayType
+    const toPtr = to as PointerType
+    return isEqual(fromArr.elementType, toPtr.elementType)
+  }
+  if (from.category === TypeCategory.ARRAY) return false
   switch (from.category) {
-    case TypeCategory.ARRAY:
     case TypeCategory.VOID:
     case TypeCategory.POINTER:
     case TypeCategory.STRUCT: {
@@ -566,8 +571,10 @@ export function canCoerce(from: Type, to: Type): boolean {
   switch (to.category) {
     case TypeCategory.ARRAY:
     case TypeCategory.VOID:
-    case TypeCategory.POINTER:
     case TypeCategory.STRUCT: {
+      return false
+    }
+    case TypeCategory.POINTER: {
       return false
     }
   }
@@ -1144,12 +1151,36 @@ export class Context {
       symbol: null
     })
     putcharFn.symbol = this.functionSymbol(putcharFn)
+    const writeFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__write__"),
+      params: [
+        { name: fakeToken(TokenType.IDENTIFIER, "fd"), type: IntType },
+        { name: fakeToken(TokenType.IDENTIFIER, "buf"), type: ptrType(ByteType) },
+        { name: fakeToken(TokenType.IDENTIFIER, "len"), type: IntType }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    writeFn.symbol = this.functionSymbol(writeFn)
+    const readFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__read__"),
+      params: [
+        { name: fakeToken(TokenType.IDENTIFIER, "fd"), type: IntType },
+        { name: fakeToken(TokenType.IDENTIFIER, "buf"), type: ptrType(ByteType) },
+        { name: fakeToken(TokenType.IDENTIFIER, "len"), type: IntType }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    readFn.symbol = this.functionSymbol(readFn)
     this.global.define(memcpy.name.lexeme, memcpy.symbol)
     this.global.define(sqrt.name.lexeme, sqrt.symbol)
     this.global.define(mallocFn.name.lexeme, mallocFn.symbol)
     this.global.define(freeFn.name.lexeme, freeFn.symbol)
     this.global.define(exitFn.name.lexeme, exitFn.symbol)
     this.global.define(putcharFn.name.lexeme, putcharFn.symbol)
+    this.global.define(writeFn.name.lexeme, writeFn.symbol)
+    this.global.define(readFn.name.lexeme, readFn.symbol)
   }
 
   variableSymbol(node: VarStmt, isGlobal: boolean): VariableSymbol {

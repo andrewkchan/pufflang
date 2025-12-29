@@ -89,12 +89,18 @@ export function resolve(context: ast.Context, reportError: ReportError) {
       const canCoerce = ast.canCoerce(node.resolvedType!, type) ||
         (ast.isNumberLiteral(node) && ast.canCoerceNumberLiteral((node as ast.LiteralExpr).value, type))
       if (canCoerce) {
-        out = ast.castExpr({
-          token: fakeToken(TokenType.EOF, ""),
-          type,
-          value: node
-        })
-        resolveNode(out, isLiveAtEnd)
+        if (ast.canCast(node.resolvedType!, type)) {
+          out = ast.castExpr({
+            token: fakeToken(TokenType.EOF, ""),
+            type,
+            value: node
+          })
+          resolveNode(out, isLiveAtEnd)
+        } else {
+          // implicit "decay" (e.g., array -> pointer) without explicit cast node
+          node.resolvedType = type
+          out = node
+        }
       } else {
         resolveError(token, `Cannot implicitly convert operand to '${ast.typeToString(type)}'.`)
       }
