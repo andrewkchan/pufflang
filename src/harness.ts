@@ -32,7 +32,7 @@ export function compileToLl(source: string, workdir?: string): string {
 
 export function buildWithClang(irPath: string, outPath?: string): string {
   const output = outPath ?? path.join(path.dirname(irPath), "a.out")
-  const build = spawnSync("clang", ["-x", "ir", irPath, "-o", output], { encoding: "utf8" })
+  const build = spawnSync("clang", ["-x", "ir", irPath, "-lm", "-o", output], { encoding: "utf8" })
   if (build.status !== 0) {
     throw new Error(`clang failed (${build.status}): ${build.stderr || build.stdout}`)
   }

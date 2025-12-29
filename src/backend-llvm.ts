@@ -70,6 +70,7 @@ class LlvmModuleBuilder {
   private typeDefs: string[] = []
   private stringLiterals: Map<string, { name: string; len: number }> = new Map()
   private strCounter = 0
+  private hasRuntime = false
 
   declare(line: string) {
     this.declarations.push(line)
@@ -118,6 +119,15 @@ class LlvmModuleBuilder {
   gepStringPtr(str: string): string {
     const { name, len } = this.getOrAddCString(str)
     return `getelementptr inbounds ([${len} x i8], [${len} x i8]* ${name}, i64 0, i64 0)`
+  }
+
+  emitRuntime() {
+    if (this.hasRuntime) return
+    this.hasRuntime = true
+    // sqrt via libm
+    this.declare("declare double @sqrt(double)")
+    // memcpy
+    this.declare("declare void @llvm.memcpy.p0.p0.i64(i8*, i8*, i64, i1)")
   }
 
   build(): string {
@@ -629,6 +639,17 @@ class FunctionBuilder {
             return { type: structTy, repr: ptr, struct: structInfo }
           }
 
+          // builtin sqrt
+          if (name === "__sqrt__") {
+            const arg = this.emitExpr(c.args[0])
+            const argd = this.cast(arg, "double")
+            const out = this.fresh("sqrt")
+            this.emit(`${out} = call double @sqrt(double ${argd.repr})`)
+            const outf = this.fresh("sqrtf")
+            this.emit(`${outf} = fptrunc double ${out} to float`)
+            return { type: "float", repr: outf }
+          }
+
           const sig = this.fnSigs.get(name)
           if (!sig) {
             throw new Error(`Unknown function ${name}`)
@@ -980,7 +1001,7 @@ class FunctionBuilder {
 
 export function emitLlvm(context: ast.Context): string {
   const module = new LlvmModuleBuilder()
-  module.declare("declare void @llvm.memcpy.p0.p0.i64(i8*, i8*, i64, i1)")
+  module.emitRuntime()
   const functions = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.FUNCTION_STMT
   ) as ast.FunctionStmt[]
@@ -1039,6 +1060,8 @@ export function emitLlvm(context: ast.Context): string {
     const params = fn.params.map((p) => llvmTypeFromAst(p.type))
     fnSigs.set(fn.name.lexeme, { ret, params })
   })
+  // Built-ins
+  fnSigs.set("__sqrt__", { ret: "float", params: ["float"] })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
