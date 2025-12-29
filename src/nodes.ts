@@ -769,6 +769,7 @@ export interface FunctionStmt extends Node {
   // (e.g. nested blocks) *not* including the function
   // scope itself.
   hoistedLocals: Set<VariableSymbol> | null // filled in by resolver
+  isExported?: boolean
 }
 
 export function functionStmt(
@@ -790,7 +791,8 @@ export function functionStmt(
       scope
     },
     symbol,
-    hoistedLocals: null
+    hoistedLocals: null,
+    isExported: false
   }
 }
 
@@ -808,7 +810,8 @@ export function importedFunctionStmt(
     returnType,
     body: null,
     symbol,
-    hoistedLocals: null
+    hoistedLocals: null,
+    isExported: false
   }
 }
 
@@ -882,15 +885,17 @@ export interface StructStmt extends Node {
   members: Param[]
   symbol: StructSymbol | null // filled in by parser
   isLiveAtEnd: boolean | null // filled in by resolver pass
+  isExported?: boolean
 }
 
-export function structStmt({ name, members }: { name: Token; members: Param[] }): StructStmt {
+export function structStmt({ name, members, isExported = false }: { name: Token; members: Param[]; isExported?: boolean }): StructStmt {
   return {
     kind: NodeKind.STRUCT_STMT,
     name,
     members,
     symbol: null,
     isLiveAtEnd: null,
+    isExported
   }
 }
 
@@ -901,16 +906,18 @@ export interface VarStmt extends Node {
   type: Type | null // null means 'infer from initializer in resolver step'
   isLiveAtEnd: boolean | null // filled in by resolver pass
   symbol: VariableSymbol | null // filled in by parser
+  isExported?: boolean
 }
 
-export function varStmt({ name, initializer, type, symbol }: { name: Token; initializer: Expr; type: Type | null; symbol: VariableSymbol | null }): VarStmt {
+export function varStmt({ name, initializer, type, symbol, isExported = false }: { name: Token; initializer: Expr; type: Type | null; symbol: VariableSymbol | null; isExported?: boolean }): VarStmt {
   return {
     kind: NodeKind.VAR_STMT,
     name,
     initializer,
     type,
     isLiveAtEnd: null,
-    symbol
+    symbol,
+    isExported
   }
 }
 

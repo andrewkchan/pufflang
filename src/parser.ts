@@ -116,14 +116,15 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
   }
 
   function topDecl(): ast.TopStmt {
-    if (match(TokenType.DEF)) return funDecl()
-    if (match(TokenType.STRUCT)) return structDecl()
-    if (match(TokenType.VAR)) return varDecl()
+    const exported = match(TokenType.EXPORT)
+    if (match(TokenType.DEF)) return funDecl(exported)
+    if (match(TokenType.STRUCT)) return structDecl(exported)
+    if (match(TokenType.VAR)) return varDecl(exported)
 
     throw parseError("Only variable declarations and function definitions allowed at the top-level.")
   }
 
-  function funDecl(): ast.FunctionStmt {
+  function funDecl(isExported: boolean = false): ast.FunctionStmt {
     const name = consume(TokenType.IDENTIFIER, "Expect identifier after 'def'.")
 
     consume(TokenType.LEFT_PAREN, "Expect '(' after function name.")
@@ -174,6 +175,7 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
       scope,
       symbol: null
     })
+    node.isExported = isExported
     const outerScope = peekScope()
     const symbol = context.functionSymbol(node)
     try {
@@ -188,7 +190,7 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
     return node
   }
 
-  function structDecl(): ast.StructStmt {
+  function structDecl(isExported: boolean = false): ast.StructStmt {
     const name = consume(TokenType.IDENTIFIER, "Expect identifier after 'struct'.")
 
     consume(TokenType.LEFT_BRACE, "Expect '{' after struct name.")
@@ -215,7 +217,8 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
 
     const node = ast.structStmt({
       name,
-      members
+      members,
+      isExported
     })
     const scope = peekScope()
     if (scope.hasDirect(name.lexeme)) {
@@ -229,7 +232,7 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
     return node
   }
 
-  function varDecl(): ast.VarStmt {
+  function varDecl(isExported: boolean = false): ast.VarStmt {
     const name = consume(TokenType.IDENTIFIER, "Expect identifier after 'var'.")
 
     // null means `infer from initializer`.
@@ -244,7 +247,8 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
       name,
       initializer: expr,
       type: varType,
-      symbol: null
+      symbol: null,
+      isExported
     })
     const scope = peekScope()
     if (scope.hasDirect(name.lexeme)) {
