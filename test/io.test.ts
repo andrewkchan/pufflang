@@ -84,4 +84,36 @@ describe('IO builtins', () => {
     const result = await runSource(echoSource, { stdin: 'hello\n' })
     expect(result.output).toBe('hello\n')
   })
+
+  test('copy example copies file to file and to stdout', async () => {
+    const fs = require('fs')
+    const os = require('os')
+    const path = require('path')
+    const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'puff-io-copy-'))
+    const srcPath = path.join(tmpdir, 'src.txt')
+    const dstPath = path.join(tmpdir, 'dst.txt')
+    fs.writeFileSync(srcPath, 'copy-me')
+    const copySource = fs.readFileSync(path.resolve(__dirname, '..', 'examples', 'copy.puff'), 'utf8')
+    const files = new Map<string, Buffer>()
+    const resultFile = await runSource(copySource, {
+      args: [srcPath, dstPath],
+      fs: {
+        readFileSync: (p: string) => fs.readFileSync(p),
+        writeFileSync: (p: string, data: Buffer) => {
+          files.set(p, data)
+          fs.writeFileSync(p, data)
+        }
+      }
+    })
+    expect(files.get(dstPath)?.toString()).toBe('copy-me')
+
+    const resultStdout = await runSource(copySource, {
+      args: [srcPath],
+      fs: {
+        readFileSync: (p: string) => fs.readFileSync(p),
+        writeFileSync: (p: string, data: Buffer) => fs.writeFileSync(p, data)
+      }
+    })
+    expect(resultStdout.output).toBe('copy-me')
+  })
 })

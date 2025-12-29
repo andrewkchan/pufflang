@@ -1,0 +1,25 @@
+def main() {
+  var srcPath = [byte(0); 64];
+  var dstPath = [byte(0); 64];
+  var buf = [byte(0); 256];
+
+  var srcLen = __args_get__(0, &srcPath[0], len(srcPath));
+  var dstLen = __args_get__(1, &dstPath[0], len(dstPath));
+
+  if (srcLen > 0 && dstLen > 0) {
+    var read = __read_file__(&srcPath[0], srcLen, &buf[0], len(buf));
+    if (read > 0) {
+      __write_file__(&dstPath[0], dstLen, &buf[0], read);
+    }
+  } else if (srcLen > 0) {
+    var readFile = __read_file__(&srcPath[0], srcLen, &buf[0], len(buf));
+    if (readFile > 0) {
+      __stdout_write__(&buf[0], readFile);
+    }
+  } else {
+    var readStdin = __stdin_read__(&buf[0], len(buf));
+    if (readStdin > 0) {
+      __stdout_write__(&buf[0], readStdin);
+    }
+  }
+}

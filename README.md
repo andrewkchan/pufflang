@@ -47,6 +47,7 @@ After `npm run build`, `puff` is available at `dist/cli.js` (bin entry).
 
 - `examples/cat.puff` – simple cat: reads from `argv[0]` if present, else stdin, writes to stdout.
 - `examples/echo.puff` – echoes up to 256 bytes from stdin to stdout.
+- `examples/copy.puff` – copies from `argv[0]` to `argv[1]` if provided, else prints `argv[0]` to stdout, else copies stdin to stdout.
 
 Run them with:
 
@@ -54,6 +55,7 @@ Run them with:
 npm run build
 node dist/cli.js run examples/echo.puff --stdin "hello!"
 node dist/cli.js run examples/cat.puff --args myfile.txt
+node dist/cli.js run examples/copy.puff --args src.txt dst.txt
 ```
 
 ## Bootstrapping workflow
