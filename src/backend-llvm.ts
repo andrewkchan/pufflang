@@ -155,6 +155,8 @@ class LlvmModuleBuilder {
     this.hasRuntime = true
     // sqrt via libm
     this.declare("declare double @sqrt(double)")
+    // exit
+    this.declare("declare void @exit(i32)")
     // malloc/free
     this.declare("declare i8* @malloc(i64)")
     this.declare("declare void @free(i8*)")
@@ -1708,6 +1710,7 @@ export function emitLlvm(context: ast.Context): string {
   fnSigs.set("__sqrt__/1", { ret: "float", params: ["float"], retAst: ast.FloatType, mangled: "__sqrt__" })
   fnSigs.set("__malloc__/1", { ret: "i8*", params: ["i32"], retAst: ast.ptrType(ast.ByteType), mangled: "__malloc__" })
   fnSigs.set("__free__/1", { ret: "void", params: ["i8*"], retAst: ast.VoidType, mangled: "__free__" })
+  fnSigs.set("__exit__/1", { ret: "void", params: ["i32"], retAst: ast.VoidType, mangled: "exit" })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")

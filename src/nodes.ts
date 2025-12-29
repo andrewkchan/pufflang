@@ -1120,10 +1120,23 @@ export class Context {
       symbol: null
     })
     freeFn.symbol = this.functionSymbol(freeFn)
+    const exitFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__exit__"),
+      params: [
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "code"),
+          type: IntType
+        }
+      ],
+      returnType: VoidType,
+      symbol: null
+    })
+    exitFn.symbol = this.functionSymbol(exitFn)
     this.global.define(memcpy.name.lexeme, memcpy.symbol)
     this.global.define(sqrt.name.lexeme, sqrt.symbol)
     this.global.define(mallocFn.name.lexeme, mallocFn.symbol)
     this.global.define(freeFn.name.lexeme, freeFn.symbol)
+    this.global.define(exitFn.name.lexeme, exitFn.symbol)
   }
 
   variableSymbol(node: VarStmt, isGlobal: boolean): VariableSymbol {
