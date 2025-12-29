@@ -200,4 +200,155 @@ describe("Upstream E2E - additional programs", () => {
     expect(got[7]).toBe("3")
     expect(parseFloat(got[8])).toBeCloseTo(2.718, 4)
   })
+
+  test("arrays 3 (matrix mul + rotation)", () => {
+    const source = `
+    def mul(mat [[float; 2]; 2], v [float; 2]) [float; 2] {
+      return [mat[0][0] * v[0] + mat[0][1] * v[1],
+              mat[1][0] * v[0] + mat[1][1] * v[1]];
+    }
+    def ident() [[float; 2]; 2] {
+      return [[1.0, 0.0],
+              [0.0, 1.0]];
+    }
+    def rot90CCW() [[float; 2]; 2] {
+      return [[0.0, -1.0],
+              [1.0, 0.0]];
+    }
+    def main() {
+      var I = ident();
+      var x = [1.0, 0.0];
+      print mul(I, x);
+      var R = rot90CCW();
+      for (var i = 0; i < 4; i += 1) {
+        x = mul(R, x);
+        print x;
+      }
+    }
+    `
+    const res = compileAndRun(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    const got = lines(res).map((s) => JSON.parse(s.trim()))
+    const expected = [
+      [1, 0],
+      [0, 1],
+      [-1, 0],
+      [0, -1],
+      [1, 0]
+    ]
+    expect(got.length).toBe(expected.length)
+    got.forEach((row, i) => {
+      expect(row.length).toBe(expected[i].length)
+      row.forEach((v: number, j: number) => expect(v).toBeCloseTo(expected[i][j], 5))
+    })
+  })
+
+  test("arrays 4 (slurp transform)", () => {
+    const source = `
+    def slurp(a int, b int, c int) [int; 6] {
+      var tmp = [a, b, c];
+      var result = [0; 6];
+      var i = 0;
+      while (i < len(tmp)) {
+        result[2*i] = 2*tmp[i];
+        result[2*i + 1] = 2*tmp[i] + 1;
+        i = i + 1;
+      }
+      return result;
+    }
+    def main() {
+      var y = slurp(1, 5, 10);
+      print y;
+    }
+    `
+    const res = compileAndRun(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    const got = lines(res)
+    expect(got).toEqual(["[2, 3, 10, 11, 20, 21]"])
+  })
+
+  test("arrays 5 (copy semantics)", () => {
+    const source = `
+    def inc(arr [int; 2]) [int; 2] {
+      arr[0] = arr[0] + 1;
+      arr[1] = arr[1] + 1;
+      return arr;
+    }
+    def main() {
+      var x = [1, 2];
+      print inc(x);
+      print x;
+    }
+    `
+    const res = compileAndRun(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    const got = lines(res)
+    expect(got).toEqual(["[2, 3]", "[1, 2]"])
+  })
+
+  test("arrays 2 (nested arrays, copies)", () => {
+    const source = `
+    def main() {
+      var a = [[1, 2, 3],
+               [4, 5, 6]];
+      print a;
+      print a[0];
+      print a[0][0];
+      a[0][0] = a[0][1] = a[0][2] = a[1][1];
+      print a;
+      print a[0];
+      print a[0][0];
+      a[1][1] = 1337;
+      print a;
+      print a[0];
+      print a[0][0];
+      a[0] = [7, 8, 9];
+      print a;
+      var b = a[0];
+      print b;
+      b = a[1];
+      print b;
+      print a;
+
+      var row = [123, 456, 789];
+      a = [row, row];
+      a[0][0] = 999;
+      print a;
+
+      var row2 = [-1, -2, -3];
+      a = [row, row2];
+      print a;
+
+      a = [row2; 2];
+      a[0][0] = 999;
+      print a;
+    }
+    `
+    const res = compileAndRun(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    const got = lines(res)
+    const expected = [
+      "[[1, 2, 3], [4, 5, 6]]",
+      "[1, 2, 3]",
+      "1",
+      "[[5, 5, 5], [4, 5, 6]]",
+      "[5, 5, 5]",
+      "5",
+      "[[5, 5, 5], [4, 1337, 6]]",
+      "[5, 5, 5]",
+      "5",
+      "[[7, 8, 9], [4, 1337, 6]]",
+      "[7, 8, 9]",
+      "[4, 1337, 6]",
+      "[[7, 8, 9], [4, 1337, 6]]",
+      "[[999, 456, 789], [123, 456, 789]]",
+      "[[123, 456, 789], [-1, -2, -3]]",
+      "[[999, -2, -3], [-1, -2, -3]]"
+    ]
+    expect(got).toEqual(expected)
+  })
 })

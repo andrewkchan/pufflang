@@ -4,8 +4,10 @@ import { UTF8Codec } from "./util"
 type LlvmType = "i1" | "i8" | "i32" | "float" | "double" | "i8*" | `%struct.${string}*`
 
 interface ArrayInfo {
-  elem: LlvmType
-  length: number
+  elem: LlvmType // base element LLVM type (non-array)
+  length: number // length of this dimension
+  elemAst: ast.Type // base element AST type (non-array)
+  stride: number // number of base elements per element at this dimension (product of inner lengths)
 }
 
 interface StructInfo {
@@ -39,8 +41,11 @@ function llvmTypeFromAst(type: ast.Type): LlvmType {
       return "float"
     case ast.TypeCategory.POINTER:
       return "i8*" // placeholder until pointer support
-    case ast.TypeCategory.ARRAY:
-      return "i8*" // arrays represented by pointer with ArrayInfo metadata
+    case ast.TypeCategory.ARRAY: {
+      const arr = type as ast.ArrayType
+      const baseTy = baseElemType(arr)
+      return `${llvmTypeFromAst(baseTy)}*` as LlvmType
+    }
     case ast.TypeCategory.STRUCT:
       return `%struct.${type.name.lexeme}*`
     case ast.TypeCategory.VOID:
@@ -61,6 +66,30 @@ function formatDoubleLiteral(value: number): string {
   }
   if (Number.isNaN(value)) return "0x7ff8000000000000"
   return value > 0 ? "0x7ff0000000000000" : "-0x7ff0000000000000"
+}
+
+function baseElemType(arr: ast.ArrayType): ast.Type {
+  let t: ast.Type = arr.elementType
+  while (t.category === ast.TypeCategory.ARRAY) {
+    t = (t as ast.ArrayType).elementType
+  }
+  return t
+}
+
+function flattenArrayInfo(type: ast.ArrayType): ArrayInfo {
+  const base = baseElemType(type)
+  function strideOf(t: ast.Type): number {
+    if (t.category !== ast.TypeCategory.ARRAY) return 1
+    const inner = t as ast.ArrayType
+    return inner.length * strideOf(inner.elementType)
+  }
+  const stride = strideOf(type.elementType)
+  return {
+    elem: llvmTypeFromAst(base),
+    elemAst: base,
+    length: type.length,
+    stride
+  }
 }
 
 class LlvmModuleBuilder {
@@ -154,6 +183,7 @@ class FunctionBuilder {
   private hasReturn = false
   private functionRetType: LlvmType | "void" = "i32"
   private fnReturnTypeAst: ast.Type | null = null
+  private arrayReturnDest: { ptr: string; type: LlvmType; array: ArrayInfo } | null = null
   private terminated = false
   private paramArgsByName: Map<string, { type: LlvmType; repr: string }> = new Map()
   private paramSlotsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }> = new Map()
@@ -165,7 +195,7 @@ class FunctionBuilder {
 
   constructor(
     private readonly module: LlvmModuleBuilder,
-    private readonly fnSigs: Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>,
+    private readonly fnSigs: Map<string, { ret: LlvmType | "void"; params: LlvmType[]; retAst: ast.Type }>,
     globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>,
     globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>,
     structs: Map<string, StructInfo>
@@ -226,7 +256,8 @@ class FunctionBuilder {
     let ptr: string
     if (array) {
       ptr = this.fresh("arrslot")
-      this.addAlloca(`${ptr} = alloca ${array.elem}, i32 ${array.length}`)
+      const total = array.length * array.stride
+      this.addAlloca(`${ptr} = alloca ${array.elem}, i32 ${total}`)
     } else {
       ptr = this.fresh("var")
       this.addAlloca(`${ptr} = alloca ${type}`)
@@ -245,7 +276,7 @@ class FunctionBuilder {
 
   private storeValue(dest: { ptr: string; type: LlvmType; array?: ArrayInfo; struct?: StructInfo }, value: Value) {
     if (dest.array && value.array) {
-      const bytes = dest.array.length * this.sizeofLlvm(dest.array.elem)
+      const bytes = this.arrayBytes(dest.array)
       const dstPtr = this.fresh("dstbc")
       const srcPtr = this.fresh("srcbc")
       this.emit(`${dstPtr} = bitcast ${dest.array.elem}* ${dest.ptr} to i8*`)
@@ -304,6 +335,49 @@ class FunctionBuilder {
     }
   }
 
+  private sizeofAst(type: ast.Type): number {
+    switch (type.category) {
+      case ast.TypeCategory.BOOL:
+      case ast.TypeCategory.BYTE:
+        return 1
+      case ast.TypeCategory.INT:
+      case ast.TypeCategory.FLOAT:
+        return 4
+      case ast.TypeCategory.POINTER:
+        return 8
+      case ast.TypeCategory.ARRAY: {
+        const arr = type as ast.ArrayType
+        return arr.length * this.sizeofAst(arr.elementType)
+      }
+      case ast.TypeCategory.STRUCT: {
+        const info = this.structs.get((type as ast.StructType).name.lexeme)
+        if (!info) throw new Error(`Unknown struct ${type}`)
+        return info.fields.reduce((acc, f) => acc + this.sizeofLlvm(f.type), 0)
+      }
+      default:
+        throw new Error(`Unsupported type for sizeof ${ast.typeToString(type)}`)
+    }
+  }
+
+  private arrayBytes(info: ArrayInfo): number {
+    return info.length * info.stride * this.sizeofLlvm(info.elem)
+  }
+
+  private arrayInfoFromType(type: ast.ArrayType): ArrayInfo {
+    const base = baseElemType(type)
+    function strideOf(t: ast.Type): number {
+      if (t.category !== ast.TypeCategory.ARRAY) return 1
+      const inner = t as ast.ArrayType
+      return inner.length * strideOf(inner.elementType)
+    }
+    return {
+      elem: llvmTypeFromAst(base),
+      elemAst: type.elementType,
+      length: type.length,
+      stride: strideOf(type.elementType)
+    }
+  }
+
   private structPtrType(info: StructInfo): `%struct.${string}*` {
     return `%struct.${info.name}*`
   }
@@ -337,7 +411,7 @@ class FunctionBuilder {
               return {
                 type: "i8*",
                 repr: strPtr,
-                array: { elem: "i8", length: (lit.type as ast.ArrayType).length }
+                array: { elem: "i8", length: (lit.type as ast.ArrayType).length, elemAst: ast.ByteType, stride: 1 }
               }
             }
             throw new Error("Array literals not yet supported in LLVM backend.")
@@ -352,16 +426,36 @@ class FunctionBuilder {
         if (!symbol || (symbol.kind !== ast.SymbolKind.VARIABLE && symbol.kind !== ast.SymbolKind.PARAM)) {
           throw new Error("Variable expression missing symbol")
         }
-        let slot: { ptr: string; type: LlvmType; array?: ArrayInfo }
+        let slot: { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }
+        const llvmTy = llvmTypeFromAst(v.resolvedType!)
         if (symbol.kind === ast.SymbolKind.PARAM) {
           const argInit = this.paramArgsByName.get(v.name.lexeme)
-          const llvmTy = llvmTypeFromAst(v.resolvedType!)
-          slot = this.ensureLocal(symbol as any, llvmTy, argInit ? { type: argInit.type, repr: argInit.repr } : undefined, undefined, undefined, v.resolvedType?.category === ast.TypeCategory.POINTER ? { elem: llvmTypeFromAst((v.resolvedType as ast.PointerType).elementType) } : undefined)
+          // ensure param slot exists with proper metadata; prefer existing
+          const arrInfo =
+            v.resolvedType?.category === ast.TypeCategory.ARRAY
+              ? this.arrayInfoFromType(v.resolvedType as ast.ArrayType)
+              : undefined
+          const ptrInfo =
+            v.resolvedType?.category === ast.TypeCategory.POINTER
+              ? { elem: llvmTypeFromAst((v.resolvedType as ast.PointerType).elementType) }
+              : undefined
+          slot =
+            this.getLocal(symbol as any, llvmTy) ||
+            this.ensureLocal(
+              symbol as any,
+              llvmTy,
+              argInit ? { type: argInit.type, repr: argInit.repr } : undefined,
+              arrInfo,
+              undefined,
+              ptrInfo
+            )
         } else {
           slot = this.getLocal(symbol as any)
         }
         if (v.resolvedType?.category === ast.TypeCategory.ARRAY) {
-          return { type: "i8*", repr: slot.ptr, array: slot.array }
+          const arrType = v.resolvedType as ast.ArrayType
+          const arrayInfo = slot.array ?? this.arrayInfoFromType(arrType)
+          return { type: `${arrayInfo.elem}*` as LlvmType, repr: slot.ptr, array: arrayInfo }
         }
         const loaded = this.loadValue(slot)
         if (v.resolvedType?.category === ast.TypeCategory.POINTER) {
@@ -382,6 +476,9 @@ class FunctionBuilder {
           const slot = this.getLocal(symbol as any, targetType)
           const rval = this.emitExpr(a.right)
           this.storeValue(slot, rval)
+          if (a.left.resolvedType?.category === ast.TypeCategory.ARRAY) {
+            return { type: targetType, repr: slot.ptr, array: slot.array }
+          }
           return this.cast(rval, targetType)
         } else if (a.left.kind === ast.NodeKind.INDEX_EXPR) {
           const idx = a.left as ast.IndexExpr
@@ -390,14 +487,30 @@ class FunctionBuilder {
           const indexVal = this.emitExpr(idx.index)
           const idx32 = this.cast(indexVal, "i32")
           const elemTy = base.array.elem
+          const offset = this.fresh("off")
+          if (base.array.stride !== 1) {
+            this.emit(`${offset} = mul nsw i32 ${idx32.repr}, ${base.array.stride}`)
+          }
+          const idxFinal = base.array.stride === 1 ? idx32.repr : offset
           const elemPtr = this.fresh("elemPtr")
           this.emit(
-            `${elemPtr} = getelementptr ${elemTy}, ${elemTy}* ${base.repr}, i32 ${idx32.repr}`
+            `${elemPtr} = getelementptr ${elemTy}, ${elemTy}* ${base.repr}, i32 ${idxFinal}`
           )
           const rval = this.emitExpr(a.right)
-          const casted = this.cast(rval, elemTy)
-          this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${elemPtr}`)
-          return casted
+          if (base.array.elemAst.category === ast.TypeCategory.ARRAY) {
+            if (!rval.array) throw new Error("Assignment of array requires array value")
+            const bytes = this.arrayBytes(rval.array)
+            const dstPtr = this.fresh("dstbc")
+            const srcPtr = this.fresh("srcbc")
+            this.emit(`${dstPtr} = bitcast ${rval.array.elem}* ${elemPtr} to i8*`)
+            this.emit(`${srcPtr} = bitcast ${rval.array.elem}* ${rval.repr} to i8*`)
+            this.emit(`call void @llvm.memcpy.p0.p0.i64(i8* ${dstPtr}, i8* ${srcPtr}, i64 ${bytes}, i1 0)`)
+            return { type: base.array.elem, repr: elemPtr, array: rval.array }
+          } else {
+            const casted = this.cast(rval, elemTy)
+            this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${elemPtr}`)
+            return casted
+          }
         } else if (a.left.kind === ast.NodeKind.DOT_EXPR) {
           const d = a.left as ast.DotExpr
           const base = this.emitExpr(d.callee)
@@ -781,8 +894,20 @@ class FunctionBuilder {
             throw new Error(`Unknown function ${name}`)
           }
           const args: Value[] = c.args.map((a) => this.emitExpr(a))
-          if (args.length !== sig.params.length) {
+          const expectedArgs = sig.retAst.category === ast.TypeCategory.ARRAY ? sig.params.length - 1 : sig.params.length
+          if (args.length !== expectedArgs) {
             throw new Error(`Arity mismatch calling ${name}`)
+          }
+          if (sig.retAst.category === ast.TypeCategory.ARRAY) {
+            const arr = sig.retAst as ast.ArrayType
+            const info = this.arrayInfoFromType(arr)
+            const retAlloca = this.fresh("retarr")
+            const total = info.length * info.stride
+            this.addAlloca(`${retAlloca} = alloca ${info.elem}, i32 ${total}`)
+            const castedArgs = args.map((v, i) => `${sig.params[i + 1]} ${this.cast(v, sig.params[i + 1]).repr}`)
+            const argStr = [`${info.elem}* ${retAlloca}`, ...castedArgs].join(", ")
+            this.emit(`call void @${name}(${argStr})`)
+            return { type: `${info.elem}*` as LlvmType, repr: retAlloca, array: info }
           }
           const argStr = args.map((v, i) => `${sig.params[i]} ${this.cast(v, sig.params[i]).repr}`).join(", ")
           if (sig.ret === "void") {
@@ -791,7 +916,13 @@ class FunctionBuilder {
           } else {
             const out = this.fresh("call")
             this.emit(`${out} = call ${sig.ret} @${name}(${argStr})`)
-            return { type: sig.ret, repr: out }
+            if (sig.retAst.category === ast.TypeCategory.POINTER) {
+              return { type: sig.ret as LlvmType, repr: out, ptr: { elem: llvmTypeFromAst((sig.retAst as ast.PointerType).elementType) } }
+            } else if (sig.retAst.category === ast.TypeCategory.STRUCT) {
+              const info = this.structs.get((sig.retAst as ast.StructType).name.lexeme)
+              return { type: sig.ret as LlvmType, repr: out, struct: info }
+            }
+            return { type: sig.ret as LlvmType, repr: out }
           }
         } else {
           throw new Error("Only simple function/struct calls supported")
@@ -824,13 +955,28 @@ class FunctionBuilder {
         const indexVal = this.emitExpr(idx.index)
         const idx32 = this.cast(indexVal, "i32")
         const elemTy = base.array.elem
+        const offset = this.fresh("idxoff")
+        if (base.array.stride === 1) {
+          this.emit(`${offset} = add i32 0, ${idx32.repr}`)
+        } else {
+          this.emit(`${offset} = mul nsw i32 ${idx32.repr}, ${base.array.stride}`)
+        }
         const elemPtr = this.fresh("elemPtr")
         this.emit(
-          `${elemPtr} = getelementptr ${elemTy}, ${elemTy}* ${base.repr}, i32 ${idx32.repr}`
+          `${elemPtr} = getelementptr ${elemTy}, ${elemTy}* ${base.repr}, i32 ${offset}`
         )
+        const calleeType = idx.callee.resolvedType as ast.ArrayType | undefined
+        if (calleeType && calleeType.category === ast.TypeCategory.ARRAY && calleeType.elementType.category === ast.TypeCategory.ARRAY) {
+          const info = this.arrayInfoFromType(calleeType.elementType as ast.ArrayType)
+          return {
+            type: `${info.elem}*` as LlvmType,
+            repr: elemPtr,
+            array: info
+          }
+        }
         const outVal = this.fresh("ldelem")
         this.emit(`${outVal} = load ${elemTy}, ${elemTy}* ${elemPtr}`)
-        return { type: elemTy, repr: outVal, ptr: { elem: elemTy } }
+        return { type: elemTy, repr: outVal }
       }
       case ast.NodeKind.LIST_EXPR: {
         const list = node as ast.ListExpr
@@ -839,33 +985,63 @@ class FunctionBuilder {
           if (elems.length === 0) {
             throw new Error("Empty array literal unsupported")
           }
-          const first = this.emitExpr(elems[0])
-          const elemTy = first.type
-          const length = elems.length
+          const arrType = list.resolvedType as ast.ArrayType
+          const info = this.arrayInfoFromType(arrType)
+          const total = info.length * info.stride
+          const elemTy = info.elem
           const allocaPtr = this.fresh("arr")
-          this.addAlloca(`${allocaPtr} = alloca ${elemTy}, i32 ${length}`)
-          this.storeValue({ ptr: allocaPtr, type: elemTy, array: { elem: elemTy, length } }, first)
-          for (let i = 1; i < length; i++) {
+          this.addAlloca(`${allocaPtr} = alloca ${elemTy}, i32 ${total}`)
+          for (let i = 0; i < elems.length; i++) {
             const val = this.emitExpr(elems[i])
-            const idx = this.fresh("idxptr")
-            this.emit(`${idx} = getelementptr ${elemTy}, ${elemTy}* ${allocaPtr}, i32 ${i}`)
-            const casted = this.cast(val, elemTy)
-            this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${idx}`)
+            const offset = this.fresh("eloff")
+            if (info.stride === 1) {
+              this.emit(`${offset} = add i32 0, ${i}`)
+            } else {
+              this.emit(`${offset} = mul nsw i32 ${i}, ${info.stride}`)
+            }
+            const dstPtr = this.fresh("dst")
+            this.emit(`${dstPtr} = getelementptr ${elemTy}, ${elemTy}* ${allocaPtr}, i32 ${offset}`)
+            if (val.array) {
+              const bytes = this.arrayBytes(val.array)
+              const dstbc = this.fresh("dstbc")
+              const srcbc = this.fresh("srcbc")
+              this.emit(`${dstbc} = bitcast ${val.array.elem}* ${dstPtr} to i8*`)
+              this.emit(`${srcbc} = bitcast ${val.array.elem}* ${val.repr} to i8*`)
+              this.emit(`call void @llvm.memcpy.p0.p0.i64(i8* ${dstbc}, i8* ${srcbc}, i64 ${bytes}, i1 0)`)
+            } else {
+              const casted = this.cast(val, elemTy)
+              this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${dstPtr}`)
+            }
           }
-          return { type: "i8*", repr: allocaPtr, array: { elem: elemTy, length } }
+          return { type: `${elemTy}*` as LlvmType, repr: allocaPtr, array: info }
         } else {
+          const arrType = list.resolvedType as ast.ArrayType
+          const info = this.arrayInfoFromType(arrType)
           const initVal = this.emitExpr(list.initializer.value)
           const length = list.initializer.length
-          const elemTy = initVal.type
+          const total = length * info.stride
+          const elemTy = info.elem
           const allocaPtr = this.fresh("arrrep")
-          this.addAlloca(`${allocaPtr} = alloca ${elemTy}, i32 ${length}`)
+          this.addAlloca(`${allocaPtr} = alloca ${elemTy}, i32 ${total}`)
           for (let i = 0; i < length; i++) {
+            const offset = this.fresh("idxoff")
+            if (info.stride === 1) this.emit(`${offset} = add i32 0, ${i}`)
+            else this.emit(`${offset} = mul nsw i32 ${i}, ${info.stride}`)
             const idxPtr = this.fresh("idxptr")
-            this.emit(`${idxPtr} = getelementptr ${elemTy}, ${elemTy}* ${allocaPtr}, i32 ${i}`)
-            const casted = this.cast(initVal, elemTy)
-            this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${idxPtr}`)
+            this.emit(`${idxPtr} = getelementptr ${elemTy}, ${elemTy}* ${allocaPtr}, i32 ${offset}`)
+            if (initVal.array) {
+              const bytes = this.arrayBytes(initVal.array)
+              const dstbc = this.fresh("dstbc")
+              const srcbc = this.fresh("srcbc")
+              this.emit(`${dstbc} = bitcast ${initVal.array.elem}* ${idxPtr} to i8*`)
+              this.emit(`${srcbc} = bitcast ${initVal.array.elem}* ${initVal.repr} to i8*`)
+              this.emit(`call void @llvm.memcpy.p0.p0.i64(i8* ${dstbc}, i8* ${srcbc}, i64 ${bytes}, i1 0)`)
+            } else {
+              const casted = this.cast(initVal, elemTy)
+              this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${idxPtr}`)
+            }
           }
-          return { type: "i8*", repr: allocaPtr, array: { elem: elemTy, length } }
+          return { type: `${elemTy}*` as LlvmType, repr: allocaPtr, array: info }
         }
       }
       default:
@@ -875,6 +1051,17 @@ class FunctionBuilder {
 
   private cast(value: Value, target: LlvmType): Value {
     if (value.type === target) return value
+    const isPtr = (t: LlvmType) => t.endsWith("*")
+    if (isPtr(value.type) && isPtr(target)) {
+      const out = this.fresh("bitcast")
+      this.emit(`${out} = bitcast ${value.type} ${value.repr} to ${target}`)
+      return { type: target, repr: out, array: value.array, ptr: value.ptr, struct: value.struct }
+    }
+    if (isPtr(value.type) && target === "i32") {
+      const out = this.fresh("ptrtoi32")
+      this.emit(`${out} = ptrtoint ${value.type} ${value.repr} to i32`)
+      return { type: "i32", repr: out }
+    }
     const out = this.fresh("cast")
     if (value.type === "i1" && target === "i32") {
       this.emit(`${out} = zext i1 ${value.repr} to i32`)
@@ -971,21 +1158,35 @@ class FunctionBuilder {
     }
   }
 
-  private emitPrintArray(arr: Value, elemTyAst: ast.Type, length: number) {
-    const elemTy = llvmTypeFromAst(elemTyAst)
-    // print '['
+  private emitPrintArray(arr: Value, elemTyAst: ast.Type, length: number, stride?: number, trailingNewline = true) {
+    const info =
+      arr.array && arr.array.elemAst
+        ? arr.array
+        : elemTyAst.category === ast.TypeCategory.ARRAY
+          ? this.arrayInfoFromType(elemTyAst as ast.ArrayType)
+          : { elem: llvmTypeFromAst(elemTyAst), elemAst: elemTyAst, length, stride: 1 }
+    const elemTy = info.elem
+    const effStride = stride ?? info.stride
     this.emitPrintRawString("[")
     for (let i = 0; i < length; i++) {
+      const offset = this.fresh("printoff")
+      if (effStride === 1) this.emit(`${offset} = add i32 0, ${i}`)
+      else this.emit(`${offset} = mul nsw i32 ${i}, ${effStride}`)
       const idxPtr = this.fresh("idxptr")
-      this.emit(`${idxPtr} = getelementptr ${elemTy}, ${elemTy}* ${arr.repr}, i32 ${i}`)
-      const ld = this.fresh("ldel")
-      this.emit(`${ld} = load ${elemTy}, ${elemTy}* ${idxPtr}`)
-      this.emitPrintScalar({ type: elemTy, repr: ld })
-      if (i !== length - 1) {
-        this.emitPrintRawString(", ")
+      this.emit(`${idxPtr} = getelementptr ${elemTy}, ${elemTy}* ${arr.repr}, i32 ${offset}`)
+      if (elemTyAst.category === ast.TypeCategory.ARRAY) {
+        const inner = elemTyAst as ast.ArrayType
+        const innerInfo = this.arrayInfoFromType(inner)
+        const innerStride = innerInfo.stride
+        this.emitPrintArray({ type: innerInfo.elem, repr: idxPtr, array: innerInfo }, inner.elementType, inner.length, innerStride, false)
+      } else {
+        const ld = this.fresh("ldel")
+        this.emit(`${ld} = load ${elemTy}, ${elemTy}* ${idxPtr}`)
+        this.emitPrintScalar({ type: elemTy, repr: ld })
       }
+      if (i !== length - 1) this.emitPrintRawString(", ")
     }
-    this.emitPrintRawString("]\n")
+    this.emitPrintRawString(trailingNewline ? "]\n" : "]")
   }
 
   private emitPrintRawString(s: string) {
@@ -1052,20 +1253,25 @@ class FunctionBuilder {
       }
       case ast.NodeKind.RETURN_STMT: {
         const r = stmt as ast.ReturnStmt
-        if (r.value) {
-          const val = this.emitExpr(r.value)
-          if (this.functionRetType === "void") {
-            // ignore value
-            this.emit("ret void")
-          } else {
-            const casted = this.cast(val, this.functionRetType as LlvmType)
-            this.emit(`ret ${casted.type} ${casted.repr}`)
-          }
+        if (this.fnReturnTypeAst?.category === ast.TypeCategory.ARRAY && this.arrayReturnDest) {
+          const val = r.value ? this.emitExpr(r.value) : { type: this.arrayReturnDest.type, repr: "undef", array: this.arrayReturnDest.array }
+          this.storeValue(this.arrayReturnDest, val)
+          this.emit("ret void")
         } else {
-          if (this.functionRetType === "void") this.emit("ret void")
-          else {
-            const zero = this.functionRetType === "float" || this.functionRetType === "double" ? "0.0" : "0"
-            this.emit(`ret ${this.functionRetType} ${zero}`)
+          if (r.value) {
+            const val = this.emitExpr(r.value)
+            if (this.functionRetType === "void") {
+              this.emit("ret void")
+            } else {
+              const casted = this.cast(val, this.functionRetType as LlvmType)
+              this.emit(`ret ${casted.type} ${casted.repr}`)
+            }
+          } else {
+            if (this.functionRetType === "void") this.emit("ret void")
+            else {
+              const zero = this.functionRetType === "float" || this.functionRetType === "double" ? "0.0" : "0"
+              this.emit(`ret ${this.functionRetType} ${zero}`)
+            }
           }
         }
         this.hasReturn = true
@@ -1167,33 +1373,81 @@ class FunctionBuilder {
   }
 
   buildFunction(fn: ast.FunctionStmt): string {
+    this.paramSlotsByName.clear()
+    this.paramArgsByName.clear()
     this.currentFunctionName = fn.name.lexeme
+    this.arrayReturnDest = null
     // Force main to return i32 for proper process exit codes.
     if (fn.name.lexeme === "main") {
       this.functionRetType = "i32"
+    } else if (fn.returnType.category === ast.TypeCategory.ARRAY) {
+      this.functionRetType = "void"
     } else {
       this.functionRetType = llvmReturnTypeFromAst(fn.returnType)
     }
     this.fnReturnTypeAst = fn.returnType
     const retTy = this.functionRetType
-    const header = `define ${retTy} @${fn.name.lexeme}() {`
     // Build function signature with named params
     const paramNames: string[] = []
+    const paramTypes: LlvmType[] = []
+    if (fn.returnType.category === ast.TypeCategory.ARRAY) {
+      const arr = fn.returnType as ast.ArrayType
+      const info = this.arrayInfoFromType(arr)
+      paramNames.push(this.fresh("retptr"))
+      paramTypes.push(`${info.elem}*` as LlvmType)
+      this.arrayReturnDest = { ptr: paramNames[0], type: info.elem, array: info }
+    }
     fn.params.forEach((p) => {
-      paramNames.push(this.fresh(p.name.lexeme.replace(/[^a-zA-Z0-9]/g, "p")))
+      if (p.type.category === ast.TypeCategory.ARRAY) {
+        const info = this.arrayInfoFromType(p.type as ast.ArrayType)
+        paramNames.push(this.fresh(p.name.lexeme.replace(/[^a-zA-Z0-9]/g, "p")))
+        paramTypes.push(`${info.elem}*` as LlvmType)
+      } else {
+        paramNames.push(this.fresh(p.name.lexeme.replace(/[^a-zA-Z0-9]/g, "p")))
+        paramTypes.push(llvmTypeFromAst(p.type))
+      }
     })
-    const paramSig = fn.params.map((p, i) => `${llvmTypeFromAst(p.type)} ${paramNames[i]}`).join(", ")
+    const paramSig = paramTypes.map((t, i) => `${t} ${paramNames[i]}`).join(", ")
     const realHeader = `define ${retTy} @${fn.name.lexeme}(${paramSig}) {`
     this.lines.push(realHeader)
     this.lines.push("entry:")
     // params allocas and stores
+    let paramOffset = 0
+    if (fn.returnType.category === ast.TypeCategory.ARRAY) {
+      paramOffset = 1
+    }
     fn.params.forEach((p, i) => {
-      const llvmTy = llvmTypeFromAst(p.type)
+      const isArr = p.type.category === ast.TypeCategory.ARRAY
+      const llvmTy = isArr ? (`${llvmTypeFromAst(baseElemType(p.type as ast.ArrayType))}*` as LlvmType) : llvmTypeFromAst(p.type)
+      let arrayInfo: ArrayInfo | undefined
+      let structInfo: StructInfo | undefined
+      let ptrInfo: PointerInfo | undefined
+      if (isArr) {
+        arrayInfo = this.arrayInfoFromType(p.type as ast.ArrayType)
+      } else if (p.type.category === ast.TypeCategory.STRUCT) {
+        structInfo = this.structs.get(p.type.name.lexeme)
+      } else if (p.type.category === ast.TypeCategory.POINTER) {
+        ptrInfo = { elem: llvmTypeFromAst((p.type as ast.PointerType).elementType) }
+      }
       const ptr = this.fresh("param")
-      this.addAlloca(`${ptr} = alloca ${llvmTy}`)
-      const incoming = paramNames[i]
-      this.lines.push(`  store ${llvmTy} ${incoming}, ${llvmTy}* ${ptr}`)
-      const entry = { ptr, type: llvmTy }
+      if (isArr && arrayInfo) {
+        const total = arrayInfo.length * arrayInfo.stride
+        this.addAlloca(`${ptr} = alloca ${arrayInfo.elem}, i32 ${total}`)
+      } else {
+        this.addAlloca(`${ptr} = alloca ${llvmTy}`)
+      }
+      const incoming = paramNames[i + paramOffset]
+      if (isArr && arrayInfo) {
+        const dstbc = this.fresh("dstbc")
+        const srcbc = this.fresh("srcbc")
+        const bytes = this.arrayBytes(arrayInfo)
+        this.lines.push(`  ${dstbc} = bitcast ${arrayInfo.elem}* ${ptr} to i8*`)
+        this.lines.push(`  ${srcbc} = bitcast ${llvmTy} ${incoming} to i8*`)
+        this.lines.push(`  call void @llvm.memcpy.p0.p0.i64(i8* ${dstbc}, i8* ${srcbc}, i64 ${bytes}, i1 0)`)
+      } else {
+        this.lines.push(`  store ${llvmTy} ${incoming}, ${llvmTy}* ${ptr}`)
+      }
+      const entry = { ptr, type: llvmTy, array: arrayInfo, struct: structInfo, ptrInfo }
       this.paramSlotsByName.set(p.name.lexeme, entry)
       this.paramArgsByName.set(p.name.lexeme, { type: llvmTy, repr: incoming })
     })
@@ -1231,7 +1485,7 @@ export function emitLlvm(context: ast.Context): string {
   const functions = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.FUNCTION_STMT
   ) as ast.FunctionStmt[]
-  const fnSigs = new Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>()
+  const fnSigs = new Map<string, { ret: LlvmType | "void"; params: LlvmType[]; retAst: ast.Type }>()
   const globalsMap = new Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
   const globalsByName = new Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
   const structInfos = new Map<string, StructInfo>()
@@ -1251,6 +1505,16 @@ export function emitLlvm(context: ast.Context): string {
     module.addTypeDef(`%struct.${s.name.lexeme} = type { ${fieldsStr} }`)
   })
 
+  const arrayInfoFromTypeFn = (arr: ast.ArrayType): ArrayInfo => {
+    const base = baseElemType(arr)
+    const strideOf = (t: ast.Type): number => {
+      if (t.category !== ast.TypeCategory.ARRAY) return 1
+      const inner = t as ast.ArrayType
+      return inner.length * strideOf(inner.elementType)
+    }
+    return { elem: llvmTypeFromAst(base), elemAst: arr.elementType, length: arr.length, stride: strideOf(arr.elementType) }
+  }
+
   const globalVars = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.VAR_STMT
   ) as ast.VarStmt[]
@@ -1264,11 +1528,12 @@ export function emitLlvm(context: ast.Context): string {
     if (llvmTy === "float" || llvmTy === "double") initVal = "0.0"
     if (v.type?.category === ast.TypeCategory.ARRAY) {
       const arr = v.type as ast.ArrayType
-      const elemTy = llvmTypeFromAst(arr.elementType)
-      module.addGlobal(`@${name} = global [${arr.length} x ${elemTy}] zeroinitializer`)
-      const elemPtr = `getelementptr inbounds ([${arr.length} x ${elemTy}], [${arr.length} x ${elemTy}]* @${name}, i64 0, i64 0)`
-      globalsMap.set(v.symbol.id, { ptr: elemPtr, type: elemTy, array: { elem: elemTy, length: arr.length } })
-      globalsByName.set(name, { ptr: elemPtr, type: elemTy, array: { elem: elemTy, length: arr.length } })
+      const info = arrayInfoFromTypeFn(arr)
+      const total = info.length * info.stride
+      module.addGlobal(`@${name} = global [${total} x ${info.elem}] zeroinitializer`)
+      const elemPtr = `getelementptr inbounds ([${total} x ${info.elem}], [${total} x ${info.elem}]* @${name}, i64 0, i64 0)`
+      globalsMap.set(v.symbol.id, { ptr: elemPtr, type: info.elem, array: info })
+      globalsByName.set(name, { ptr: elemPtr, type: info.elem, array: info })
     } else if (v.type?.category === ast.TypeCategory.POINTER) {
       module.addGlobal(`@${name} = global i8* null`)
       const elemTy = llvmTypeFromAst((v.type as ast.PointerType).elementType)
@@ -1282,21 +1547,33 @@ export function emitLlvm(context: ast.Context): string {
   })
 
   functions.forEach((fn) => {
-    const ret = fn.name.lexeme === "main" ? ("i32" as const) : llvmReturnTypeFromAst(fn.returnType)
-    const params = fn.params.map((p) => llvmTypeFromAst(p.type))
-    fnSigs.set(fn.name.lexeme, { ret, params })
+    const isArrayRet = fn.returnType.category === ast.TypeCategory.ARRAY
+    let ret: LlvmType | "void"
+    if (fn.name.lexeme === "main") ret = "i32"
+    else ret = isArrayRet ? "void" : llvmReturnTypeFromAst(fn.returnType)
+    let params = fn.params.map((p) =>
+      p.type.category === ast.TypeCategory.ARRAY
+        ? (`${llvmTypeFromAst(baseElemType(p.type as ast.ArrayType))}*` as LlvmType)
+        : llvmTypeFromAst(p.type)
+    )
+    if (isArrayRet) {
+      const arr = fn.returnType as ast.ArrayType
+      const elemTy = llvmTypeFromAst(baseElemType(arr))
+      params = [`${elemTy}*` as LlvmType, ...params]
+    }
+    fnSigs.set(fn.name.lexeme, { ret, params, retAst: fn.returnType })
   })
   // Built-ins
-  fnSigs.set("__sqrt__", { ret: "float", params: ["float"] })
-  fnSigs.set("__malloc__", { ret: "i8*", params: ["i32"] })
-  fnSigs.set("__free__", { ret: "void", params: ["i8*"] })
+  fnSigs.set("__sqrt__", { ret: "float", params: ["float"], retAst: ast.FloatType })
+  fnSigs.set("__malloc__", { ret: "i8*", params: ["i32"], retAst: ast.ptrType(ast.ByteType) })
+  fnSigs.set("__free__", { ret: "void", params: ["i8*"], retAst: ast.VoidType })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
   }
 
   if (context.globalInitOrder && context.globalInitOrder.length > 0) {
-    fnSigs.set("__init_globals__", { ret: "void", params: [] })
+    fnSigs.set("__init_globals__", { ret: "void", params: [], retAst: ast.VoidType })
     const initFn: ast.FunctionStmt = {
       kind: ast.NodeKind.FUNCTION_STMT,
       name: { lexeme: "__init_globals__" } as any,
