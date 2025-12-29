@@ -1510,7 +1510,7 @@ class FunctionBuilder {
     throw new Error("Unsupported condition type")
   }
 
-  buildFunction(fn: ast.FunctionStmt, mangledName: string): string {
+  buildFunction(fn: ast.FunctionStmt, mangledName: string, isExported = false): string {
     this.paramSlotsByName.clear()
     this.paramArgsByName.clear()
     this.currentFunctionName = mangledName
@@ -1546,7 +1546,7 @@ class FunctionBuilder {
       }
     })
     const paramSig = paramTypes.map((t, i) => `${t} ${paramNames[i]}`).join(", ")
-    const realHeader = `define ${retTy} @${mangledName}(${paramSig}) {`
+    const realHeader = `${isExported ? "define" : "define internal"} ${retTy} @${mangledName}(${paramSig}) {`
     this.lines.push(realHeader)
     this.lines.push("entry:")
     // params allocas and stores
@@ -1733,7 +1733,7 @@ export function emitLlvm(context: ast.Context): string {
   functions.forEach((fn) => {
     const fnBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName, structInfos)
     const mangled = fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`
-    module.addFunction(fnBuilder.buildFunction(fn, mangled))
+    module.addFunction(fnBuilder.buildFunction(fn, mangled, !!fn.isExported || fn.name.lexeme === "main"))
   })
   return module.build()
 }
