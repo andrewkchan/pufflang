@@ -1186,4 +1186,79 @@ describe("upstream type checking parity (subset)", () => {
       ]
     )
   })
+
+  test("structs: invalid nominal type annotations", () => {
+    expectResolveErrors(
+      `
+    var isAGlobalVar = 42;
+    struct ContainsInvalid {
+      val isAFunction, // error!
+      val2 isAGlobalVar // error!
+    }
+    def isAFunction(x int) int {
+      return 1337;
+    }
+    def badParamType(x isAFunction) { // error!
+      print "hi";
+    }
+    def main() {
+      var badVarType isAFunction = isAFunction(1); // error!
+      var badVarType2 isAGlobalVar = isAGlobalVar; // error!
+      var x = isAGlobalVar; // ok
+      var y = isAFunction(1); // ok
+    }
+    `,
+      [
+        "3: Undefined typename 'isAFunction'.",
+        "4: Undefined typename 'isAGlobalVar'.",
+        "9: Undefined typename 'isAFunction'.",
+        "13: Undefined typename 'isAFunction'.",
+        "14: Undefined typename 'isAGlobalVar'."
+      ]
+    )
+  })
+
+  test("structs: constructor vs function calls", () => {
+    expectResolveErrors(
+      `
+    struct Point { x float, y float }
+    def isAFunction(x int) int {
+      return 1337;
+    }
+    def main() {
+      var bad1 = isAFunction{1}; // error!
+      var bad2 = Point(1, 2); // error!
+      var x = Point{1, 2}; // ok
+    }
+    `,
+      ["6: Cannot construct this type.", "7: Cannot call this type."]
+    )
+  })
+
+  test("structs: cyclic struct definitions", () => {
+    expectResolveErrors(
+      `
+    struct BadList {
+      next BadList, // error!
+      val int
+    }
+    struct GoodList {
+      next GoodList~, // ok
+      val int
+    }
+    struct Bad1 {
+      child Bad2, // error!
+      val int
+    }
+    struct Bad2 {
+      child Bad1, // error!
+      val int
+    }
+    `,
+      [
+        "2: Cyclic member declaration for struct 'BadList'.",
+        "14: Cyclic member declaration for struct 'Bad1'."
+      ]
+    )
+  })
 })
