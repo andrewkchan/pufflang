@@ -1,17 +1,23 @@
 import * as ast from "./nodes"
 import { UTF8Codec } from "./util"
 
-type LlvmType = "i1" | "i8" | "i32" | "float" | "double" | "i8*"
+type LlvmType = "i1" | "i8" | "i32" | "float" | "double" | "i8*" | `%struct.${string}*`
 
 interface ArrayInfo {
   elem: LlvmType
   length: number
 }
 
+interface StructInfo {
+  name: string
+  fields: { name: string; type: LlvmType }[]
+}
+
 interface Value {
   type: LlvmType
   repr: string
   array?: ArrayInfo
+  struct?: StructInfo
 }
 
 const codec = new UTF8Codec()
@@ -31,6 +37,7 @@ function llvmTypeFromAst(type: ast.Type): LlvmType {
     case ast.TypeCategory.ARRAY:
       return "i8*" // arrays represented by pointer with ArrayInfo metadata
     case ast.TypeCategory.STRUCT:
+      return `%struct.${type.name.lexeme}*`
     case ast.TypeCategory.VOID:
     case ast.TypeCategory.ERROR:
       throw new Error(`Unsupported type in LLVM backend: ${ast.typeToString(type)}`)
@@ -55,11 +62,16 @@ class LlvmModuleBuilder {
   private globals: string[] = []
   private declarations: string[] = []
   private functions: string[] = []
+  private typeDefs: string[] = []
   private stringLiterals: Map<string, { name: string; len: number }> = new Map()
   private strCounter = 0
 
   declare(line: string) {
     this.declarations.push(line)
+  }
+
+  addTypeDef(line: string) {
+    this.typeDefs.push(line)
   }
 
   addGlobal(line: string) {
@@ -108,6 +120,7 @@ class LlvmModuleBuilder {
       "; ModuleID = 'puffscript'",
       "declare i32 @printf(i8*, ...)",
       "declare i32 @puts(i8*)",
+      ...this.typeDefs,
       ...this.declarations,
       ...this.globals,
       ...this.functions
@@ -128,15 +141,18 @@ class FunctionBuilder {
   private currentFunctionName: string = ""
   private globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>
   private globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>
+  private structs: Map<string, StructInfo>
 
   constructor(
     private readonly module: LlvmModuleBuilder,
     private readonly fnSigs: Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>,
     globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>,
-    globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>
+    globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>,
+    structs: Map<string, StructInfo>
   ) {
     this.globals = globals
     this.globalsByName = globalsByName
+    this.structs = structs
   }
 
   fresh(prefix = "t"): string {
@@ -173,7 +189,7 @@ class FunctionBuilder {
     return this.ensureLocal(symbol, fallbackType)
   }
 
-  private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType, init?: Value, array?: ArrayInfo): { ptr: string; type: LlvmType; array?: ArrayInfo } {
+  private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType, init?: Value, array?: ArrayInfo, struct?: StructInfo): { ptr: string; type: LlvmType; array?: ArrayInfo; struct?: StructInfo } {
     if (symbol.kind === ast.SymbolKind.VARIABLE && (symbol as ast.VariableSymbol).isGlobal) {
       return this.getLocal(symbol, type)
     }
@@ -187,7 +203,7 @@ class FunctionBuilder {
       ptr = this.fresh("var")
       this.addAlloca(`${ptr} = alloca ${type}`)
     }
-    const entry = { ptr, type, array }
+    const entry = { ptr, type, array, struct }
     this.locals.set(symbol.id, entry)
     if (init) {
       this.storeValue(entry, init)
@@ -195,13 +211,24 @@ class FunctionBuilder {
     return entry
   }
 
-  private storeValue(dest: { ptr: string; type: LlvmType; array?: ArrayInfo }, value: Value) {
+  private storeValue(dest: { ptr: string; type: LlvmType; array?: ArrayInfo; struct?: StructInfo }, value: Value) {
     if (dest.array && value.array) {
       const bytes = dest.array.length * this.sizeofLlvm(dest.array.elem)
       const dstPtr = this.fresh("dstbc")
       const srcPtr = this.fresh("srcbc")
       this.emit(`${dstPtr} = bitcast ${dest.array.elem}* ${dest.ptr} to i8*`)
       this.emit(`${srcPtr} = bitcast ${value.array.elem}* ${value.repr} to i8*`)
+      this.emit(
+        `call void @llvm.memcpy.p0.p0.i64(i8* ${dstPtr}, i8* ${srcPtr}, i64 ${bytes}, i1 0)`
+      )
+      return
+    }
+    if (dest.struct && value.struct) {
+      const bytes = this.sizeofStruct(dest.struct)
+      const dstPtr = this.fresh("dstbc")
+      const srcPtr = this.fresh("srcbc")
+      this.emit(`${dstPtr} = bitcast ${this.structPtrType(dest.struct)} ${dest.ptr} to i8*`)
+      this.emit(`${srcPtr} = bitcast ${this.structPtrType(value.struct)} ${value.repr} to i8*`)
       this.emit(
         `call void @llvm.memcpy.p0.p0.i64(i8* ${dstPtr}, i8* ${srcPtr}, i64 ${bytes}, i1 0)`
       )
@@ -238,7 +265,23 @@ class FunctionBuilder {
       case "double":
       case "i8*":
         return 8
+      default:
+        // struct pointer size (assume 8 on 64-bit)
+        if (ty.startsWith("%struct.")) return 8
+        throw new Error(`Unknown llvm type size for ${ty}`)
     }
+  }
+
+  private structPtrType(info: StructInfo): `%struct.${string}*` {
+    return `%struct.${info.name}*`
+  }
+
+  private sizeofStruct(info: StructInfo): number {
+    let sz = 0
+    info.fields.forEach((f) => {
+      sz += this.sizeofLlvm(f.type)
+    })
+    return sz
   }
 
   emitExpr(node: ast.Expr): Value {
@@ -311,6 +354,21 @@ class FunctionBuilder {
           const rval = this.emitExpr(a.right)
           const casted = this.cast(rval, elemTy)
           this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${elemPtr}`)
+          return casted
+        } else if (a.left.kind === ast.NodeKind.DOT_EXPR) {
+          const d = a.left as ast.DotExpr
+          const base = this.emitExpr(d.callee)
+          if (!base.struct) throw new Error("Member assignment requires struct")
+          const idx = base.struct.fields.findIndex((f) => f.name === d.identifier.lexeme)
+          if (idx < 0) throw new Error("No such field")
+          const field = base.struct.fields[idx]
+          const fieldPtr = this.fresh("field")
+          this.emit(
+            `${fieldPtr} = getelementptr %struct.${base.struct.name}, %struct.${base.struct.name}* ${base.repr}, i32 0, i32 ${idx}`
+          )
+          const rval = this.emitExpr(a.right)
+          const casted = this.cast(rval, field.type)
+          this.emit(`store ${field.type} ${casted.repr}, ${field.type}* ${fieldPtr}`)
           return casted
         } else {
           throw new Error("Assignment target unsupported in backend.")
@@ -468,26 +526,42 @@ class FunctionBuilder {
       }
       case ast.NodeKind.CALL_EXPR: {
         const c = node as ast.CallExpr
-        if (c.callee.kind !== ast.NodeKind.VARIABLE_EXPR) {
-          throw new Error("Only simple function calls supported")
-        }
-        const name = (c.callee as ast.VariableExpr).name.lexeme
-        const sig = this.fnSigs.get(name)
-        if (!sig) {
-          throw new Error(`Unknown function ${name}`)
-        }
-        const args: Value[] = c.args.map((a) => this.emitExpr(a))
-        if (args.length !== sig.params.length) {
-          throw new Error(`Arity mismatch calling ${name}`)
-        }
-        const argStr = args.map((v, i) => `${sig.params[i]} ${this.cast(v, sig.params[i]).repr}`).join(", ")
-        if (sig.ret === "void") {
-          this.emit(`call void @${name}(${argStr})`)
-          return { type: "i32", repr: "0" }
+        if (c.callee.kind === ast.NodeKind.VARIABLE_EXPR) {
+          const name = (c.callee as ast.VariableExpr).name.lexeme
+          // struct construction if name matches struct
+          const structInfo = this.structs.get(name)
+          if (structInfo) {
+            const ptr = this.fresh("struct")
+            const structTy = this.structPtrType(structInfo)
+            this.addAlloca(`${ptr} = alloca %struct.${structInfo.name}`)
+            structInfo.fields.forEach((f, i) => {
+              const argVal = this.cast(this.emitExpr(c.args[i]), f.type)
+              const fieldPtr = this.fresh("field")
+              this.emit(`${fieldPtr} = getelementptr %struct.${structInfo.name}, %struct.${structInfo.name}* ${ptr}, i32 0, i32 ${i}`)
+              this.emit(`store ${f.type} ${argVal.repr}, ${f.type}* ${fieldPtr}`)
+            })
+            return { type: structTy, repr: ptr, struct: structInfo }
+          }
+
+          const sig = this.fnSigs.get(name)
+          if (!sig) {
+            throw new Error(`Unknown function ${name}`)
+          }
+          const args: Value[] = c.args.map((a) => this.emitExpr(a))
+          if (args.length !== sig.params.length) {
+            throw new Error(`Arity mismatch calling ${name}`)
+          }
+          const argStr = args.map((v, i) => `${sig.params[i]} ${this.cast(v, sig.params[i]).repr}`).join(", ")
+          if (sig.ret === "void") {
+            this.emit(`call void @${name}(${argStr})`)
+            return { type: "i32", repr: "0" }
+          } else {
+            const out = this.fresh("call")
+            this.emit(`${out} = call ${sig.ret} @${name}(${argStr})`)
+            return { type: sig.ret, repr: out }
+          }
         } else {
-          const out = this.fresh("call")
-          this.emit(`${out} = call ${sig.ret} @${name}(${argStr})`)
-          return { type: sig.ret, repr: out }
+          throw new Error("Only simple function/struct calls supported")
         }
       }
       case ast.NodeKind.INDEX_EXPR: {
@@ -805,6 +879,22 @@ export function emitLlvm(context: ast.Context): string {
   const fnSigs = new Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>()
   const globalsMap = new Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>()
   const globalsByName = new Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>()
+  const structInfos = new Map<string, StructInfo>()
+
+  const structs = context.topLevelStatements.filter(
+    (s) => s.kind === ast.NodeKind.STRUCT_STMT
+  ) as ast.StructStmt[]
+
+  structs.forEach((s) => {
+    const fields = s.members.map((m) => ({
+      name: m.name.lexeme,
+      type: llvmTypeFromAst(m.type)
+    }))
+    const info: StructInfo = { name: s.name.lexeme, fields }
+    structInfos.set(s.name.lexeme, info)
+    const fieldsStr = fields.map((f) => f.type).join(", ")
+    module.addTypeDef(`%struct.${s.name.lexeme} = type { ${fieldsStr} }`)
+  })
 
   const globalVars = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.VAR_STMT
@@ -855,12 +945,12 @@ export function emitLlvm(context: ast.Context): string {
       symbol: null,
       hoistedLocals: null
     }
-    const initBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName)
+    const initBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName, structInfos)
     module.addFunction(initBuilder.buildFunction(initFn))
   }
 
   functions.forEach((fn) => {
-    const fnBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName)
+    const fnBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName, structInfos)
     module.addFunction(fnBuilder.buildFunction(fn))
   })
   return module.build()
