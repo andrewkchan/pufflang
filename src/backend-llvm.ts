@@ -887,6 +887,12 @@ class FunctionBuilder {
         }
         throw new Error("Printing non-byte arrays is not supported yet.")
       }
+      case ast.TypeCategory.POINTER: {
+        const fmtPtr = this.module.gepStringPtr("%p\n")
+        const casted = this.cast(val, "i8*")
+        this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i8* ${casted.repr})`)
+        break
+      }
       default:
         throw new Error(`Printing unsupported type ${ast.typeToString(resolvedType)}`)
     }

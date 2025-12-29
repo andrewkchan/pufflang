@@ -696,8 +696,7 @@ export function resolve(context: ast.Context, reportError: ReportError) {
         const op = node as ast.PrintStmt
         resolveNode(op.expression, isLiveAtEnd)
         const valueType = op.expression.resolvedType
-        if (ast.isEqual(valueType!, ast.VoidType) || valueType?.category === ast.TypeCategory.POINTER || valueType?.category === ast.TypeCategory.STRUCT) {
-          // TODO: allow hex address printing for pointers
+        if (ast.isEqual(valueType!, ast.VoidType) || valueType?.category === ast.TypeCategory.STRUCT) {
           resolveError(op.keyword, `Cannot print value of type '${ast.typeToString(valueType!)}'.`)
         }
         op.isLiveAtEnd = isLiveAtEnd
