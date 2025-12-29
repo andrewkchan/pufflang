@@ -987,8 +987,34 @@ export class Context {
       symbol: null
     })
     sqrt.symbol = this.functionSymbol(sqrt)
+    const mallocFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__malloc__"),
+      params: [
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "n"),
+          type: IntType
+        }
+      ],
+      returnType: ptrType(ByteType),
+      symbol: null
+    })
+    mallocFn.symbol = this.functionSymbol(mallocFn)
+    const freeFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__free__"),
+      params: [
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "p"),
+          type: ptrType(ByteType)
+        }
+      ],
+      returnType: VoidType,
+      symbol: null
+    })
+    freeFn.symbol = this.functionSymbol(freeFn)
     this.global.define(memcpy.name.lexeme, memcpy.symbol)
     this.global.define(sqrt.name.lexeme, sqrt.symbol)
+    this.global.define(mallocFn.name.lexeme, mallocFn.symbol)
+    this.global.define(freeFn.name.lexeme, freeFn.symbol)
   }
 
   variableSymbol(node: VarStmt, isGlobal: boolean): VariableSymbol {

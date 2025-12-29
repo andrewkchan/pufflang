@@ -126,6 +126,9 @@ class LlvmModuleBuilder {
     this.hasRuntime = true
     // sqrt via libm
     this.declare("declare double @sqrt(double)")
+    // malloc/free
+    this.declare("declare i8* @malloc(i64)")
+    this.declare("declare void @free(i8*)")
     // memcpy
     this.declare("declare void @llvm.memcpy.p0.p0.i64(i8*, i8*, i64, i1)")
   }
@@ -701,6 +704,21 @@ class FunctionBuilder {
             this.emit(`${outf} = fptrunc double ${out} to float`)
             return { type: "float", repr: outf }
           }
+          if (name === "__malloc__") {
+            const arg = this.emitExpr(c.args[0])
+            const i64v = this.fresh("sz")
+            const argi = this.cast(arg, "i32")
+            this.emit(`${i64v} = sext i32 ${argi.repr} to i64`)
+            const out = this.fresh("malloc")
+            this.emit(`${out} = call i8* @malloc(i64 ${i64v})`)
+            return { type: "i8*", repr: out, ptr: { elem: "i8" } }
+          }
+          if (name === "__free__") {
+            const arg = this.emitExpr(c.args[0])
+            const casted = this.cast(arg, "i8*")
+            this.emit(`call void @free(i8* ${casted.repr})`)
+            return { type: "i32", repr: "0" }
+          }
 
           const sig = this.fnSigs.get(name)
           if (!sig) {
@@ -1114,6 +1132,8 @@ export function emitLlvm(context: ast.Context): string {
   })
   // Built-ins
   fnSigs.set("__sqrt__", { ret: "float", params: ["float"] })
+  fnSigs.set("__malloc__", { ret: "i8*", params: ["i32"] })
+  fnSigs.set("__free__", { ret: "void", params: ["i8*"] })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
