@@ -1,0 +1,17 @@
+def main() {
+  var path = [byte(0); 64];
+  var buf = [byte(0); 256];
+  var pathLen = __args_get__(0, &path[0], len(path));
+
+  if (pathLen > 0) {
+    var read = __read_file__(&path[0], pathLen, &buf[0], len(buf));
+    if (read > 0) {
+      __stdout_write__(&buf[0], read);
+    }
+  } else {
+    var readStdin = __stdin_read__(&buf[0], len(buf));
+    if (readStdin > 0) {
+      __stdout_write__(&buf[0], readStdin);
+    }
+  }
+}

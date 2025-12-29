@@ -1,0 +1,7 @@
+def main() {
+  var buf = [byte(0); 256];
+  var read = __stdin_read__(&buf[0], len(buf));
+  if (read > 0) {
+    __stdout_write__(&buf[0], read);
+  }
+}
