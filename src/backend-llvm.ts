@@ -137,15 +137,15 @@ class FunctionBuilder {
   private allocas: string[] = []
   private lines: string[] = []
   private tempCounter = 0
-  private locals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }> = new Map()
+  private locals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }> = new Map()
   private hasReturn = false
   private functionRetType: LlvmType | "void" = "i32"
   private fnReturnTypeAst: ast.Type | null = null
   private terminated = false
   private paramArgsByName: Map<string, { type: LlvmType; repr: string }> = new Map()
   private currentFunctionName: string = ""
-  private globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>
-  private globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>
+  private globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>
+  private globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>
   private structs: Map<string, StructInfo>
 
   constructor(
@@ -179,7 +179,7 @@ class FunctionBuilder {
     this.allocas.push(line)
   }
 
-  private getLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, fallbackType?: LlvmType): { ptr: string; type: LlvmType; array?: ArrayInfo } {
+  private getLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, fallbackType?: LlvmType): { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo } {
     if (symbol.kind === ast.SymbolKind.VARIABLE) {
       const name = (symbol as ast.VariableSymbol).node.name.lexeme
       const g = this.globalsByName.get(name) ?? this.globals.get(symbol.id)
@@ -194,7 +194,7 @@ class FunctionBuilder {
     return this.ensureLocal(symbol, fallbackType)
   }
 
-  private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType, init?: Value, array?: ArrayInfo, struct?: StructInfo): { ptr: string; type: LlvmType; array?: ArrayInfo; struct?: StructInfo } {
+  private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType, init?: Value, array?: ArrayInfo, struct?: StructInfo, ptrInfo?: PointerInfo): { ptr: string; type: LlvmType; array?: ArrayInfo; struct?: StructInfo; ptrInfo?: PointerInfo } {
     if (symbol.kind === ast.SymbolKind.VARIABLE && (symbol as ast.VariableSymbol).isGlobal) {
       return this.getLocal(symbol, type)
     }
@@ -208,7 +208,7 @@ class FunctionBuilder {
       ptr = this.fresh("var")
       this.addAlloca(`${ptr} = alloca ${type}`)
     }
-    const entry = { ptr, type, array, struct }
+    const entry = { ptr, type, array, struct, ptrInfo }
     this.locals.set(symbol.id, entry)
     if (init) {
       this.storeValue(entry, init)
@@ -243,10 +243,10 @@ class FunctionBuilder {
     this.emit(`store ${dest.type} ${valCast.repr}, ${dest.type}* ${dest.ptr}`)
   }
 
-  private loadValue(slot: { ptr: string; type: LlvmType; array?: ArrayInfo }): Value {
+  private loadValue(slot: { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }): Value {
     const out = this.fresh("ld")
     this.emit(`${out} = load ${slot.type}, ${slot.type}* ${slot.ptr}`)
-    return { type: slot.type, repr: out, array: slot.array }
+    return { type: slot.type, repr: out, array: slot.array, ptr: slot.ptrInfo, struct: slot.struct }
   }
 
   private toBool(val: Value): Value {
@@ -323,14 +323,19 @@ class FunctionBuilder {
         if (symbol.kind === ast.SymbolKind.PARAM) {
           const argInit = this.paramArgsByName.get(v.name.lexeme)
           const llvmTy = llvmTypeFromAst(v.resolvedType!)
-          slot = this.ensureLocal(symbol as any, llvmTy, argInit ? { type: argInit.type, repr: argInit.repr } : undefined)
+          slot = this.ensureLocal(symbol as any, llvmTy, argInit ? { type: argInit.type, repr: argInit.repr } : undefined, undefined, undefined, v.resolvedType?.category === ast.TypeCategory.POINTER ? { elem: llvmTypeFromAst((v.resolvedType as ast.PointerType).elementType) } : undefined)
         } else {
           slot = this.getLocal(symbol as any)
         }
         if (v.resolvedType?.category === ast.TypeCategory.ARRAY) {
           return { type: "i8*", repr: slot.ptr, array: slot.array }
         }
-        return this.loadValue(slot)
+        const loaded = this.loadValue(slot)
+        if (v.resolvedType?.category === ast.TypeCategory.POINTER) {
+          const elemTy = llvmTypeFromAst((v.resolvedType as ast.PointerType).elementType)
+          loaded.ptr = { elem: elemTy }
+        }
+        return loaded
       }
       case ast.NodeKind.ASSIGN_EXPR: {
         const a = node as ast.AssignExpr
@@ -468,7 +473,8 @@ class FunctionBuilder {
               throw new Error("Address-of unsupported target")
             }
             const slot = this.getLocal(sym as any, llvmTypeFromAst(v.resolvedType!))
-            return this.pointerValue(slot.ptr, slot.array ? slot.array.elem : slot.type)
+            const elemTy = slot.array ? slot.array.elem : slot.type
+            return this.pointerValue(slot.ptr, elemTy)
           } else if (u.value.kind === ast.NodeKind.INDEX_EXPR) {
             const idx = u.value as ast.IndexExpr
             const base = this.emitExpr(idx.callee)
@@ -479,17 +485,39 @@ class FunctionBuilder {
             const elemPtr = this.fresh("addr_idx")
             this.emit(`${elemPtr} = getelementptr ${elemTy}, ${elemTy}* ${base.repr}, i32 ${idx32.repr}`)
             return this.pointerValue(elemPtr, elemTy)
+          } else if (u.value.kind === ast.NodeKind.DOT_EXPR) {
+            const d = u.value as ast.DotExpr
+            const base = this.emitExpr(d.callee)
+            if (!base.struct) throw new Error("Address-of struct field requires struct")
+            const structInfo = base.struct
+            const idx = structInfo.fields.findIndex((f) => f.name === d.identifier.lexeme)
+            if (idx < 0) throw new Error(`No such field ${d.identifier.lexeme}`)
+            const field = structInfo.fields[idx]
+            const fieldPtr = this.fresh("addr_field")
+            this.emit(`${fieldPtr} = getelementptr %struct.${structInfo.name}, %struct.${structInfo.name}* ${base.repr}, i32 0, i32 ${idx}`)
+            return this.pointerValue(fieldPtr, field.type)
           } else {
             throw new Error("Address-of unsupported operand")
           }
         }
         throw new Error(`Unsupported unary operator ${u.operator.lexeme}`)
       }
+      case ast.NodeKind.DEREF_EXPR: {
+        const d = node as ast.DerefExpr
+        const ptrVal = this.emitExpr(d.value)
+        if (!ptrVal.ptr) throw new Error("Dereference target is not pointer")
+        const elemTy = ptrVal.ptr.elem
+        const castedPtr = this.fresh("deref")
+        this.emit(`${castedPtr} = bitcast i8* ${ptrVal.repr} to ${elemTy}*`)
+        const out = this.fresh("ldderef")
+        this.emit(`${out} = load ${elemTy}, ${elemTy}* ${castedPtr}`)
+        return { type: elemTy, repr: out }
+      }
       case ast.NodeKind.BINARY_EXPR: {
         const b = node as ast.BinaryExpr
         const left = this.emitExpr(b.left)
         const right = this.emitExpr(b.right)
-        if (left.type !== right.type) {
+        if (left.type !== right.type && !(left.ptr || right.ptr)) {
           throw new Error(`Type mismatch in binary expression: ${left.type} vs ${right.type}`)
         }
         switch (b.operator.lexeme) {
@@ -497,6 +525,25 @@ class FunctionBuilder {
           case "-":
           case "*":
           case "/": {
+            // Pointer arithmetic: pointer +/- integer
+            if ((left.ptr && right.type === "i32") || (right.ptr && left.type === "i32")) {
+              const basePtr = left.ptr ? left : right
+              const offsetVal = left.ptr ? right : left
+              const elemSize = this.sizeofLlvm(basePtr.ptr!.elem)
+              const scale = this.fresh("offset")
+              const offCast = this.cast(offsetVal, "i32")
+              this.emit(`${scale} = mul nsw i32 ${offCast.repr}, ${elemSize}`)
+              const ptrInt = this.fresh("ptrint")
+              this.emit(`${ptrInt} = ptrtoint i8* ${basePtr.repr} to i64`)
+              const scaled64 = this.fresh("scale64")
+              this.emit(`${scaled64} = sext i32 ${scale} to i64`)
+              const adjusted = this.fresh("ptradj")
+              const op = b.operator.lexeme === "-" ? "sub" : "add"
+              this.emit(`${adjusted} = ${op} i64 ${ptrInt}, ${scaled64}`)
+              const outPtr = this.fresh("ptrout")
+              this.emit(`${outPtr} = inttoptr i64 ${adjusted} to i8*`)
+              return this.pointerValue(outPtr, basePtr.ptr!.elem)
+            }
             if (left.type === "i32") {
               const op = b.operator.lexeme === "+" ? "add nsw" :
                 b.operator.lexeme === "-" ? "sub nsw" :
@@ -675,7 +722,7 @@ class FunctionBuilder {
         }
       }
       default:
-        throw new Error(`Unsupported expression kind ${ast.NodeKind[node.kind]}`)
+        throw new Error("Unsupported expression kind")
     }
   }
 
@@ -938,8 +985,8 @@ export function emitLlvm(context: ast.Context): string {
     (s) => s.kind === ast.NodeKind.FUNCTION_STMT
   ) as ast.FunctionStmt[]
   const fnSigs = new Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>()
-  const globalsMap = new Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>()
-  const globalsByName = new Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>()
+  const globalsMap = new Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
+  const globalsByName = new Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
   const structInfos = new Map<string, StructInfo>()
 
   const structs = context.topLevelStatements.filter(
@@ -975,6 +1022,11 @@ export function emitLlvm(context: ast.Context): string {
       const elemPtr = `getelementptr inbounds ([${arr.length} x ${elemTy}], [${arr.length} x ${elemTy}]* @${name}, i64 0, i64 0)`
       globalsMap.set(v.symbol.id, { ptr: elemPtr, type: elemTy, array: { elem: elemTy, length: arr.length } })
       globalsByName.set(name, { ptr: elemPtr, type: elemTy, array: { elem: elemTy, length: arr.length } })
+    } else if (v.type?.category === ast.TypeCategory.POINTER) {
+      module.addGlobal(`@${name} = global i8* null`)
+      const elemTy = llvmTypeFromAst((v.type as ast.PointerType).elementType)
+      globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: "i8*", ptrInfo: { elem: elemTy } })
+      globalsByName.set(name, { ptr: `@${name}`, type: "i8*", ptrInfo: { elem: elemTy } })
     } else {
       module.addGlobal(`@${name} = global ${llvmTy} ${initVal}`)
       globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: llvmTy })
