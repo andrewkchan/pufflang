@@ -467,12 +467,17 @@ class FunctionBuilder {
             const out = this.fresh("neg")
             this.emit(`${out} = sub nsw i32 0, ${val.repr}`)
             return { type: "i32", repr: out }
+          } else if (val.type === "i8") {
+            const widened = this.cast(val, "i32")
+            const out = this.fresh("neg")
+            this.emit(`${out} = sub nsw i32 0, ${widened.repr}`)
+            return { type: "i32", repr: out }
           } else if (val.type === "float") {
             const out = this.fresh("fneg")
             this.emit(`${out} = fsub float -0.0, ${val.repr}`)
             return { type: "float", repr: out }
           }
-          throw new Error("Unary minus only supported for int/float right now.")
+          throw new Error("Unary minus only supported for int/byte/float right now.")
         }
         if (u.operator.lexeme === "!") {
           if (val.type === "i1") {
@@ -552,6 +557,15 @@ class FunctionBuilder {
           case "*":
           case "/":
           case "%": {
+            // Numeric promotions
+            if (left.type === "float" && right.type !== "float") {
+              right = this.cast(right.type === "i8" ? this.cast(right, "i32") : right, "float")
+            } else if (right.type === "float" && left.type !== "float") {
+              left = this.cast(left.type === "i8" ? this.cast(left, "i32") : left, "float")
+            } else if ((left.type === "i32" && right.type === "i8") || (left.type === "i8" && right.type === "i32")) {
+              left = this.cast(left, "i32")
+              right = this.cast(right, "i32")
+            }
             // Pointer arithmetic: pointer +/- integer
             if ((left.ptr && right.type === "i32") || (right.ptr && left.type === "i32")) {
               const basePtr = left.ptr ? left : right
@@ -647,6 +661,13 @@ class FunctionBuilder {
           }
           case "==":
           case "!=": {
+            if ((left.type === "float" && right.type !== "float") || (right.type === "float" && left.type !== "float")) {
+              left = left.type === "float" ? left : this.cast(left.type === "i8" ? this.cast(left, "i32") : left, "float")
+              right = right.type === "float" ? right : this.cast(right.type === "i8" ? this.cast(right, "i32") : right, "float")
+            } else if ((left.type === "i32" && right.type === "i8") || (left.type === "i8" && right.type === "i32")) {
+              left = this.cast(left, "i32")
+              right = this.cast(right, "i32")
+            }
             if (left.type === "i32" || left.type === "i8" || left.type === "i1") {
               const op = b.operator.lexeme === "==" ? "icmp eq" : "icmp ne"
               const out = this.fresh("icmp")
@@ -664,6 +685,13 @@ class FunctionBuilder {
           case "<=":
           case ">":
           case ">=": {
+            if ((left.type === "float" && right.type !== "float") || (right.type === "float" && left.type !== "float")) {
+              left = left.type === "float" ? left : this.cast(left.type === "i8" ? this.cast(left, "i32") : left, "float")
+              right = right.type === "float" ? right : this.cast(right.type === "i8" ? this.cast(right, "i32") : right, "float")
+            } else if ((left.type === "i32" && right.type === "i8") || (left.type === "i8" && right.type === "i32")) {
+              left = this.cast(left, "i32")
+              right = this.cast(right, "i32")
+            }
             if (left.type === "i32" || left.type === "i8") {
               const op =
                 b.operator.lexeme === "<" ? "icmp slt" :
@@ -839,6 +867,18 @@ class FunctionBuilder {
     if (value.type === "i8" && target === "i32") {
       this.emit(`${out} = zext i8 ${value.repr} to i32`)
       return { type: "i32", repr: out }
+    }
+    if (value.type === "i8" && target === "float") {
+      const ext = this.fresh("castzext")
+      this.emit(`${ext} = zext i8 ${value.repr} to i32`)
+      this.emit(`${out} = sitofp i32 ${ext} to float`)
+      return { type: "float", repr: out }
+    }
+    if (value.type === "i8" && target === "double") {
+      const ext = this.fresh("castzext")
+      this.emit(`${ext} = zext i8 ${value.repr} to i32`)
+      this.emit(`${out} = sitofp i32 ${ext} to double`)
+      return { type: "double", repr: out }
     }
     if (value.type === "i32" && target === "i8") {
       this.emit(`${out} = trunc i32 ${value.repr} to i8`)
