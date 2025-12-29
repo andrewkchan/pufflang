@@ -3,9 +3,15 @@ import { UTF8Codec } from "./util"
 
 type LlvmType = "i1" | "i8" | "i32" | "float" | "double" | "i8*"
 
+interface ArrayInfo {
+  elem: LlvmType
+  length: number
+}
+
 interface Value {
   type: LlvmType
   repr: string
+  array?: ArrayInfo
 }
 
 const codec = new UTF8Codec()
@@ -23,6 +29,7 @@ function llvmTypeFromAst(type: ast.Type): LlvmType {
     case ast.TypeCategory.POINTER:
       return "i8*" // placeholder until pointer support
     case ast.TypeCategory.ARRAY:
+      return "i8*" // arrays represented by pointer with ArrayInfo metadata
     case ast.TypeCategory.STRUCT:
     case ast.TypeCategory.VOID:
     case ast.TypeCategory.ERROR:
@@ -112,21 +119,21 @@ class FunctionBuilder {
   private allocas: string[] = []
   private lines: string[] = []
   private tempCounter = 0
-  private locals: Map<number, { ptr: string; type: LlvmType }> = new Map()
+  private locals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }> = new Map()
   private hasReturn = false
   private functionRetType: LlvmType | "void" = "i32"
   private fnReturnTypeAst: ast.Type | null = null
   private terminated = false
   private paramArgsByName: Map<string, { type: LlvmType; repr: string }> = new Map()
   private currentFunctionName: string = ""
-  private globals: Map<number, { ptr: string; type: LlvmType }>
-  private globalsByName: Map<string, { ptr: string; type: LlvmType }>
+  private globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>
+  private globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>
 
   constructor(
     private readonly module: LlvmModuleBuilder,
     private readonly fnSigs: Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>,
-    globals: Map<number, { ptr: string; type: LlvmType }>,
-    globalsByName: Map<string, { ptr: string; type: LlvmType }>
+    globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>,
+    globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>
   ) {
     this.globals = globals
     this.globalsByName = globalsByName
@@ -151,7 +158,7 @@ class FunctionBuilder {
     this.allocas.push(line)
   }
 
-  private getLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, fallbackType?: LlvmType): { ptr: string; type: LlvmType } {
+  private getLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, fallbackType?: LlvmType): { ptr: string; type: LlvmType; array?: ArrayInfo } {
     if (symbol.kind === ast.SymbolKind.VARIABLE) {
       const name = (symbol as ast.VariableSymbol).node.name.lexeme
       const g = this.globalsByName.get(name) ?? this.globals.get(symbol.id)
@@ -166,7 +173,7 @@ class FunctionBuilder {
     return this.ensureLocal(symbol, fallbackType)
   }
 
-  private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType, init?: Value): { ptr: string; type: LlvmType } {
+  private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType, init?: Value, array?: ArrayInfo): { ptr: string; type: LlvmType; array?: ArrayInfo } {
     if (symbol.kind === ast.SymbolKind.VARIABLE && (symbol as ast.VariableSymbol).isGlobal) {
       return this.getLocal(symbol, type)
     }
@@ -174,7 +181,7 @@ class FunctionBuilder {
     if (existing) return existing
     const ptr = this.fresh("var")
     this.addAlloca(`${ptr} = alloca ${type}`)
-    const entry = { ptr, type }
+    const entry = { ptr, type, array }
     this.locals.set(symbol.id, entry)
     if (init) {
       this.storeValue(entry, init)
@@ -182,15 +189,24 @@ class FunctionBuilder {
     return entry
   }
 
-  private storeValue(dest: { ptr: string; type: LlvmType }, value: Value) {
+  private storeValue(dest: { ptr: string; type: LlvmType; array?: ArrayInfo }, value: Value) {
+    if (dest.array && value.array) {
+      const bytes = dest.array.length * this.sizeofLlvm(dest.array.elem)
+      const dstPtr = dest.ptr
+      const srcPtr = value.repr
+      this.emit(
+        `call void @llvm.memcpy.p0.p0.i64(i8* ${dstPtr}, i8* ${srcPtr}, i64 ${bytes}, i1 0)`
+      )
+      return
+    }
     const valCast = this.cast(value, dest.type)
     this.emit(`store ${dest.type} ${valCast.repr}, ${dest.type}* ${dest.ptr}`)
   }
 
-  private loadValue(slot: { ptr: string; type: LlvmType }): Value {
+  private loadValue(slot: { ptr: string; type: LlvmType; array?: ArrayInfo }): Value {
     const out = this.fresh("ld")
     this.emit(`${out} = load ${slot.type}, ${slot.type}* ${slot.ptr}`)
-    return { type: slot.type, repr: out }
+    return { type: slot.type, repr: out, array: slot.array }
   }
 
   private toBool(val: Value): Value {
@@ -201,6 +217,20 @@ class FunctionBuilder {
       return { type: "i1", repr: out }
     }
     throw new Error("Cannot convert to bool")
+  }
+
+  private sizeofLlvm(ty: LlvmType): number {
+    switch (ty) {
+      case "i1":
+      case "i8":
+        return 1
+      case "i32":
+      case "float":
+        return 4
+      case "double":
+      case "i8*":
+        return 8
+    }
   }
 
   emitExpr(node: ast.Expr): Value {
@@ -245,19 +275,35 @@ class FunctionBuilder {
       }
       case ast.NodeKind.ASSIGN_EXPR: {
         const a = node as ast.AssignExpr
-        if (a.left.kind !== ast.NodeKind.VARIABLE_EXPR) {
-          throw new Error("Assignment supported only to variables in minimal backend.")
+        if (a.left.kind === ast.NodeKind.VARIABLE_EXPR) {
+          const leftVar = a.left as ast.VariableExpr
+          const symbol = leftVar.resolvedSymbol
+          if (!symbol || (symbol.kind !== ast.SymbolKind.VARIABLE && symbol.kind !== ast.SymbolKind.PARAM)) {
+            throw new Error("Assignment target missing symbol")
+          }
+          const targetType = llvmTypeFromAst(a.left.resolvedType!)
+          const slot = this.getLocal(symbol as any, targetType)
+          const rval = this.emitExpr(a.right)
+          this.storeValue(slot, rval)
+          return this.cast(rval, targetType)
+        } else if (a.left.kind === ast.NodeKind.INDEX_EXPR) {
+          const idx = a.left as ast.IndexExpr
+          const base = this.emitExpr(idx.callee)
+          if (!base.array) throw new Error("Index assignment requires array")
+          const indexVal = this.emitExpr(idx.index)
+          const idx32 = this.cast(indexVal, "i32")
+          const elemTy = base.array.elem
+          const elemPtr = this.fresh("elemPtr")
+          this.emit(
+            `${elemPtr} = getelementptr ${elemTy}, ${elemTy}* ${base.repr}, i32 ${idx32.repr}`
+          )
+          const rval = this.emitExpr(a.right)
+          const casted = this.cast(rval, elemTy)
+          this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${elemPtr}`)
+          return casted
+        } else {
+          throw new Error("Assignment target unsupported in backend.")
         }
-        const leftVar = a.left as ast.VariableExpr
-        const symbol = leftVar.resolvedSymbol
-        if (!symbol || (symbol.kind !== ast.SymbolKind.VARIABLE && symbol.kind !== ast.SymbolKind.PARAM)) {
-          throw new Error("Assignment target missing symbol")
-        }
-        const targetType = llvmTypeFromAst(a.left.resolvedType!)
-        const slot = this.ensureLocal(symbol as any, targetType)
-        const rval = this.emitExpr(a.right)
-        this.storeValue(slot, rval)
-        return this.cast(rval, targetType)
       }
       case ast.NodeKind.CAST_EXPR: {
         const c = node as ast.CastExpr
@@ -431,6 +477,48 @@ class FunctionBuilder {
           const out = this.fresh("call")
           this.emit(`${out} = call ${sig.ret} @${name}(${argStr})`)
           return { type: sig.ret, repr: out }
+        }
+      }
+      case ast.NodeKind.INDEX_EXPR: {
+        const idx = node as ast.IndexExpr
+        const base = this.emitExpr(idx.callee)
+        if (!base.array) {
+          throw new Error("Indexing non-array not supported yet")
+        }
+        const indexVal = this.emitExpr(idx.index)
+        const idx32 = this.cast(indexVal, "i32")
+        const elemTy = base.array.elem
+        const elemPtr = this.fresh("elemPtr")
+        this.emit(
+          `${elemPtr} = getelementptr ${elemTy}, ${elemTy}* ${base.repr}, i32 ${idx32.repr}`
+        )
+        const outVal = this.fresh("ldelem")
+        this.emit(`${outVal} = load ${elemTy}, ${elemTy}* ${elemPtr}`)
+        return { type: elemTy, repr: outVal }
+      }
+      case ast.NodeKind.LIST_EXPR: {
+        const list = node as ast.ListExpr
+        if (list.initializer.kind === ast.ListKind.LIST) {
+          const elems = list.initializer.values
+          if (elems.length === 0) {
+            throw new Error("Empty array literal unsupported")
+          }
+          const first = this.emitExpr(elems[0])
+          const elemTy = first.type
+          const length = elems.length
+          const allocaPtr = this.fresh("arr")
+          this.addAlloca(`${allocaPtr} = alloca ${elemTy}, i32 ${length}`)
+          this.storeValue({ ptr: allocaPtr, type: elemTy, array: { elem: elemTy, length } }, first)
+          for (let i = 1; i < length; i++) {
+            const val = this.emitExpr(elems[i])
+            const idx = this.fresh("idxptr")
+            this.emit(`${idx} = getelementptr ${elemTy}, ${elemTy}* ${allocaPtr}, i32 ${i}`)
+            const casted = this.cast(val, elemTy)
+            this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${idx}`)
+          }
+          return { type: "i8*", repr: allocaPtr, array: { elem: elemTy, length } }
+        } else {
+          throw new Error("Repeat initializer unsupported in LLVM backend yet")
         }
       }
       default:
@@ -683,12 +771,13 @@ class FunctionBuilder {
 
 export function emitLlvm(context: ast.Context): string {
   const module = new LlvmModuleBuilder()
+  module.declare("declare void @llvm.memcpy.p0.p0.i64(i8*, i8*, i64, i1)")
   const functions = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.FUNCTION_STMT
   ) as ast.FunctionStmt[]
   const fnSigs = new Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>()
-  const globalsMap = new Map<number, { ptr: string; type: LlvmType }>()
-  const globalsByName = new Map<string, { ptr: string; type: LlvmType }>()
+  const globalsMap = new Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo }>()
+  const globalsByName = new Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo }>()
 
   const globalVars = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.VAR_STMT
@@ -699,10 +788,19 @@ export function emitLlvm(context: ast.Context): string {
     if (!(v.symbol as ast.VariableSymbol).isGlobal) return
     const llvmTy = llvmTypeFromAst(v.type!)
     const name = v.name.lexeme
-    const zero = llvmTy === "float" || llvmTy === "double" ? "0.0" : "0"
-    module.addGlobal(`@${name} = global ${llvmTy} ${zero}`)
-    globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: llvmTy })
-    globalsByName.set(name, { ptr: `@${name}`, type: llvmTy })
+    let initVal = "0"
+    if (llvmTy === "float" || llvmTy === "double") initVal = "0.0"
+    if (v.type?.category === ast.TypeCategory.ARRAY) {
+      const arr = v.type as ast.ArrayType
+      const elemTy = llvmTypeFromAst(arr.elementType)
+      module.addGlobal(`@${name} = global [${arr.length} x ${elemTy}] zeroinitializer`)
+      globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: "i8*", array: { elem: elemTy, length: arr.length } })
+      globalsByName.set(name, { ptr: `@${name}`, type: "i8*", array: { elem: elemTy, length: arr.length } })
+    } else {
+      module.addGlobal(`@${name} = global ${llvmTy} ${initVal}`)
+      globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: llvmTy })
+      globalsByName.set(name, { ptr: `@${name}`, type: llvmTy })
+    }
   })
 
   functions.forEach((fn) => {
