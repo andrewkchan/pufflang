@@ -582,10 +582,10 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
   }
 
   function exprAnd(): ast.Expr {
-    let expr = exprEquality()
+    let expr = exprBitOr()
     while (match(TokenType.AMP_AMP)) {
       const operator = previous()
-      const right = exprEquality()
+      const right = exprBitOr()
       expr = ast.logicalExpr({
         left: expr,
         operator,
@@ -595,16 +595,56 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
     return expr
   }
 
+  function exprBitOr(): ast.Expr {
+    let expr = exprBitXor()
+    while (match(TokenType.BAR)) {
+      const operator = previous()
+      const right = exprBitXor()
+      expr = ast.binaryExpr({ left: expr, operator, right })
+    }
+    return expr
+  }
+
+  function exprBitXor(): ast.Expr {
+    let expr = exprBitAnd()
+    while (match(TokenType.CARET)) {
+      const operator = previous()
+      const right = exprBitAnd()
+      expr = ast.binaryExpr({ left: expr, operator, right })
+    }
+    return expr
+  }
+
+  function exprBitAnd(): ast.Expr {
+    let expr = exprEquality()
+    while (match(TokenType.AMP)) {
+      const operator = previous()
+      const right = exprEquality()
+      expr = ast.binaryExpr({ left: expr, operator, right })
+    }
+    return expr
+  }
+
   function exprEquality(): ast.Expr {
-    let expr = exprComparison()
+    let expr = exprShift()
     while (match(TokenType.EQUAL_EQUAL) || match(TokenType.BANG_EQUAL)) {
       const operator = previous()
-      const right = exprComparison()
+      const right = exprShift()
       expr = ast.binaryExpr({
         left: expr,
         operator,
         right
       })
+    }
+    return expr
+  }
+
+  function exprShift(): ast.Expr {
+    let expr = exprComparison()
+    while (match(TokenType.SHIFT_LEFT) || match(TokenType.SHIFT_RIGHT)) {
+      const operator = previous()
+      const right = exprComparison()
+      expr = ast.binaryExpr({ left: expr, operator, right })
     }
     return expr
   }
@@ -652,7 +692,7 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
   }
 
   function exprUnary(): ast.Expr {
-    if (match(TokenType.BANG) || match(TokenType.MINUS) || match(TokenType.AMP)) {
+    if (match(TokenType.BANG) || match(TokenType.MINUS) || match(TokenType.AMP) || match(TokenType.TILDE)) {
       const operator = previous()
       const value = exprUnary()
       return ast.unaryExpr({

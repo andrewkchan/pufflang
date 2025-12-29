@@ -475,6 +475,18 @@ class FunctionBuilder {
           }
           throw new Error("Logical not supported only for bool currently.")
         }
+        if (u.operator.lexeme === "~") {
+          if (val.type === "i32") {
+            const out = this.fresh("not")
+            this.emit(`${out} = xor i32 ${val.repr}, -1`)
+            return { type: "i32", repr: out }
+          } else if (val.type === "i8") {
+            const out = this.fresh("notb")
+            this.emit(`${out} = xor i8 ${val.repr}, 255`)
+            return { type: "i8", repr: out }
+          }
+          throw new Error("Bitwise not supported only for int/byte.")
+        }
         if (u.operator.lexeme === "&") {
           if (u.value.kind === ast.NodeKind.VARIABLE_EXPR) {
             const v = u.value as ast.VariableExpr
@@ -525,11 +537,8 @@ class FunctionBuilder {
       }
       case ast.NodeKind.BINARY_EXPR: {
         const b = node as ast.BinaryExpr
-        const left = this.emitExpr(b.left)
-        const right = this.emitExpr(b.right)
-        if (left.type !== right.type && !(left.ptr || right.ptr)) {
-          throw new Error(`Type mismatch in binary expression: ${left.type} vs ${right.type}`)
-        }
+        let left = this.emitExpr(b.left)
+        let right = this.emitExpr(b.right)
         switch (b.operator.lexeme) {
           case "+":
           case "-":
@@ -577,6 +586,49 @@ class FunctionBuilder {
               return { type: "float", repr: out }
             }
             throw new Error("Binary arithmetic only implemented for int/float/byte so far.")
+          }
+          case "&":
+          case "|":
+          case "^": {
+            // bitwise for int/byte
+            if (left.type !== right.type) {
+              // coerce byte to int if mixed
+              if ((left.type === "i8" && right.type === "i32") || (left.type === "i32" && right.type === "i8")) {
+                left = this.cast(left, "i32")
+                right = this.cast(right, "i32")
+              } else {
+                throw new Error(`Type mismatch for bitwise op: ${left.type} vs ${right.type}`)
+              }
+            }
+            if (left.type === "i32" || left.type === "i8") {
+              const op = b.operator.lexeme === "&" ? "and" : b.operator.lexeme === "|" ? "or" : "xor"
+              const out = this.fresh("bop")
+              this.emit(`${out} = ${op} ${left.type} ${left.repr}, ${right.repr}`)
+              return { type: left.type, repr: out }
+            }
+            throw new Error("Bitwise ops only supported for int/byte.")
+          }
+          case "<<":
+          case ">>": {
+            if (left.type !== right.type) {
+              if ((left.type === "i8" && right.type === "i32") || (left.type === "i32" && right.type === "i8")) {
+                right = this.cast(right, left.type)
+              } else {
+                throw new Error(`Type mismatch for shift: ${left.type} vs ${right.type}`)
+              }
+            }
+            if (left.type === "i32") {
+              const op = b.operator.lexeme === "<<" ? "shl" : "ashr"
+              const out = this.fresh("shift")
+              this.emit(`${out} = ${op} i32 ${left.repr}, ${right.repr}`)
+              return { type: "i32", repr: out }
+            } else if (left.type === "i8") {
+              const op = b.operator.lexeme === "<<" ? "shl" : "lshr"
+              const out = this.fresh("shiftb")
+              this.emit(`${out} = ${op} i8 ${left.repr}, ${right.repr}`)
+              return { type: "i8", repr: out }
+            }
+            throw new Error("Shift ops only supported for int/byte.")
           }
           case "==":
           case "!=": {

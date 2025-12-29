@@ -218,6 +218,40 @@ export function resolve(context: ast.Context, reportError: ReportError) {
             }
             break
           }
+          case "&":
+          case "|":
+          case "^": {
+            const leftType = op.left.resolvedType!
+            const rightType = op.right.resolvedType!
+            const valid = (t: ast.Type) => ast.isEqual(t, ast.IntType) || ast.isEqual(t, ast.ByteType)
+            if (valid(leftType) && valid(rightType)) {
+              const target = ast.getLowestCommonNumeric(leftType, rightType) ?? ast.IntType
+              op.left = resolveNodeWithCoercion(op.left, isLiveAtEnd, target, op.operator)
+              op.right = resolveNodeWithCoercion(op.right, isLiveAtEnd, target, op.operator)
+              op.resolvedType = target
+            } else {
+              resolveError(op.operator, `Invalid operand types for binary operator '${op.operator.lexeme}'.`)
+              op.resolvedType = ast.ErrorType
+            }
+            break
+          }
+          case "<<":
+          case ">>": {
+            const leftType = op.left.resolvedType!
+            const rightType = op.right.resolvedType!
+            const valid = (t: ast.Type) => ast.isEqual(t, ast.IntType) || ast.isEqual(t, ast.ByteType)
+            if (valid(leftType) && valid(rightType)) {
+              // Result type is left coerced to lowest common integral (prefer int)
+              const target = ast.getLowestCommonNumeric(leftType, rightType) ?? ast.IntType
+              op.left = resolveNodeWithCoercion(op.left, isLiveAtEnd, target, op.operator)
+              op.right = resolveNodeWithCoercion(op.right, isLiveAtEnd, target, op.operator)
+              op.resolvedType = target
+            } else {
+              resolveError(op.operator, `Invalid operand types for binary operator '${op.operator.lexeme}'.`)
+              op.resolvedType = ast.ErrorType
+            }
+            break
+          }
           default: {
             throw new Error(`unreachable`)
           }
@@ -456,6 +490,16 @@ export function resolve(context: ast.Context, reportError: ReportError) {
 
             if (op.resolvedType === null) {
               resolveError(op.operator, `Invalid operand for unary operator '&'.`)
+              op.resolvedType = ast.ErrorType
+            }
+            break
+          }
+          case "~": {
+            resolveNode(op.value, isLiveAtEnd)
+            if (ast.isEqual(op.value.resolvedType!, ast.IntType) || ast.isEqual(op.value.resolvedType!, ast.ByteType)) {
+              op.resolvedType = op.value.resolvedType
+            } else {
+              resolveError(op.operator, `Invalid operand type for unary operator '~'.`)
               op.resolvedType = ast.ErrorType
             }
             break

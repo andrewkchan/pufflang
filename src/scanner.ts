@@ -91,7 +91,19 @@ export function scanTokens(source: string, reportError: ReportError): Array<Toke
       current += ws[0].length
       continue scanner
     }
-    // 2. check if current lexeme matches a valid token (not including keywords)
+    // 2. check multi-char shift tokens first
+    const twoChar = source.substring(current, current + 2)
+    if (twoChar === "<<") {
+      tokens.push(new Token(TokenType.SHIFT_LEFT, twoChar, null, current, source))
+      current += 2
+      continue scanner
+    }
+    if (twoChar === ">>") {
+      tokens.push(new Token(TokenType.SHIFT_RIGHT, twoChar, null, current, source))
+      current += 2
+      continue scanner
+    }
+    // 3. check if current lexeme matches a valid token (not including keywords)
     token:
     for (let t = TokenType.IDENTIFIER; t < TokenType.BYTE; t++) {
       const m = match(source, current, TokenPattern[t])
