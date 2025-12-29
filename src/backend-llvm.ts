@@ -13,11 +13,16 @@ interface StructInfo {
   fields: { name: string; type: LlvmType }[]
 }
 
+interface PointerInfo {
+  elem: LlvmType
+}
+
 interface Value {
   type: LlvmType
   repr: string
   array?: ArrayInfo
   struct?: StructInfo
+  ptr?: PointerInfo
 }
 
 const codec = new UTF8Codec()
@@ -370,6 +375,17 @@ class FunctionBuilder {
           const casted = this.cast(rval, field.type)
           this.emit(`store ${field.type} ${casted.repr}, ${field.type}* ${fieldPtr}`)
           return casted
+        } else if (a.left.kind === ast.NodeKind.DEREF_EXPR) {
+          const d = a.left as ast.DerefExpr
+          const ptrVal = this.emitExpr(d.value)
+          if (!ptrVal.ptr) throw new Error("Dereference target is not pointer")
+          const elemTy = ptrVal.ptr.elem
+          const castedPtr = this.fresh("castptr")
+          this.emit(`${castedPtr} = bitcast i8* ${ptrVal.repr} to ${elemTy}*`)
+          const rval = this.emitExpr(a.right)
+          const casted = this.cast(rval, elemTy)
+          this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${castedPtr}`)
+          return casted
         } else {
           throw new Error("Assignment target unsupported in backend.")
         }
@@ -443,6 +459,29 @@ class FunctionBuilder {
             return { type: "i1", repr: out }
           }
           throw new Error("Logical not supported only for bool currently.")
+        }
+        if (u.operator.lexeme === "&") {
+          if (u.value.kind === ast.NodeKind.VARIABLE_EXPR) {
+            const v = u.value as ast.VariableExpr
+            const sym = v.resolvedSymbol
+            if (!sym || (sym.kind !== ast.SymbolKind.VARIABLE && sym.kind !== ast.SymbolKind.PARAM)) {
+              throw new Error("Address-of unsupported target")
+            }
+            const slot = this.getLocal(sym as any, llvmTypeFromAst(v.resolvedType!))
+            return this.pointerValue(slot.ptr, slot.array ? slot.array.elem : slot.type)
+          } else if (u.value.kind === ast.NodeKind.INDEX_EXPR) {
+            const idx = u.value as ast.IndexExpr
+            const base = this.emitExpr(idx.callee)
+            if (!base.array) throw new Error("Address-of index requires array")
+            const indexVal = this.emitExpr(idx.index)
+            const idx32 = this.cast(indexVal, "i32")
+            const elemTy = base.array.elem
+            const elemPtr = this.fresh("addr_idx")
+            this.emit(`${elemPtr} = getelementptr ${elemTy}, ${elemTy}* ${base.repr}, i32 ${idx32.repr}`)
+            return this.pointerValue(elemPtr, elemTy)
+          } else {
+            throw new Error("Address-of unsupported operand")
+          }
         }
         throw new Error(`Unsupported unary operator ${u.operator.lexeme}`)
       }
@@ -564,6 +603,24 @@ class FunctionBuilder {
           throw new Error("Only simple function/struct calls supported")
         }
       }
+      case ast.NodeKind.DOT_EXPR: {
+        const d = node as ast.DotExpr
+        const base = this.emitExpr(d.callee)
+        if (!base.struct) {
+          throw new Error("Member access on non-struct")
+        }
+        const structInfo = base.struct
+        const idx = structInfo.fields.findIndex((f) => f.name === d.identifier.lexeme)
+        if (idx < 0) throw new Error(`No such field ${d.identifier.lexeme}`)
+        const field = structInfo.fields[idx]
+        const fieldPtr = this.fresh("field")
+        this.emit(
+          `${fieldPtr} = getelementptr %struct.${structInfo.name}, %struct.${structInfo.name}* ${base.repr}, i32 0, i32 ${idx}`
+        )
+        const out = this.fresh("ldfld")
+        this.emit(`${out} = load ${field.type}, ${field.type}* ${fieldPtr}`)
+        return { type: field.type, repr: out }
+      }
       case ast.NodeKind.INDEX_EXPR: {
         const idx = node as ast.IndexExpr
         const base = this.emitExpr(idx.callee)
@@ -579,7 +636,7 @@ class FunctionBuilder {
         )
         const outVal = this.fresh("ldelem")
         this.emit(`${outVal} = load ${elemTy}, ${elemTy}* ${elemPtr}`)
-        return { type: elemTy, repr: outVal }
+        return { type: elemTy, repr: outVal, ptr: { elem: elemTy } }
       }
       case ast.NodeKind.LIST_EXPR: {
         const list = node as ast.ListExpr
@@ -650,6 +707,10 @@ class FunctionBuilder {
       return { type: "i32", repr: out }
     }
     throw new Error(`Unsupported cast from ${value.type} to ${target}`)
+  }
+
+  private pointerValue(ptrRepr: string, elem: LlvmType): Value {
+    return { type: "i8*", repr: ptrRepr, ptr: { elem } }
   }
 
   emitPrint(expr: ast.Expr) {
