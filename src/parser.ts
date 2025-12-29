@@ -808,7 +808,7 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
         const bytes = codec.encodeString(s)
         const literal = ast.literalExpr({
           value: s,
-          type: ast.arrayType(ast.ByteType, bytes.byteLength + 1) // include null terminator
+          type: ast.arrayType(ast.ByteType, bytes.byteLength)
         })
         context.stringLiterals.set(s, literal)
       }

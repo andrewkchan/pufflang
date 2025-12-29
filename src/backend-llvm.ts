@@ -885,8 +885,9 @@ class FunctionBuilder {
       }
       case ast.TypeCategory.ARRAY: {
         if (ast.isEqual(resolvedType.elementType, ast.ByteType)) {
-          const fmtPtr = this.module.gepStringPtr("%s\n")
-          this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i8* ${val.repr})`)
+          const fmtPtr = this.module.gepStringPtr("%.*s\n")
+          const lenConst = resolvedType.length
+          this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i32 ${lenConst}, i8* ${val.repr})`)
           break
         }
         // Print numeric arrays recursively: [a, b, c]

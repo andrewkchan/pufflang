@@ -1026,4 +1026,164 @@ describe("upstream type checking parity (subset)", () => {
       ]
     )
   })
+
+  test("structs: accessing invalid members", () => {
+    expectResolveErrors(
+      `
+    def main() {
+      var t = Ticket{1, 'a', true}; // ok
+      print t.id; // ok
+      print t.group; // ok
+      print t.isDeluxe; // ok
+      print t.doesNotExist; // error!
+    }
+    struct Ticket { id int, group byte, isDeluxe bool }
+    `,
+      ["6: Struct Ticket has no member 'doesNotExist'."]
+    )
+  })
+
+  test("structs: valid operands for dot operator", () => {
+    expectResolveErrors(
+      `
+    def getTicket() Ticket {
+      return Ticket{1, 'a', true};
+    }
+    def getNum() int {
+      return 1;
+    }
+    def getArr() [int; 1] {
+      return [1];
+    }
+    def main() {
+      print Ticket{1, 'a', true}.id; // ok
+      print getTicket().id; // ok
+      print getNum().id; // error!
+      print getArr().id; // error!
+      print p.id; // error!
+      print p~.id; // ok
+      print g.t.id; // ok
+      print g.name; // ok
+      print g.name[0].id; // error!
+    }
+    var t = Ticket{999, 'b', true};
+    var p = &t;
+    var g = Passenger{ "jonathan", t };
+    struct Ticket { id int, group byte, isDeluxe bool }
+    struct Passenger { name [byte; 8], t Ticket }
+    `,
+      [
+        "13: Invalid operand for member access operator '.'.",
+        "14: Invalid operand for member access operator '.'.",
+        "15: Invalid operand for member access operator '.'.",
+        "19: Invalid operand for member access operator '.'."
+      ]
+    )
+  })
+
+  test("structs: constructor arity and arg checking", () => {
+    expectResolveErrors(
+      `
+    def main() {
+      var t1 = Ticket{1, 'a', true}; // ok
+      var t2 = Ticket{1, 'a'}; // error!
+      var t3 = Ticket{3.14, 5.6, 't'}; // error!
+      var t4 = Ticket{1, 'a', true, true}; // error!
+    }
+    struct Ticket { id int, group byte, isDeluxe bool }
+    `,
+      [
+        "3: Expected 3 arguments but got 2 in call to Ticket.",
+        "4: Cannot implicitly convert operand to 'int'.",
+        "4: Cannot implicitly convert operand to 'byte'.",
+        "4: Cannot implicitly convert operand to 'bool'.",
+        "5: Expected 3 arguments but got 4 in call to Ticket."
+      ]
+    )
+  })
+
+  test("structs: nominal variable type annotations", () => {
+    expectResolveErrors(
+      `
+    def main() {
+      var p Point = Point{1, 2}; // ok
+      var x Vector = Point{1, 2}; // error!
+      var y Point = 1; // error!
+      var v Vector = Vector{1, 2}; // ok
+    }
+    struct Point { x float, y float }
+    struct Vector { x float, y float }
+    `,
+      [
+        "3: Cannot assign value of type 'Point' to variable of type 'Vector'.",
+        "4: Cannot assign value of type 'int' to variable of type 'Point'."
+      ]
+    )
+  })
+
+  test("structs: nominal parameter, member, and return types", () => {
+    expectResolveErrors(
+      `
+    def bad1(p Point) Point {
+      return -1; // error!
+    }
+    def bad2(p Point) Vector {
+      return p; // error!
+    }
+    def bad3(p Point) Vector {
+      return Point{1, 2}; // error!
+    }
+    def point2Vec(p Point) Vector {
+      return Vector{p.x, p.y}; // ok
+    }
+    def add(a Point, b Point) Point {
+      return Point{a.x + b.x, a.y + b.y}; // ok
+    }
+    def main() {
+      var v = point2Vec(Point{1, 2}); // ok
+      var x1 = add(1, 2); // error!
+      var x2 = add(Vector{1, 2}, Vector{3, 4}); // error!
+      var y Point = point2Vec(Point{1, 2}); // error!
+      var p = add(Point{1, 2}, Point{3, 4}); // ok
+    }
+    struct Point { x float, y float }
+    struct Vector { x float, y float }
+    `,
+      [
+        "2: Expected a value of type 'Point'.",
+        "5: Expected a value of type 'Vector'.",
+        "8: Expected a value of type 'Vector'.",
+        "18: Cannot implicitly convert operand to 'Point'.",
+        "18: Cannot implicitly convert operand to 'Point'.",
+        "19: Cannot implicitly convert operand to 'Point'.",
+        "19: Cannot implicitly convert operand to 'Point'.",
+        "20: Cannot assign value of type 'Vector' to variable of type 'Point'."
+      ]
+    )
+  })
+
+  test("structs: incomplete/undefined type names", () => {
+    expectResolveErrors(
+      `
+    struct ContainsUndefined {
+      val Undefined // error!
+    }
+    def foo(x Undefined) { // error!
+      print "hello";
+    }
+    def bar() Undefined {} // error!
+    def main() {
+      var x Undefined = bar(); // error!
+      var y = Undefined{}; // error!
+    }
+    `,
+      [
+        "2: Undefined typename 'Undefined'.",
+        "4: Undefined typename 'Undefined'.",
+        "7: Undefined typename 'Undefined'.",
+        "9: Undefined typename 'Undefined'.",
+        "10: Undefined symbol 'Undefined'."
+      ]
+    )
+  })
 })
