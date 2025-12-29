@@ -1,6 +1,6 @@
 def main() {
   var path = [byte(0); 64];
-  var buf = [byte(0); 256];
+  var buf = [byte(0); 4096];
   var pathLen = __args_get__(0, &path[0], len(path));
 
   if (pathLen > 0) {
@@ -9,9 +9,15 @@ def main() {
       __stdout_write__(&buf[0], read);
     }
   } else {
-    var readStdin = __stdin_read__(&buf[0], len(buf));
-    if (readStdin > 0) {
+    while (true) {
+      var readStdin = __stdin_read__(&buf[0], len(buf));
+      if (readStdin <= 0) {
+        break;
+      }
       __stdout_write__(&buf[0], readStdin);
+      if (readStdin < len(buf)) {
+        break;
+      }
     }
   }
 }

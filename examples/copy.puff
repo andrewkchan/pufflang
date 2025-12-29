@@ -1,7 +1,7 @@
 def main() {
   var srcPath = [byte(0); 64];
   var dstPath = [byte(0); 64];
-  var buf = [byte(0); 256];
+  var buf = [byte(0); 4096];
 
   var srcLen = __args_get__(0, &srcPath[0], len(srcPath));
   var dstLen = __args_get__(1, &dstPath[0], len(dstPath));
@@ -17,9 +17,15 @@ def main() {
       __stdout_write__(&buf[0], readFile);
     }
   } else {
-    var readStdin = __stdin_read__(&buf[0], len(buf));
-    if (readStdin > 0) {
+    while (true) {
+      var readStdin = __stdin_read__(&buf[0], len(buf));
+      if (readStdin <= 0) {
+        break;
+      }
       __stdout_write__(&buf[0], readStdin);
+      if (readStdin < len(buf)) {
+        break;
+      }
     }
   }
 }
