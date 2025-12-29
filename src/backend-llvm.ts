@@ -550,7 +550,8 @@ class FunctionBuilder {
           case "+":
           case "-":
           case "*":
-          case "/": {
+          case "/":
+          case "%": {
             // Pointer arithmetic: pointer +/- integer
             if ((left.ptr && right.type === "i32") || (right.ptr && left.type === "i32")) {
               const basePtr = left.ptr ? left : right
@@ -571,20 +572,27 @@ class FunctionBuilder {
               return this.pointerValue(outPtr, basePtr.ptr!.elem)
             }
             if (left.type === "i32") {
-              const op = b.operator.lexeme === "+" ? "add nsw" :
+              const op =
+                b.operator.lexeme === "+" ? "add nsw" :
                 b.operator.lexeme === "-" ? "sub nsw" :
-                  b.operator.lexeme === "*" ? "mul nsw" : "sdiv"
+                b.operator.lexeme === "*" ? "mul nsw" :
+                b.operator.lexeme === "/" ? "sdiv" : "srem"
               const out = this.fresh("iop")
               this.emit(`${out} = ${op} i32 ${left.repr}, ${right.repr}`)
               return { type: "i32", repr: out }
             } else if (left.type === "i8") {
-              const op = b.operator.lexeme === "+" ? "add" :
+              const op =
+                b.operator.lexeme === "+" ? "add" :
                 b.operator.lexeme === "-" ? "sub" :
-                  b.operator.lexeme === "*" ? "mul" : "udiv"
+                b.operator.lexeme === "*" ? "mul" :
+                b.operator.lexeme === "/" ? "udiv" : "urem"
               const out = this.fresh("bop")
               this.emit(`${out} = ${op} i8 ${left.repr}, ${right.repr}`)
               return { type: "i8", repr: out }
             } else if (left.type === "float") {
+              if (b.operator.lexeme === "%") {
+                throw new Error("Remainder not supported for float.")
+              }
               const op = b.operator.lexeme === "+" ? "fadd" :
                 b.operator.lexeme === "-" ? "fsub" :
                   b.operator.lexeme === "*" ? "fmul" : "fdiv"
