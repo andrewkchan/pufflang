@@ -159,6 +159,8 @@ class LlvmModuleBuilder {
     this.declare("declare void @exit(i32)")
     // putchar
     this.declare("declare i32 @putchar(i32)")
+    // write
+    this.declare("declare i64 @write(i32, i8*, i64)")
     // malloc/free
     this.declare("declare i8* @malloc(i64)")
     this.declare("declare void @free(i8*)")
@@ -980,6 +982,32 @@ class FunctionBuilder {
             this.emit(`call void @free(i8* ${casted.repr})`)
             return { type: "i32", repr: "0" }
           }
+          if (name === "__exit__") {
+            const arg = this.cast(this.emitExpr(c.args[0]), "i32")
+            this.emit(`call void @exit(i32 ${arg.repr})`)
+            this.emit("unreachable")
+            this.terminated = true
+            return { type: "i32", repr: "0" }
+          }
+          if (name === "__putchar__") {
+            const arg = this.cast(this.emitExpr(c.args[0]), "i32")
+            const out = this.fresh("putc")
+            this.emit(`${out} = call i32 @putchar(i32 ${arg.repr})`)
+            return { type: "i32", repr: out }
+          }
+          if (name === "__write__") {
+            const fd = this.cast(this.emitExpr(c.args[0]), "i32")
+            const buf = this.emitExpr(c.args[1])
+            const len = this.cast(this.emitExpr(c.args[2]), "i32")
+            const len64 = this.fresh("len64")
+            this.emit(`${len64} = sext i32 ${len.repr} to i64`)
+            const ptr = this.cast(buf, "i8*")
+            const out = this.fresh("write")
+            this.emit(`${out} = call i64 @write(i32 ${fd.repr}, i8* ${ptr.repr}, i64 ${len64})`)
+            const out32 = this.fresh("write32")
+            this.emit(`${out32} = trunc i64 ${out} to i32`)
+            return { type: "i32", repr: out32 }
+          }
 
           const sig =
             this.fnSigs.get(`${name}/${c.args.length}`) ||
@@ -1714,6 +1742,7 @@ export function emitLlvm(context: ast.Context): string {
   fnSigs.set("__free__/1", { ret: "void", params: ["i8*"], retAst: ast.VoidType, mangled: "__free__" })
   fnSigs.set("__exit__/1", { ret: "void", params: ["i32"], retAst: ast.VoidType, mangled: "exit" })
   fnSigs.set("__putchar__/1", { ret: "i32", params: ["i32"], retAst: ast.IntType, mangled: "putchar" })
+  fnSigs.set("__write__/3", { ret: "i32", params: ["i32", "i8*", "i32"], retAst: ast.IntType, mangled: "write" })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
