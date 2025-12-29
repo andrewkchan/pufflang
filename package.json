@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "jest",
+    "bootstrap:demo": "npm run build && node dist/scripts/bootstrap-demo.js",
     "lint": "echo \"no lint configured\""
   },
   "dependencies": {
