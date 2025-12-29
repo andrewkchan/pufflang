@@ -1,9 +1,9 @@
 import { compile } from "../src"
 
 describe("compiler scaffold", () => {
-  test("returns not implemented error for now", () => {
+  test("compiles empty main to LLVM IR", () => {
     const result = compile("def main() {}")
-    expect(result.program).toBeNull()
-    expect(result.errors.length).toBeGreaterThan(0)
+    expect(result.errors).toEqual([])
+    expect(result.program).toContain("define i32 @main")
   })
 })

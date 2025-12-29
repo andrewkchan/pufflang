@@ -1,3 +1,5 @@
+import { TextDecoder, TextEncoder } from "util"
+
 export type ReportError = (line: number, msg: string) => void
 
 export function assertUnreachable(x: never): never {
