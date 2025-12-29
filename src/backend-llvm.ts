@@ -156,6 +156,7 @@ class FunctionBuilder {
   private fnReturnTypeAst: ast.Type | null = null
   private terminated = false
   private paramArgsByName: Map<string, { type: LlvmType; repr: string }> = new Map()
+  private paramSlotsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }> = new Map()
   private currentFunctionName: string = ""
   private globals: Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>
   private globalsByName: Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>
@@ -194,13 +195,16 @@ class FunctionBuilder {
   }
 
   private getLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, fallbackType?: LlvmType): { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo } {
-    if (symbol.kind === ast.SymbolKind.VARIABLE) {
+    if (symbol.kind === ast.SymbolKind.PARAM) {
+      const name = (symbol as ast.ParamSymbol).param.name.lexeme
+      const byName = this.paramSlotsByName.get(name)
+      if (byName) return byName
+    }
+    if (symbol.kind === ast.SymbolKind.VARIABLE && (symbol as ast.VariableSymbol).isGlobal) {
       const name = (symbol as ast.VariableSymbol).node.name.lexeme
       const g = this.globalsByName.get(name) ?? this.globals.get(symbol.id)
       if (g) return g
-      if ((symbol as ast.VariableSymbol).isGlobal) {
-        throw new Error(`Missing global slot for symbol ${name}`)
-      }
+      throw new Error(`Missing global slot for symbol ${name}`)
     }
     const existing = this.locals.get(symbol.id)
     if (existing) return existing
@@ -209,6 +213,11 @@ class FunctionBuilder {
   }
 
   private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType, init?: Value, array?: ArrayInfo, struct?: StructInfo, ptrInfo?: PointerInfo): { ptr: string; type: LlvmType; array?: ArrayInfo; struct?: StructInfo; ptrInfo?: PointerInfo } {
+    if (symbol.kind === ast.SymbolKind.PARAM) {
+      const name = (symbol as ast.ParamSymbol).param.name.lexeme
+      const byName = this.paramSlotsByName.get(name)
+      if (byName) return byName
+    }
     if (symbol.kind === ast.SymbolKind.VARIABLE && (symbol as ast.VariableSymbol).isGlobal) {
       return this.getLocal(symbol, type)
     }
@@ -224,6 +233,10 @@ class FunctionBuilder {
     }
     const entry = { ptr, type, array, struct, ptrInfo }
     this.locals.set(symbol.id, entry)
+    if (symbol.kind === ast.SymbolKind.PARAM) {
+      const name = (symbol as ast.ParamSymbol).param.name.lexeme
+      this.paramSlotsByName.set(name, entry)
+    }
     if (init) {
       this.storeValue(entry, init)
     }
@@ -1176,9 +1189,12 @@ class FunctionBuilder {
     // params allocas and stores
     fn.params.forEach((p, i) => {
       const llvmTy = llvmTypeFromAst(p.type)
-      const slot = this.ensureLocal(p as any, llvmTy)
+      const ptr = this.fresh("param")
+      this.addAlloca(`${ptr} = alloca ${llvmTy}`)
       const incoming = paramNames[i]
-      this.lines.push(`  store ${llvmTy} ${incoming}, ${llvmTy}* ${slot.ptr}`)
+      this.lines.push(`  store ${llvmTy} ${incoming}, ${llvmTy}* ${ptr}`)
+      const entry = { ptr, type: llvmTy }
+      this.paramSlotsByName.set(p.name.lexeme, entry)
       this.paramArgsByName.set(p.name.lexeme, { type: llvmTy, repr: incoming })
     })
     if (this.currentFunctionName === "main" && this.fnSigs.has("__init_globals__")) {
