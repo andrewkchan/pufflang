@@ -467,7 +467,13 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
   }
 
   function exprAssignment(): ast.Expr {
-    const expr = exprOr()
+    let expr = exprOr()
+    if (match(TokenType.QUESTION)) {
+      const thenBranch = exprAssignment()
+      consume(TokenType.COLON, "Expect ':' in ternary expression.")
+      const elseBranch = exprAssignment()
+      return ast.ternaryExpr({ condition: expr, thenBranch, elseBranch })
+    }
     const isValidAssignmentTarget =
       expr.kind === ast.NodeKind.VARIABLE_EXPR ||
       expr.kind === ast.NodeKind.INDEX_EXPR ||
@@ -692,6 +698,11 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
   }
 
   function exprUnary(): ast.Expr {
+    if (match(TokenType.PLUS_PLUS) || match(TokenType.MINUS_MINUS)) {
+      const operator = previous()
+      const value = exprUnary()
+      return ast.updateExpr({ operator, operand: value, isPrefix: true })
+    }
     if (match(TokenType.BANG) || match(TokenType.MINUS) || match(TokenType.AMP) || match(TokenType.TILDE)) {
       const operator = previous()
       const value = exprUnary()
@@ -773,6 +784,10 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
           throw new Error("Unhandled operator in call group")
         }
       }
+    }
+    while (match(TokenType.PLUS_PLUS) || match(TokenType.MINUS_MINUS)) {
+      const operator = previous()
+      expr = ast.updateExpr({ operator, operand: expr, isPrefix: false })
     }
     return expr
   }

@@ -447,6 +447,41 @@ export function resolve(context: ast.Context, reportError: ReportError) {
         }
         break
       }
+      case ast.NodeKind.TERNARY_EXPR: {
+        const op = node as ast.TernaryExpr
+        op.condition = resolveNodeWithCoercion(op.condition, isLiveAtEnd, ast.BoolType, fakeToken(TokenType.QUESTION, "?"))
+        resolveNode(op.thenBranch, isLiveAtEnd)
+        resolveNode(op.elseBranch, isLiveAtEnd)
+        if (!ast.isEqual(op.thenBranch.resolvedType!, op.elseBranch.resolvedType!)) {
+          resolveError(fakeToken(TokenType.QUESTION, "?"), "Mismatched types in ternary branches.")
+          op.resolvedType = ast.ErrorType
+        } else {
+          op.resolvedType = op.thenBranch.resolvedType
+        }
+        break
+      }
+      case ast.NodeKind.UPDATE_EXPR: {
+        const op = node as ast.UpdateExpr
+        resolveNode(op.operand, isLiveAtEnd)
+        const isLValue =
+          op.operand.kind === ast.NodeKind.VARIABLE_EXPR ||
+          op.operand.kind === ast.NodeKind.INDEX_EXPR ||
+          op.operand.kind === ast.NodeKind.DEREF_EXPR ||
+          op.operand.kind === ast.NodeKind.DOT_EXPR
+        if (!isLValue) {
+          resolveError(op.operator, "Invalid operand for update expression.")
+          op.resolvedType = ast.ErrorType
+          break
+        }
+        const ty = (op.operand as any).resolvedType as ast.Type
+        if (ast.isEqual(ty, ast.IntType) || ast.isEqual(ty, ast.ByteType)) {
+          op.resolvedType = ty
+        } else {
+          resolveError(op.operator, "Update operator only supported for int or byte.")
+          op.resolvedType = ast.ErrorType
+        }
+        break
+      }
       case ast.NodeKind.UNARY_EXPR: {
         const op = node as ast.UnaryExpr
         switch (op.operator.lexeme) {

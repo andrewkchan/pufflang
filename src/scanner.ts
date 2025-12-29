@@ -91,7 +91,7 @@ export function scanTokens(source: string, reportError: ReportError): Array<Toke
       current += ws[0].length
       continue scanner
     }
-    // 2. check multi-char shift tokens first
+    // 2. check multi-char tokens first (shifts, ++/--)
     const twoChar = source.substring(current, current + 2)
     if (twoChar === "<<") {
       tokens.push(new Token(TokenType.SHIFT_LEFT, twoChar, null, current, source))
@@ -100,6 +100,16 @@ export function scanTokens(source: string, reportError: ReportError): Array<Toke
     }
     if (twoChar === ">>") {
       tokens.push(new Token(TokenType.SHIFT_RIGHT, twoChar, null, current, source))
+      current += 2
+      continue scanner
+    }
+    if (twoChar === "++") {
+      tokens.push(new Token(TokenType.PLUS_PLUS, twoChar, null, current, source))
+      current += 2
+      continue scanner
+    }
+    if (twoChar === "--") {
+      tokens.push(new Token(TokenType.MINUS_MINUS, twoChar, null, current, source))
       current += 2
       continue scanner
     }

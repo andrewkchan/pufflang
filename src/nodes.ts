@@ -16,6 +16,8 @@ export enum NodeKind {
   LIST_EXPR,
   LITERAL_EXPR,
   LOGICAL_EXPR,
+  TERNARY_EXPR,
+  UPDATE_EXPR,
   UNARY_EXPR,
   VARIABLE_EXPR,
 
@@ -36,7 +38,7 @@ export interface Node {
   kind: NodeKind
 }
 
-export type Expr = AssignExpr | BinaryExpr | CallExpr | CastExpr | DerefExpr | DotExpr | GroupExpr | IndexExpr | LenExpr | ListExpr | LiteralExpr | LogicalExpr | UnaryExpr | VariableExpr
+export type Expr = AssignExpr | BinaryExpr | CallExpr | CastExpr | DerefExpr | DotExpr | GroupExpr | IndexExpr | LenExpr | ListExpr | LiteralExpr | LogicalExpr | TernaryExpr | UpdateExpr | UnaryExpr | VariableExpr
 
 export interface AssignExpr extends Node {
   kind: NodeKind.ASSIGN_EXPR
@@ -270,6 +272,42 @@ export function logicalExpr({ left, operator, right }: { left: Expr; operator: T
     left,
     operator,
     right,
+    resolvedType: null
+  }
+}
+
+export interface TernaryExpr extends Node {
+  kind: NodeKind.TERNARY_EXPR
+  condition: Expr
+  thenBranch: Expr
+  elseBranch: Expr
+  resolvedType: Type | null
+}
+
+export function ternaryExpr({ condition, thenBranch, elseBranch }: { condition: Expr; thenBranch: Expr; elseBranch: Expr }): TernaryExpr {
+  return {
+    kind: NodeKind.TERNARY_EXPR,
+    condition,
+    thenBranch,
+    elseBranch,
+    resolvedType: null
+  }
+}
+
+export interface UpdateExpr extends Node {
+  kind: NodeKind.UPDATE_EXPR
+  operator: Token // ++ or --
+  operand: Expr
+  isPrefix: boolean
+  resolvedType: Type | null
+}
+
+export function updateExpr({ operator, operand, isPrefix }: { operator: Token; operand: Expr; isPrefix: boolean }): UpdateExpr {
+  return {
+    kind: NodeKind.UPDATE_EXPR,
+    operator,
+    operand,
+    isPrefix,
     resolvedType: null
   }
 }
@@ -1209,6 +1247,20 @@ export function astToSExpr(node: Node): string {
       const operator = op.operator.lexeme
       out += "("
       out += `${operator} ${astToSExpr(op.left)} ${astToSExpr(op.right)}`
+      out += ")"
+      break
+    }
+    case NodeKind.TERNARY_EXPR: {
+      const op = node as TernaryExpr
+      out += "("
+      out += `?: ${astToSExpr(op.condition)} ${astToSExpr(op.thenBranch)} ${astToSExpr(op.elseBranch)}`
+      out += ")"
+      break
+    }
+    case NodeKind.UPDATE_EXPR: {
+      const op = node as UpdateExpr
+      out += "("
+      out += `${op.isPrefix ? "pre" : "post"}${op.operator.lexeme} ${astToSExpr(op.operand)}`
       out += ")"
       break
     }

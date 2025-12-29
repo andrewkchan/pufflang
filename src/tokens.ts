@@ -20,10 +20,14 @@ export enum TokenType {
   RIGHT_BRACKET,
   COMMA,
   DOT,
+  QUESTION,
+  COLON,
   SEMICOLON,
   TILDE,
 
   // One or two character tokens.
+  PLUS_PLUS,
+  MINUS_MINUS,
   BANG_EQUAL,
   BANG,
   EQUAL_EQUAL,
@@ -93,10 +97,14 @@ export const TokenPattern: Readonly<Record<TokenType, RegExp>> = {
   [TokenType.RIGHT_BRACKET]: /\]/y,
   [TokenType.COMMA]: /,/y,
   [TokenType.DOT]: /\./y,
+  [TokenType.QUESTION]: /\?/y,
+  [TokenType.COLON]: /:/y,
   [TokenType.SEMICOLON]: /;/y,
   [TokenType.TILDE]: /~/y,
 
   // One or two character tokens.
+  [TokenType.PLUS_PLUS]: /\+\+/y,
+  [TokenType.MINUS_MINUS]: /--/y,
   [TokenType.BANG_EQUAL]: /!=/y,
   [TokenType.BANG]: /!/y,
   [TokenType.EQUAL_EQUAL]: /==/y,

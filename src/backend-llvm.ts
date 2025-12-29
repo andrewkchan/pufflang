@@ -584,9 +584,82 @@ class FunctionBuilder {
           throw new Error("Unknown logical operator")
         }
       }
+      case ast.NodeKind.TERNARY_EXPR: {
+        const t = node as ast.TernaryExpr
+        const cond = this.toBool(this.emitExpr(t.condition))
+        const thenLabel = this.freshLabel("tern.then")
+        const elseLabel = this.freshLabel("tern.else")
+        const endLabel = this.freshLabel("tern.end")
+        this.emit(`br i1 ${cond.repr}, label %${thenLabel}, label %${elseLabel}`)
+        this.emitLabel(thenLabel)
+        const thenVal = this.emitExpr(t.thenBranch)
+        this.emit(`br label %${endLabel}`)
+        this.emitLabel(elseLabel)
+        const elseVal = this.emitExpr(t.elseBranch)
+        this.emit(`br label %${endLabel}`)
+        this.emitLabel(endLabel)
+        if (thenVal.type !== elseVal.type) {
+          throw new Error("Ternary branch type mismatch in backend.")
+        }
+        const out = this.fresh("tern")
+        this.emit(`${out} = phi ${thenVal.type} [ ${thenVal.repr}, %${thenLabel} ], [ ${elseVal.repr}, %${elseLabel} ]`)
+        return { type: thenVal.type, repr: out }
+      }
       case ast.NodeKind.GROUP_EXPR: {
         const g = node as ast.GroupExpr
         return this.emitExpr(g.expression)
+      }
+      case ast.NodeKind.UPDATE_EXPR: {
+        const u = node as ast.UpdateExpr
+        const operand = u.operand
+        const targetType = llvmTypeFromAst(operand.resolvedType!)
+        let ptr: string
+        if (operand.kind === ast.NodeKind.VARIABLE_EXPR) {
+          const sym = (operand as ast.VariableExpr).resolvedSymbol!
+          ptr = this.getLocal(sym as any, targetType).ptr
+        } else if (operand.kind === ast.NodeKind.INDEX_EXPR) {
+          const idx = operand as ast.IndexExpr
+          const base = this.emitExpr(idx.callee)
+          if (!base.array) throw new Error("Update on non-array index")
+          const indexVal = this.cast(this.emitExpr(idx.index), "i32")
+          const offset = this.fresh("idxoff")
+          if (base.array.stride === 1) this.emit(`${offset} = add i32 0, ${indexVal.repr}`)
+          else this.emit(`${offset} = mul nsw i32 ${indexVal.repr}, ${base.array.stride}`)
+          const elemPtr = this.fresh("idxptr")
+          this.emit(`${elemPtr} = getelementptr ${base.array.elem}, ${base.array.elem}* ${base.repr}, i32 ${offset}`)
+          ptr = elemPtr
+        } else if (operand.kind === ast.NodeKind.DEREF_EXPR) {
+          const dv = this.emitExpr((operand as ast.DerefExpr).value)
+          if (!dv.ptr) throw new Error("Dereference target is not pointer")
+          const castPtr = this.fresh("updcast")
+          this.emit(`${castPtr} = bitcast i8* ${dv.repr} to ${dv.ptr.elem}*`)
+          ptr = castPtr
+        } else if (operand.kind === ast.NodeKind.DOT_EXPR) {
+          const d = operand as ast.DotExpr
+          const base = this.emitExpr(d.callee)
+          if (!base.struct) throw new Error("Member update requires struct")
+          const idx = base.struct.fields.findIndex((f) => f.name === d.identifier.lexeme)
+          if (idx < 0) throw new Error("No such field")
+          const fieldPtr = this.fresh("fldptr")
+          this.emit(
+            `${fieldPtr} = getelementptr %struct.${base.struct.name}, %struct.${base.struct.name}* ${base.repr}, i32 0, i32 ${idx}`
+          )
+          ptr = fieldPtr
+        } else {
+          throw new Error("Invalid update target")
+        }
+        const loadedName = this.fresh("upold")
+        this.emit(`${loadedName} = load ${targetType}, ${targetType}* ${ptr}`)
+        const delta = targetType === "i8" ? "1" : "1"
+        const outName = this.fresh("upnew")
+        if (u.operator.lexeme === "++") {
+          this.emit(`${outName} = add ${targetType} ${loadedName}, ${delta}`)
+        } else {
+          this.emit(`${outName} = sub ${targetType} ${loadedName}, ${delta}`)
+        }
+        this.emit(`store ${targetType} ${outName}, ${targetType}* ${ptr}`)
+        const resultRepr = u.isPrefix ? outName : loadedName
+        return { type: targetType, repr: resultRepr }
       }
       case ast.NodeKind.UNARY_EXPR: {
         const u = node as ast.UnaryExpr
