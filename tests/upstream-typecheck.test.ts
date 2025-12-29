@@ -890,7 +890,7 @@ describe("upstream type checking parity (subset)", () => {
         "13: Invalid operand types for binary operator '/'.",
         "14: Invalid operand types for binary operator '/'.",
         "16: Invalid operand types for binary operator '+'.",
-        "17: Invalid operand types for binary operator '-'."
+        "17: Cannot implicitly convert operand to 'int~'."
       ]
     )
   })

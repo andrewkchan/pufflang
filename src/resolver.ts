@@ -38,14 +38,15 @@ export function resolve(context: ast.Context, reportError: ReportError) {
     return functionStack.pop()!
   }
 
-  let loopStack: ast.WhileStmt[] = []
-  function peekLoop(): ast.WhileStmt | null {
+  type LoopCtx = { node: ast.Stmt; allowContinue: boolean }
+  let loopStack: LoopCtx[] = []
+  function peekLoop(): LoopCtx | null {
     return loopStack.length > 0 ? loopStack[loopStack.length - 1] : null
   }
-  function pushLoop(loop: ast.WhileStmt) {
-    loopStack.push(loop)
+  function pushLoop(loop: ast.Stmt, allowContinue: boolean) {
+    loopStack.push({ node: loop, allowContinue })
   }
-  function popLoop(): ast.WhileStmt {
+  function popLoop(): LoopCtx {
     return loopStack.pop()!
   }
 
@@ -184,7 +185,14 @@ export function resolve(context: ast.Context, reportError: ReportError) {
               // 1. Only allowed between a pointer and a numeric. Operating on 2 pointers is not allowed.
               // 2. (numeric + pointer) and (pointer + numeric) are both allowed.
               // 3. (pointer - numeric) is allowed, (numeric - pointer) is not allowed.
-              if (leftType.category === ast.TypeCategory.POINTER && ast.isNumeric(rightType)) {
+              if (leftType.category === ast.TypeCategory.POINTER && rightType.category === ast.TypeCategory.POINTER && op.operator.lexeme === "-") {
+                if (!ast.isEqual(leftType.elementType, rightType.elementType)) {
+                  resolveError(op.operator, "Pointer subtraction requires matching element types.")
+                  op.resolvedType = ast.ErrorType
+                } else {
+                  op.resolvedType = ast.IntType
+                }
+              } else if (leftType.category === ast.TypeCategory.POINTER && ast.isNumeric(rightType)) {
                 op.right = ast.binaryExpr({
                   left: ast.literalExpr({
                     value: ast.sizeof(leftType.elementType),
@@ -717,13 +725,35 @@ export function resolve(context: ast.Context, reportError: ReportError) {
         op.isLiveAtEnd = isLiveAfterThen || isLiveAfterElse
         break
       }
+      case ast.NodeKind.SWITCH_STMT: {
+        const op = node as ast.SwitchStmt
+        resolveNode(op.expression, isLiveAtEnd)
+        pushLoop(op, false)
+        let live = false
+        op.cases.forEach((c) => {
+          if (c.value) resolveNode(c.value, isLiveAtEnd)
+          c.statements.forEach((s) => {
+            resolveNode(s, isLiveAtEnd)
+          })
+          if (c.statements.length > 0) {
+            const last = c.statements[c.statements.length - 1]
+            live = live || !!(last as any).isLiveAtEnd
+          } else {
+            live = live || isLiveAtEnd
+          }
+        })
+        popLoop()
+        op.isLiveAtEnd = live
+        break
+      }
       case ast.NodeKind.LOOP_CONTROL_STMT: {
         const op = node as ast.LoopControlStmt
-        if (peekLoop() === null) {
+        const top = peekLoop()
+        if (top === null) {
           resolveError(op.keyword, `Cannot ${op.keyword.lexeme} outside a loop.`)
+        } else if (op.keyword.lexeme === "continue" && !top.allowContinue) {
+          resolveError(op.keyword, `Cannot continue outside a loop.`)
         }
-        // Control flow is considered live as long as we don't hit a "return".
-        // This is not affected by breaks/continues.
         op.isLiveAtEnd = isLiveAtEnd
         break
       }
@@ -799,7 +829,7 @@ export function resolve(context: ast.Context, reportError: ReportError) {
       case ast.NodeKind.WHILE_STMT: {
         const op = node as ast.WhileStmt
         resolveNode(op.expression, isLiveAtEnd)
-        pushLoop(op)
+        pushLoop(op, true)
         resolveNode(op.body, isLiveAtEnd)
         popLoop()
         if (op.increment) {

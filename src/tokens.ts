@@ -73,6 +73,9 @@ export enum TokenType {
   TRUE,
   VAR,
   VOID,
+  SWITCH,
+  CASE,
+  DEFAULT,
   WHILE,
 
   EOF
@@ -150,6 +153,9 @@ export const TokenPattern: Readonly<Record<TokenType, RegExp>> = {
   [TokenType.TRUE]: /true/y,
   [TokenType.VAR]: /var/y,
   [TokenType.VOID]: /void/y,
+  [TokenType.SWITCH]: /switch/y,
+  [TokenType.CASE]: /case/y,
+  [TokenType.DEFAULT]: /default/y,
   [TokenType.WHILE]: /while/y,
 
   [TokenType.EOF]: /* unhandled */ /$/y

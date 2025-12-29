@@ -768,6 +768,21 @@ class FunctionBuilder {
               left = this.cast(left, "i32")
               right = this.cast(right, "i32")
             }
+            if (left.ptr && right.ptr && b.operator.lexeme === "-") {
+              if (left.ptr.elem !== right.ptr.elem) throw new Error("Pointer subtraction requires same element type")
+              const lpi = this.fresh("lptrint")
+              const rpi = this.fresh("rptrint")
+              this.emit(`${lpi} = ptrtoint i8* ${left.repr} to i64`)
+              this.emit(`${rpi} = ptrtoint i8* ${right.repr} to i64`)
+              const diff = this.fresh("ptrdiff")
+              this.emit(`${diff} = sub i64 ${lpi}, ${rpi}`)
+              const elemSize = this.sizeofLlvm(left.ptr.elem)
+              const div = this.fresh("ptrdiv")
+              this.emit(`${div} = sdiv i64 ${diff}, ${elemSize}`)
+              const out = this.fresh("ptrtrunc")
+              this.emit(`${out} = trunc i64 ${div} to i32`)
+              return { type: "i32", repr: out }
+            }
             // Pointer arithmetic: pointer +/- integer
             if ((left.ptr && right.type === "i32") || (right.ptr && left.type === "i32")) {
               const basePtr = left.ptr ? left : right
@@ -1374,6 +1389,54 @@ class FunctionBuilder {
           if (!this.terminated) this.emit(`br label %${endLabel}`)
           this.terminated = false
         }
+        this.emitLabel(endLabel)
+        break
+      }
+      case ast.NodeKind.SWITCH_STMT: {
+        const sw = stmt as ast.SwitchStmt
+        const condVal = this.emitExpr(sw.expression)
+        let condRepr = condVal.repr
+        let condType = condVal.type
+        if (condType === "i8" || condType === "i1") {
+          const widened = this.cast(condVal, "i32")
+          condRepr = widened.repr
+          condType = "i32"
+        }
+        if (condType !== "i32") {
+          throw new Error("Switch condition must be int/byte/bool")
+        }
+        const endLabel = this.freshLabel("switch.end")
+        this.loopStack.push({ breakLabel: endLabel, continueLabel: endLabel })
+        const caseLabels = sw.cases.map((_, i) => this.freshLabel(`case${i}`))
+        const defaultIdx = sw.cases.findIndex((c) => c.value === null)
+        const defaultLabel = defaultIdx >= 0 ? caseLabels[defaultIdx] : endLabel
+        const valueCases = sw.cases
+          .map((c, i) => ({ c, i }))
+          .filter((ci) => ci.c.value !== null)
+        const checkLabels = valueCases.map((_, i) => this.freshLabel(`switch.check${i}`))
+        if (checkLabels.length === 0) {
+          this.emit(`br label %${defaultLabel}`)
+        } else {
+          this.emit(`br label %${checkLabels[0]}`)
+          valueCases.forEach((vc, idx) => {
+            this.emitLabel(checkLabels[idx])
+            const val = this.emitExpr(vc.c.value!)
+            const casted = this.cast(val, condType as LlvmType)
+            const cmp = this.fresh("swcmp")
+            this.emit(`${cmp} = icmp eq ${condType} ${condRepr}, ${casted.repr}`)
+            const nextLabel = idx + 1 < checkLabels.length ? checkLabels[idx + 1] : defaultLabel
+            this.emit(`br i1 ${cmp}, label %${caseLabels[vc.i]}, label %${nextLabel}`)
+          })
+        }
+        // emit cases
+        sw.cases.forEach((c, idx) => {
+          const label = c.value === null ? defaultLabel : caseLabels[idx]
+          this.emitLabel(label)
+          c.statements.forEach((s) => this.emitStmt(s))
+          if (!this.terminated) this.emit(`br label %${endLabel}`)
+          this.terminated = false
+        })
+        this.loopStack.pop()
         this.emitLabel(endLabel)
         break
       }

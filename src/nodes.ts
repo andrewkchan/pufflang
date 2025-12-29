@@ -29,6 +29,7 @@ export enum NodeKind {
   LOOP_CONTROL_STMT,
   PRINT_STMT,
   RETURN_STMT,
+  SWITCH_STMT,
   STRUCT_STMT,
   VAR_STMT,
   WHILE_STMT
@@ -698,7 +699,7 @@ export interface Param {
   name: Token
 }
 
-export type Stmt = BlockStmt | ExpressionStmt | IfStmt | LoopControlStmt | PrintStmt | ReturnStmt | VarStmt | WhileStmt
+export type Stmt = BlockStmt | ExpressionStmt | IfStmt | LoopControlStmt | PrintStmt | ReturnStmt | SwitchStmt | VarStmt | WhileStmt
 export type TopStmt = FunctionStmt | StructStmt | VarStmt
 
 export interface BlockStmt extends Node {
@@ -706,6 +707,27 @@ export interface BlockStmt extends Node {
   statements: Stmt[]
   scope: Scope
   isLiveAtEnd: boolean | null // filled in by resolver pass
+}
+
+export interface SwitchCase {
+  value: Expr | null // null for default
+  statements: Stmt[]
+}
+
+export interface SwitchStmt extends Node {
+  kind: NodeKind.SWITCH_STMT
+  expression: Expr
+  cases: SwitchCase[]
+  isLiveAtEnd: boolean | null
+}
+
+export function switchStmt({ expression, cases }: { expression: Expr; cases: SwitchCase[] }): SwitchStmt {
+  return {
+    kind: NodeKind.SWITCH_STMT,
+    expression,
+    cases,
+    isLiveAtEnd: null
+  }
 }
 
 export function blockStmt({ statements, scope }: { statements: Stmt[]; scope: Scope }): BlockStmt {
@@ -1321,6 +1343,26 @@ export function astToSExpr(node: Node): string {
       if (op.elseBranch !== null) {
         out += `${astToSExpr(op.elseBranch)} `
       }
+      out += ")"
+      break
+    }
+    case NodeKind.SWITCH_STMT: {
+      const op = node as SwitchStmt
+      out += "("
+      out += `switch ${astToSExpr(op.expression)} `
+      op.cases.forEach((c, i) => {
+        if (i > 0) out += " "
+        if (c.value === null) {
+          out += "(default "
+        } else {
+          out += `(case ${astToSExpr(c.value)} `
+        }
+        c.statements.forEach((s, j) => {
+          if (j > 0) out += " "
+          out += astToSExpr(s)
+        })
+        out += ")"
+      })
       out += ")"
       break
     }

@@ -254,6 +254,9 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
     if (match(TokenType.IF)) {
       return ifStmt()
     }
+    if (match(TokenType.SWITCH)) {
+      return switchStmt()
+    }
     if (match(TokenType.PRINT)) {
       return printStmt()
     }
@@ -394,6 +397,39 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
       statements: initializer ? [initializer, loop] : [loop],
       scope: outerScope
     })
+  }
+
+  function switchStmt(): ast.Stmt {
+    consume(TokenType.LEFT_PAREN, "Expect '(' after 'switch'.")
+    const expr = expression()
+    consume(TokenType.RIGHT_PAREN, "Expect ')' after switch expression.")
+    consume(TokenType.LEFT_BRACE, "Expect '{' to start switch cases.")
+    pushScope()
+    const cases: ast.SwitchCase[] = []
+    while (!check(TokenType.RIGHT_BRACE) && !isAtEnd()) {
+      if (match(TokenType.CASE)) {
+        const value = expression()
+        consume(TokenType.COLON, "Expect ':' after case value.")
+        const statements: ast.Stmt[] = []
+        while (!check(TokenType.CASE) && !check(TokenType.DEFAULT) && !check(TokenType.RIGHT_BRACE) && !isAtEnd()) {
+          statements.push(statement())
+        }
+        cases.push({ value, statements })
+      } else if (match(TokenType.DEFAULT)) {
+        consume(TokenType.COLON, "Expect ':' after default.")
+        const statements: ast.Stmt[] = []
+        while (!check(TokenType.CASE) && !check(TokenType.RIGHT_BRACE) && !isAtEnd()) {
+          statements.push(statement())
+        }
+        cases.push({ value: null, statements })
+      } else {
+        parseError("Expected 'case' or 'default' in switch.")
+        break
+      }
+    }
+    consume(TokenType.RIGHT_BRACE, "Expect '}' after switch cases.")
+    popScope()
+    return ast.switchStmt({ expression: expr, cases })
   }
 
   function block(): ast.Stmt[] {
