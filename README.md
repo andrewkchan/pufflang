@@ -10,10 +10,10 @@ npm test          # runs the full original suite + new I/O tests
 npm run build     # emits dist/
 
 # Run a Puffscript program
-node dist/cli.js run examples/cat.puff --args myfile.txt
+node dist/src/cli.js run examples/cat.puff --args myfile.txt
 
 # Compile a program to wasm
-node dist/cli.js build examples/cat.puff --out-wasm cat.wasm --out-wat cat.wat
+node dist/src/cli.js build examples/cat.puff --out-wasm cat.wasm --out-wat cat.wat
 ```
 
 `npm test` runs all original upstream tests (parser, resolver, runtime) plus new coverage for file/stdin/stdout/argv builtins.
@@ -53,18 +53,18 @@ Run them with:
 
 ```bash
 npm run build
-node dist/cli.js run examples/echo.puff --stdin "hello!"
-node dist/cli.js run examples/cat.puff --args myfile.txt
-node dist/cli.js run examples/copy.puff --args src.txt dst.txt
+node dist/src/cli.js run examples/echo.puff --stdin "hello!"
+node dist/src/cli.js run examples/cat.puff --args myfile.txt
+node dist/src/cli.js run examples/copy.puff --args src.txt dst.txt
 ```
 
 ## Bootstrapping workflow
 
 1. Build the TypeScript toolchain: `npm run build`.
 2. Compile Puffscript sources to WAT/WASM:
-   - `node dist/cli.js build examples/cat.puff --out-wasm cat.wasm --out-wat cat.wat`
+   - `node dist/src/cli.js build examples/cat.puff --out-wasm cat.wasm --out-wat cat.wat`
 3. Execute the resulting WASM with the same host runtime:
-   - `node dist/cli.js run examples/cat.puff --args input.txt`
+   - `node dist/src/cli.js run examples/cat.puff --args input.txt`
 4. Automated demo: `npm run bootstrap:demo` will compile `examples/cat.puff` to WASM, write a temporary input file, and run the produced WASM with the host runtime to prove the pipeline end-to-end.
 5. For self-hosting experiments, use the CLI to compile Puffscript programs that themselves use the new I/O builtins (e.g., file copying, lexing) and chain the outputs in your scripts.
 
