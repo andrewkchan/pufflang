@@ -116,4 +116,70 @@ describe('IO builtins', () => {
     })
     expect(resultStdout.output).toBe('copy-me')
   })
+
+  test('args_get truncates when buffer is shorter', async () => {
+    const result = await runSource(`
+    def main() {
+      var buf = [byte(0); 2];
+      var wrote = __args_get__(0, &buf[0], len(buf));
+      print wrote;
+      print buf;
+    }
+    `, { args: ["hello"] })
+    expect(result.output.trim()).toBe(["2", "he"].join("\n"))
+  })
+
+  test('stdin_read returns 0 on EOF', async () => {
+    const result = await runSource(`
+    def main() {
+      var buf = [byte(0); 4];
+      var n = __stdin_read__(&buf[0], len(buf));
+      print n;
+    }
+    `, { stdin: "" })
+    expect(result.output.trim()).toBe("0")
+  })
+
+  test('stdout_write returns length written', async () => {
+    const result = await runSource(`
+    def main() {
+      var msg = "abc";
+      var wrote = __stdout_write__(&msg[0], len(msg));
+      print wrote;
+    }
+    `)
+    expect(result.output.trim()).toBe("abc3")
+  })
+
+  test('read_file error returns -1', async () => {
+    const fs = {
+      readFileSync: (_p: string) => { throw new Error("boom") },
+      writeFileSync: (_p: string, _d: Buffer) => {}
+    }
+    const result = await runSource(`
+    def main() {
+      var path = "missing.txt";
+      var buf = [byte(0); 8];
+      var n = __read_file__(&path[0], len(path), &buf[0], len(buf));
+      print n;
+    }
+    `, { fs })
+    expect(result.output.trim()).toBe("-1")
+  })
+
+  test('write_file error returns -1', async () => {
+    const fs = {
+      readFileSync: (_p: string) => Buffer.from(''),
+      writeFileSync: (_p: string, _d: Buffer) => { throw new Error("write fail") }
+    }
+    const result = await runSource(`
+    def main() {
+      var path = "out.txt";
+      var buf = "data";
+      var n = __write_file__(&path[0], len(path), &buf[0], len(buf));
+      print n;
+    }
+    `, { fs })
+    expect(result.output.trim()).toBe("-1")
+  })
 })
