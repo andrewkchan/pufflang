@@ -1662,23 +1662,24 @@ export function emitLlvm(context: ast.Context): string {
     if (!(v.symbol as ast.VariableSymbol).isGlobal) return
     const llvmTy = llvmTypeFromAst(v.type!)
     const name = v.name.lexeme
+    const linkage = v.isExported ? "" : "internal "
     let initVal = "0"
     if (llvmTy === "float" || llvmTy === "double") initVal = "0.0"
     if (v.type?.category === ast.TypeCategory.ARRAY) {
       const arr = v.type as ast.ArrayType
       const info = arrayInfoFromTypeFn(arr)
       const total = info.length * info.stride
-      module.addGlobal(`@${name} = global [${total} x ${info.elem}] zeroinitializer`)
+      module.addGlobal(`@${name} = ${linkage}global [${total} x ${info.elem}] zeroinitializer`)
       const elemPtr = `getelementptr inbounds ([${total} x ${info.elem}], [${total} x ${info.elem}]* @${name}, i64 0, i64 0)`
       globalsMap.set(v.symbol.id, { ptr: elemPtr, type: info.elem, array: info })
       globalsByName.set(name, { ptr: elemPtr, type: info.elem, array: info })
     } else if (v.type?.category === ast.TypeCategory.POINTER) {
-      module.addGlobal(`@${name} = global i8* null`)
+      module.addGlobal(`@${name} = ${linkage}global i8* null`)
       const elemTy = llvmTypeFromAst((v.type as ast.PointerType).elementType)
       globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: "i8*", ptrInfo: { elem: elemTy } })
       globalsByName.set(name, { ptr: `@${name}`, type: "i8*", ptrInfo: { elem: elemTy } })
     } else {
-      module.addGlobal(`@${name} = global ${llvmTy} ${initVal}`)
+      module.addGlobal(`@${name} = ${linkage}global ${llvmTy} ${initVal}`)
       globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: llvmTy })
       globalsByName.set(name, { ptr: `@${name}`, type: llvmTy })
     }
