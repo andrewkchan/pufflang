@@ -179,8 +179,14 @@ class FunctionBuilder {
     }
     const existing = this.locals.get(symbol.id)
     if (existing) return existing
-    const ptr = this.fresh("var")
-    this.addAlloca(`${ptr} = alloca ${type}`)
+    let ptr: string
+    if (array) {
+      ptr = this.fresh("arrslot")
+      this.addAlloca(`${ptr} = alloca ${array.elem}, i32 ${array.length}`)
+    } else {
+      ptr = this.fresh("var")
+      this.addAlloca(`${ptr} = alloca ${type}`)
+    }
     const entry = { ptr, type, array }
     this.locals.set(symbol.id, entry)
     if (init) {
@@ -192,8 +198,10 @@ class FunctionBuilder {
   private storeValue(dest: { ptr: string; type: LlvmType; array?: ArrayInfo }, value: Value) {
     if (dest.array && value.array) {
       const bytes = dest.array.length * this.sizeofLlvm(dest.array.elem)
-      const dstPtr = dest.ptr
-      const srcPtr = value.repr
+      const dstPtr = this.fresh("dstbc")
+      const srcPtr = this.fresh("srcbc")
+      this.emit(`${dstPtr} = bitcast ${dest.array.elem}* ${dest.ptr} to i8*`)
+      this.emit(`${srcPtr} = bitcast ${value.array.elem}* ${value.repr} to i8*`)
       this.emit(
         `call void @llvm.memcpy.p0.p0.i64(i8* ${dstPtr}, i8* ${srcPtr}, i64 ${bytes}, i1 0)`
       )
@@ -263,13 +271,16 @@ class FunctionBuilder {
         if (!symbol || (symbol.kind !== ast.SymbolKind.VARIABLE && symbol.kind !== ast.SymbolKind.PARAM)) {
           throw new Error("Variable expression missing symbol")
         }
-        let slot: { ptr: string; type: LlvmType }
+        let slot: { ptr: string; type: LlvmType; array?: ArrayInfo }
         if (symbol.kind === ast.SymbolKind.PARAM) {
           const argInit = this.paramArgsByName.get(v.name.lexeme)
           const llvmTy = llvmTypeFromAst(v.resolvedType!)
           slot = this.ensureLocal(symbol as any, llvmTy, argInit ? { type: argInit.type, repr: argInit.repr } : undefined)
         } else {
           slot = this.getLocal(symbol as any)
+        }
+        if (v.resolvedType?.category === ast.TypeCategory.ARRAY) {
+          return { type: "i8*", repr: slot.ptr, array: slot.array }
         }
         return this.loadValue(slot)
       }
@@ -518,7 +529,18 @@ class FunctionBuilder {
           }
           return { type: "i8*", repr: allocaPtr, array: { elem: elemTy, length } }
         } else {
-          throw new Error("Repeat initializer unsupported in LLVM backend yet")
+          const initVal = this.emitExpr(list.initializer.value)
+          const length = list.initializer.length
+          const elemTy = initVal.type
+          const allocaPtr = this.fresh("arrrep")
+          this.addAlloca(`${allocaPtr} = alloca ${elemTy}, i32 ${length}`)
+          for (let i = 0; i < length; i++) {
+            const idxPtr = this.fresh("idxptr")
+            this.emit(`${idxPtr} = getelementptr ${elemTy}, ${elemTy}* ${allocaPtr}, i32 ${i}`)
+            const casted = this.cast(initVal, elemTy)
+            this.emit(`store ${elemTy} ${casted.repr}, ${elemTy}* ${idxPtr}`)
+          }
+          return { type: "i8*", repr: allocaPtr, array: { elem: elemTy, length } }
         }
       }
       default:
@@ -610,8 +632,13 @@ class FunctionBuilder {
         if (!symbol) throw new Error("VarStmt missing symbol")
         const ty = llvmTypeFromAst(v.type!)
         const initVal = this.emitExpr(v.initializer)
-        const slot = this.getLocal(symbol, ty)
-        this.storeValue(slot, initVal)
+        if (initVal.array) {
+          const slot = this.ensureLocal(symbol, ty, undefined, initVal.array)
+          this.storeValue(slot, initVal)
+        } else {
+          const slot = this.getLocal(symbol, ty)
+          this.storeValue(slot, initVal)
+        }
         break
       }
       case ast.NodeKind.EXPRESSION_STMT: {
@@ -794,8 +821,9 @@ export function emitLlvm(context: ast.Context): string {
       const arr = v.type as ast.ArrayType
       const elemTy = llvmTypeFromAst(arr.elementType)
       module.addGlobal(`@${name} = global [${arr.length} x ${elemTy}] zeroinitializer`)
-      globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: "i8*", array: { elem: elemTy, length: arr.length } })
-      globalsByName.set(name, { ptr: `@${name}`, type: "i8*", array: { elem: elemTy, length: arr.length } })
+      const elemPtr = `getelementptr inbounds ([${arr.length} x ${elemTy}], [${arr.length} x ${elemTy}]* @${name}, i64 0, i64 0)`
+      globalsMap.set(v.symbol.id, { ptr: elemPtr, type: elemTy, array: { elem: elemTy, length: arr.length } })
+      globalsByName.set(name, { ptr: elemPtr, type: elemTy, array: { elem: elemTy, length: arr.length } })
     } else {
       module.addGlobal(`@${name} = global ${llvmTy} ${initVal}`)
       globalsMap.set(v.symbol.id, { ptr: `@${name}`, type: llvmTy })
