@@ -115,14 +115,27 @@ class FunctionBuilder {
   private locals: Map<number, { ptr: string; type: LlvmType }> = new Map()
   private hasReturn = false
   private functionRetType: LlvmType | "void" = "i32"
+  private fnReturnTypeAst: ast.Type | null = null
+  private terminated = false
+  private paramArgsByName: Map<string, { type: LlvmType; repr: string }> = new Map()
 
-  constructor(private readonly module: LlvmModuleBuilder) {}
+  constructor(
+    private readonly module: LlvmModuleBuilder,
+    private readonly fnSigs: Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>
+  ) {}
 
   fresh(prefix = "t"): string {
     return `%${prefix}${this.tempCounter++}`
   }
 
+  freshLabel(prefix = "L"): string {
+    return `${prefix}${this.tempCounter++}`
+  }
+
   emit(line: string) {
+    if (this.terminated) {
+      throw new Error("Attempting to emit after terminator")
+    }
     this.lines.push(line)
   }
 
@@ -130,19 +143,23 @@ class FunctionBuilder {
     this.allocas.push(line)
   }
 
-  private getLocal(symbol: ast.VariableSymbol | ast.ParamSymbol): { ptr: string; type: LlvmType } {
+  private getLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, fallbackType?: LlvmType): { ptr: string; type: LlvmType } {
     const existing = this.locals.get(symbol.id)
-    if (!existing) throw new Error("Missing local slot for symbol")
-    return existing
+    if (existing) return existing
+    if (!fallbackType) throw new Error("Missing local slot for symbol")
+    return this.ensureLocal(symbol, fallbackType)
   }
 
-  private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType): { ptr: string; type: LlvmType } {
+  private ensureLocal(symbol: ast.VariableSymbol | ast.ParamSymbol, type: LlvmType, init?: Value): { ptr: string; type: LlvmType } {
     const existing = this.locals.get(symbol.id)
     if (existing) return existing
     const ptr = this.fresh("var")
     this.addAlloca(`${ptr} = alloca ${type}`)
     const entry = { ptr, type }
     this.locals.set(symbol.id, entry)
+    if (init) {
+      this.storeValue(entry, init)
+    }
     return entry
   }
 
@@ -187,7 +204,14 @@ class FunctionBuilder {
         if (!symbol || (symbol.kind !== ast.SymbolKind.VARIABLE && symbol.kind !== ast.SymbolKind.PARAM)) {
           throw new Error("Variable expression missing symbol")
         }
-        const slot = this.getLocal(symbol as any)
+        let slot: { ptr: string; type: LlvmType }
+        if (symbol.kind === ast.SymbolKind.PARAM) {
+          const argInit = this.paramArgsByName.get(v.name.lexeme)
+          const llvmTy = llvmTypeFromAst(v.resolvedType!)
+          slot = this.ensureLocal(symbol as any, llvmTy, argInit ? { type: argInit.type, repr: argInit.repr } : undefined)
+        } else {
+          slot = this.getLocal(symbol as any)
+        }
         return this.loadValue(slot)
       }
       case ast.NodeKind.ASSIGN_EXPR: {
@@ -277,8 +301,70 @@ class FunctionBuilder {
             }
             throw new Error("Binary arithmetic only implemented for int/float/byte so far.")
           }
+          case "==":
+          case "!=": {
+            if (left.type === "i32" || left.type === "i8" || left.type === "i1") {
+              const op = b.operator.lexeme === "==" ? "icmp eq" : "icmp ne"
+              const out = this.fresh("icmp")
+              this.emit(`${out} = ${op} ${left.type} ${left.repr}, ${right.repr}`)
+              return { type: "i1", repr: out }
+            } else if (left.type === "float") {
+              const op = b.operator.lexeme === "==" ? "fcmp oeq" : "fcmp one"
+              const out = this.fresh("fcmp")
+              this.emit(`${out} = ${op} float ${left.repr}, ${right.repr}`)
+              return { type: "i1", repr: out }
+            }
+            throw new Error("Equality not supported for this type.")
+          }
+          case "<":
+          case "<=":
+          case ">":
+          case ">=": {
+            if (left.type === "i32" || left.type === "i8") {
+              const op =
+                b.operator.lexeme === "<" ? "icmp slt" :
+                b.operator.lexeme === "<=" ? "icmp sle" :
+                b.operator.lexeme === ">" ? "icmp sgt" : "icmp sge"
+              const out = this.fresh("icmp")
+              this.emit(`${out} = ${op} ${left.type} ${left.repr}, ${right.repr}`)
+              return { type: "i1", repr: out }
+            } else if (left.type === "float") {
+              const op =
+                b.operator.lexeme === "<" ? "fcmp olt" :
+                b.operator.lexeme === "<=" ? "fcmp ole" :
+                b.operator.lexeme === ">" ? "fcmp ogt" : "fcmp oge"
+              const out = this.fresh("fcmp")
+              this.emit(`${out} = ${op} float ${left.repr}, ${right.repr}`)
+              return { type: "i1", repr: out }
+            }
+            throw new Error("Comparison not supported for this type.")
+          }
           default:
             throw new Error(`Unsupported binary operator ${b.operator.lexeme}`)
+        }
+      }
+      case ast.NodeKind.CALL_EXPR: {
+        const c = node as ast.CallExpr
+        if (c.callee.kind !== ast.NodeKind.VARIABLE_EXPR) {
+          throw new Error("Only simple function calls supported")
+        }
+        const name = (c.callee as ast.VariableExpr).name.lexeme
+        const sig = this.fnSigs.get(name)
+        if (!sig) {
+          throw new Error(`Unknown function ${name}`)
+        }
+        const args: Value[] = c.args.map((a) => this.emitExpr(a))
+        if (args.length !== sig.params.length) {
+          throw new Error(`Arity mismatch calling ${name}`)
+        }
+        const argStr = args.map((v, i) => `${sig.params[i]} ${this.cast(v, sig.params[i]).repr}`).join(", ")
+        if (sig.ret === "void") {
+          this.emit(`call void @${name}(${argStr})`)
+          return { type: "i32", repr: "0" }
+        } else {
+          const out = this.fresh("call")
+          this.emit(`${out} = call ${sig.ret} @${name}(${argStr})`)
+          return { type: sig.ret, repr: out }
         }
       }
       default:
@@ -369,9 +455,9 @@ class FunctionBuilder {
         const symbol = v.symbol
         if (!symbol) throw new Error("VarStmt missing symbol")
         const ty = llvmTypeFromAst(v.type!)
+        const initVal = this.emitExpr(v.initializer)
         const slot = this.ensureLocal(symbol, ty)
-        const init = this.emitExpr(v.initializer)
-        this.storeValue(slot, init)
+        this.storeValue(slot, initVal)
         break
       }
       case ast.NodeKind.EXPRESSION_STMT: {
@@ -383,8 +469,13 @@ class FunctionBuilder {
         const r = stmt as ast.ReturnStmt
         if (r.value) {
           const val = this.emitExpr(r.value)
-          const casted = this.cast(val, this.functionRetType as LlvmType)
-          this.emit(`ret ${casted.type} ${casted.repr}`)
+          if (this.functionRetType === "void") {
+            // ignore value
+            this.emit("ret void")
+          } else {
+            const casted = this.cast(val, this.functionRetType as LlvmType)
+            this.emit(`ret ${casted.type} ${casted.repr}`)
+          }
         } else {
           if (this.functionRetType === "void") this.emit("ret void")
           else {
@@ -393,11 +484,79 @@ class FunctionBuilder {
           }
         }
         this.hasReturn = true
+        this.terminated = true
+        break
+      }
+      case ast.NodeKind.IF_STMT: {
+        const ifs = stmt as ast.IfStmt
+        const cond = this.emitCondition(ifs.expression)
+        const thenLabel = this.freshLabel("then")
+        const elseLabel = this.freshLabel("else")
+        const endLabel = this.freshLabel("endif")
+        if (ifs.elseBranch) {
+          this.emit(`br i1 ${cond}, label %${thenLabel}, label %${elseLabel}`)
+          this.emitLabel(thenLabel)
+          this.emitStmt(ifs.thenBranch)
+          if (!this.terminated) this.emit(`br label %${endLabel}`)
+          this.terminated = false
+          this.emitLabel(elseLabel)
+          this.emitStmt(ifs.elseBranch)
+          if (!this.terminated) this.emit(`br label %${endLabel}`)
+          this.terminated = false
+        } else {
+          this.emit(`br i1 ${cond}, label %${thenLabel}, label %${endLabel}`)
+          this.emitLabel(thenLabel)
+          this.emitStmt(ifs.thenBranch)
+          if (!this.terminated) this.emit(`br label %${endLabel}`)
+          this.terminated = false
+        }
+        this.emitLabel(endLabel)
+        break
+      }
+      case ast.NodeKind.WHILE_STMT: {
+        const w = stmt as ast.WhileStmt
+        const condLabel = this.freshLabel("loop.cond")
+        const bodyLabel = this.freshLabel("loop.body")
+        const endLabel = this.freshLabel("loop.end")
+        this.emit(`br label %${condLabel}`)
+        this.emitLabel(condLabel)
+        const cond = this.emitCondition(w.expression)
+        this.emit(`br i1 ${cond}, label %${bodyLabel}, label %${endLabel}`)
+        this.emitLabel(bodyLabel)
+        this.emitStmt(w.body)
+        if (w.increment) {
+          if (!this.terminated) this.emitExpr(w.increment.expression)
+        }
+        if (!this.terminated) this.emit(`br label %${condLabel}`)
+        this.terminated = false
+        this.emitLabel(endLabel)
+        break
+      }
+      case ast.NodeKind.BLOCK_STMT: {
+        const b = stmt as ast.BlockStmt
+        b.statements.forEach((s) => this.emitStmt(s))
         break
       }
       default:
         throw new Error(`Unsupported statement kind ${ast.NodeKind[stmt.kind]} in minimal LLVM backend.`)
     }
+  }
+
+  private emitLabel(name: string) {
+    this.lines.push(`${name}:`)
+    this.terminated = false
+  }
+
+  private emitCondition(expr: ast.Expr): string {
+    const val = this.emitExpr(expr)
+    if (val.type === "i1") return val.repr
+    if (val.type === "i8" || val.type === "i32") {
+      const zero = val.type === "i8" ? "i8 0" : "i32 0"
+      const out = this.fresh("tobool")
+      this.emit(`${out} = icmp ne ${val.type} ${val.repr}, ${zero.split(" ")[1]}`)
+      return out
+    }
+    throw new Error("Unsupported condition type")
   }
 
   buildFunction(fn: ast.FunctionStmt): string {
@@ -407,26 +566,45 @@ class FunctionBuilder {
     } else {
       this.functionRetType = llvmReturnTypeFromAst(fn.returnType)
     }
+    this.fnReturnTypeAst = fn.returnType
     const retTy = this.functionRetType
     const header = `define ${retTy} @${fn.name.lexeme}() {`
-    // collect body
+    // Build function signature with named params
+    const paramNames: string[] = []
+    fn.params.forEach((p) => {
+      paramNames.push(this.fresh(p.name.lexeme.replace(/[^a-zA-Z0-9]/g, "p")))
+    })
+    const paramSig = fn.params.map((p, i) => `${llvmTypeFromAst(p.type)} ${paramNames[i]}`).join(", ")
+    const realHeader = `define ${retTy} @${fn.name.lexeme}(${paramSig}) {`
+    this.lines.push(realHeader)
+    this.lines.push("entry:")
+    // params allocas and stores
+    fn.params.forEach((p, i) => {
+      const llvmTy = llvmTypeFromAst(p.type)
+      const slot = this.ensureLocal(p as any, llvmTy)
+      const incoming = paramNames[i]
+      this.lines.push(`  store ${llvmTy} ${incoming}, ${llvmTy}* ${slot.ptr}`)
+      this.paramArgsByName.set(p.name.lexeme, { type: llvmTy, repr: incoming })
+    })
+    // body
     if (fn.body) {
       for (const stmt of fn.body.block) {
         this.emitStmt(stmt)
       }
     }
     if (!this.hasReturn) {
-      if (retTy === "void") this.emit("ret void")
+      if (retTy === "void") this.lines.push("  ret void")
       else {
         const zero = retTy === "float" || retTy === "double" ? "0.0" : "0"
-        this.emit(`ret ${retTy} ${zero}`)
+        this.lines.push(`  ret ${retTy} ${zero}`)
       }
     }
+    const bodyLines = this.lines.filter((l) => l !== realHeader && l !== "entry:")
     const body = [
-      header,
+      realHeader,
       "entry:",
       ...this.allocas.map((l) => `  ${l}`),
-      ...this.lines.map((l) => `  ${l}`),
+      ...bodyLines.map((l) => l.endsWith(":") ? l : (l.startsWith("  ") ? l : `  ${l}`)),
       "}"
     ]
     return body.join("\n")
@@ -438,11 +616,19 @@ export function emitLlvm(context: ast.Context): string {
   const functions = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.FUNCTION_STMT
   ) as ast.FunctionStmt[]
+  const fnSigs = new Map<string, { ret: LlvmType | "void"; params: LlvmType[] }>()
+  functions.forEach((fn) => {
+    const ret = fn.name.lexeme === "main" ? ("i32" as const) : llvmReturnTypeFromAst(fn.returnType)
+    const params = fn.params.map((p) => llvmTypeFromAst(p.type))
+    fnSigs.set(fn.name.lexeme, { ret, params })
+  })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
   }
-  const fnBuilder = new FunctionBuilder(module)
-  module.addFunction(fnBuilder.buildFunction(mainFn))
+  functions.forEach((fn) => {
+    const fnBuilder = new FunctionBuilder(module, fnSigs)
+    module.addFunction(fnBuilder.buildFunction(fn))
+  })
   return module.build()
 }
