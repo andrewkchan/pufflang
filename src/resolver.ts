@@ -284,13 +284,23 @@ export function resolve(context: ast.Context, reportError: ReportError) {
           ) {
             const fn = symbol
             const params = fn.kind === ast.SymbolKind.FUNCTION ? fn.node.params : fn.node.members
-            // Check arity and types of arguments
-            if (op.args.length !== params.length) {
-              resolveError(op.paren, `Expected ${params.length} arguments but got ${op.args.length} in call to ${fn.node.name.lexeme}.`)
+            const minArgs = params.filter((p) => !p.defaultValue).length
+            if (op.args.length < minArgs || op.args.length > params.length) {
+              resolveError(op.paren, `Expected ${minArgs}${minArgs === params.length ? "" : "-" + params.length} arguments but got ${op.args.length} in call to ${fn.node.name.lexeme}.`)
             } else {
               for (let i = 0; i < op.args.length; i++) {
                 const param = params[i]
                 op.args[i] = resolveNodeWithCoercion(op.args[i], isLiveAtEnd, param.type, op.paren)
+              }
+              if (op.args.length < params.length) {
+                for (let i = op.args.length; i < params.length; i++) {
+                  const param = params[i]
+                  if (!param.defaultValue) {
+                    resolveError(op.paren, `Missing argument ${i + 1} to ${fn.node.name.lexeme}.`)
+                    break
+                  }
+                  op.args.push(resolveNodeWithCoercion(param.defaultValue, isLiveAtEnd, param.type, op.paren))
+                }
               }
             }
             if (fn.kind === ast.SymbolKind.FUNCTION) {
@@ -686,6 +696,12 @@ export function resolve(context: ast.Context, reportError: ReportError) {
         if (op.body) {
           pushScope(op.body.scope)
           pushFunction(op)
+          // resolve default values in function scope
+          op.params.forEach((param) => {
+            if (param.defaultValue) {
+              resolveNode(param.defaultValue, true)
+            }
+          })
           // 2. Ensure all return statements match the return type of the function
           // 3. If the function has a return type, ensure all control paths return a value
           let missingReturn = false

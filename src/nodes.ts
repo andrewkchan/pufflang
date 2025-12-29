@@ -697,6 +697,7 @@ export const BYTE_MAX = 255
 export interface Param {
   type: Type
   name: Token
+  defaultValue?: Expr | null
 }
 
 export type Stmt = BlockStmt | ExpressionStmt | IfStmt | LoopControlStmt | PrintStmt | ReturnStmt | SwitchStmt | VarStmt | WhileStmt

@@ -134,9 +134,14 @@ export function parse(tokens: Token[], reportError: ReportError): ast.Context {
       }
       const paramName = consume(TokenType.IDENTIFIER, "Expect identifier.")
       const paramType = type()
+      let defaultValue: ast.Expr | null = null
+      if (match(TokenType.EQUAL)) {
+        defaultValue = expression()
+      }
       params.push({
         name: paramName,
-        type: paramType
+        type: paramType,
+        defaultValue
       })
     }
     consume(TokenType.RIGHT_PAREN, "Expect ')' after parameters.")
