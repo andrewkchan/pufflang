@@ -989,6 +989,70 @@ export class Context {
     sqrt.symbol = this.functionSymbol(sqrt)
     this.global.define(memcpy.name.lexeme, memcpy.symbol)
     this.global.define(sqrt.name.lexeme, sqrt.symbol)
+
+    const builtinImports: Array<FunctionStmt> = [
+      importedFunctionStmt({
+        name: fakeToken(TokenType.IDENTIFIER, "__stdin_read__"),
+        params: [
+          { name: fakeToken(TokenType.IDENTIFIER, "dst"), type: ptrType(ByteType) },
+          { name: fakeToken(TokenType.IDENTIFIER, "len"), type: IntType },
+        ],
+        returnType: IntType,
+        symbol: null
+      }),
+      importedFunctionStmt({
+        name: fakeToken(TokenType.IDENTIFIER, "__stdout_write__"),
+        params: [
+          { name: fakeToken(TokenType.IDENTIFIER, "src"), type: ptrType(ByteType) },
+          { name: fakeToken(TokenType.IDENTIFIER, "len"), type: IntType },
+        ],
+        returnType: IntType,
+        symbol: null
+      }),
+      importedFunctionStmt({
+        name: fakeToken(TokenType.IDENTIFIER, "__read_file__"),
+        params: [
+          { name: fakeToken(TokenType.IDENTIFIER, "path"), type: ptrType(ByteType) },
+          { name: fakeToken(TokenType.IDENTIFIER, "pathLen"), type: IntType },
+          { name: fakeToken(TokenType.IDENTIFIER, "dst"), type: ptrType(ByteType) },
+          { name: fakeToken(TokenType.IDENTIFIER, "dstLen"), type: IntType },
+        ],
+        returnType: IntType,
+        symbol: null
+      }),
+      importedFunctionStmt({
+        name: fakeToken(TokenType.IDENTIFIER, "__write_file__"),
+        params: [
+          { name: fakeToken(TokenType.IDENTIFIER, "path"), type: ptrType(ByteType) },
+          { name: fakeToken(TokenType.IDENTIFIER, "pathLen"), type: IntType },
+          { name: fakeToken(TokenType.IDENTIFIER, "src"), type: ptrType(ByteType) },
+          { name: fakeToken(TokenType.IDENTIFIER, "srcLen"), type: IntType },
+        ],
+        returnType: IntType,
+        symbol: null
+      }),
+      importedFunctionStmt({
+        name: fakeToken(TokenType.IDENTIFIER, "__args_count__"),
+        params: [],
+        returnType: IntType,
+        symbol: null
+      }),
+      importedFunctionStmt({
+        name: fakeToken(TokenType.IDENTIFIER, "__args_get__"),
+        params: [
+          { name: fakeToken(TokenType.IDENTIFIER, "index"), type: IntType },
+          { name: fakeToken(TokenType.IDENTIFIER, "dst"), type: ptrType(ByteType) },
+          { name: fakeToken(TokenType.IDENTIFIER, "dstLen"), type: IntType },
+        ],
+        returnType: IntType,
+        symbol: null
+      }),
+    ]
+
+    builtinImports.forEach((fn) => {
+      fn.symbol = this.functionSymbol(fn)
+      this.global.define(fn.name.lexeme, fn.symbol)
+    })
   }
 
   variableSymbol(node: VarStmt, isGlobal: boolean): VariableSymbol {

@@ -65,25 +65,33 @@ async function expectOutput(source: string, expectedOutput: string) {
     let ioBuffer = ""
     let output = ""
 
+    const ioImports = {
+      log: (x: any) => {
+        output += x + "\n"
+      },
+      putchar: (x: number) => {
+        ioBuffer += codec.decodeASCIIChar(x)
+      },
+      putf: (x: number) => {
+        ioBuffer += x
+      },
+      puti: (x: number) => {
+        ioBuffer += x
+      },
+      flush: () => {
+        output += ioBuffer + "\n"
+        ioBuffer = ""
+      },
+      stdin_read: (_dst: number, _len: number) => 0,
+      stdout_write: (_src: number, len: number) => len,
+      read_file: (_path: number, _pathLen: number, _dst: number, _dstLen: number) => 0,
+      write_file: (_path: number, _pathLen: number, _src: number, srcLen: number) => srcLen,
+      args_count: () => 0,
+      args_get: (_index: number, _dst: number, _dstLen: number) => -1,
+    }
+
     const instance = await WebAssembly.instantiate(fs.readFileSync("test/tmp.wasm"), {
-      io: {
-        log: (x: any) => {
-          output += x + "\n"
-        },
-        putchar: (x: number) => {
-          ioBuffer += codec.decodeASCIIChar(x)
-        },
-        putf: (x: number) => {
-          ioBuffer += x
-        },
-        puti: (x: number) => {
-          ioBuffer += x
-        },
-        flush: () => {
-          output += ioBuffer + "\n"
-          ioBuffer = ""
-        }
-      }
+      io: ioImports
     });
     const exports = instance.instance.exports as any
     exports.__init_globals__()

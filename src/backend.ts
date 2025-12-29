@@ -1289,8 +1289,15 @@ export function emit(context: ast.Context): string {
     line(`(import "io" "putf" (func ${wasmId("__putf__")} (param f32)))`)
     line(`(import "io" "puti" (func ${wasmId("__puti__")} (param i32)))`)
     line(`(import "io" "flush" (func ${wasmId("__flush__")}))`)
+    line(`(import "io" "stdin_read" (func ${wasmId("__stdin_read__")} (param i32) (param i32) (result i32)))`)
+    line(`(import "io" "stdout_write" (func ${wasmId("__stdout_write__")} (param i32) (param i32) (result i32)))`)
+    line(`(import "io" "read_file" (func ${wasmId("__read_file__")} (param i32) (param i32) (param i32) (param i32) (result i32)))`)
+    line(`(import "io" "write_file" (func ${wasmId("__write_file__")} (param i32) (param i32) (param i32) (param i32) (result i32)))`)
+    line(`(import "io" "args_count" (func ${wasmId("__args_count__")} (result i32)))`)
+    line(`(import "io" "args_get" (func ${wasmId("__args_get__")} (param i32) (param i32) (param i32) (result i32)))`)
 
     line(`(memory $memory ${INITIAL_PAGES})`)
+    line(`(export "memory" (memory $memory))`)
 
     line(`(global ${wasmId("__stack_ptr__")} (mut i32) i32.const ${STACK_TOP_BYTE_OFFSET})`)
     let globalByteOffset = DATA_TOP_BYTE_OFFSET
