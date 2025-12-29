@@ -55,12 +55,12 @@ function llvmReturnTypeFromAst(type: ast.Type): LlvmType | "void" {
 }
 
 function formatFloatLiteral(value: number): string {
-  const s = value.toExponential(6)
-  const match = s.match(/^([0-9.]+)e([+-]?)(\d+)$/)
-  if (!match) return value.toString()
-  const [, mantissa, sign, exp] = match
-  const paddedExp = exp.padStart(2, "0")
-  return `${mantissa}e${sign || "+"}${paddedExp}`
+  const buf = new ArrayBuffer(8)
+  const view = new DataView(buf)
+  view.setFloat64(0, value, /* littleEndian */ false)
+  const high = view.getUint32(0, false).toString(16).padStart(8, "0")
+  const low = view.getUint32(4, false).toString(16).padStart(8, "0")
+  return `0x${high}${low}`
 }
 
 class LlvmModuleBuilder {
@@ -318,7 +318,11 @@ class FunctionBuilder {
           case ast.TypeCategory.ARRAY: {
             if (ast.isEqual(lit.type.elementType, ast.ByteType)) {
               const strPtr = this.module.gepStringPtr(String(lit.value))
-              return { type: "i8*", repr: strPtr }
+              return {
+                type: "i8*",
+                repr: strPtr,
+                array: { elem: "i8", length: (lit.type as ast.ArrayType).length }
+              }
             }
             throw new Error("Array literals not yet supported in LLVM backend.")
           }
@@ -885,7 +889,11 @@ class FunctionBuilder {
           this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i8* ${val.repr})`)
           break
         }
-        throw new Error("Printing non-byte arrays is not supported yet.")
+        // Print numeric arrays recursively: [a, b, c]
+        const elemTy = resolvedType.elementType
+        const len = resolvedType.length
+        this.emitPrintArray(val, elemTy, len)
+        break
       }
       case ast.TypeCategory.POINTER: {
         const fmtPtr = this.module.gepStringPtr("%p\n")
@@ -895,6 +903,58 @@ class FunctionBuilder {
       }
       default:
         throw new Error(`Printing unsupported type ${ast.typeToString(resolvedType)}`)
+    }
+  }
+
+  private emitPrintArray(arr: Value, elemTyAst: ast.Type, length: number) {
+    const elemTy = llvmTypeFromAst(elemTyAst)
+    // print '['
+    this.emitPrintRawString("[")
+    for (let i = 0; i < length; i++) {
+      const idxPtr = this.fresh("idxptr")
+      this.emit(`${idxPtr} = getelementptr ${elemTy}, ${elemTy}* ${arr.repr}, i32 ${i}`)
+      const ld = this.fresh("ldel")
+      this.emit(`${ld} = load ${elemTy}, ${elemTy}* ${idxPtr}`)
+      this.emitPrintScalar({ type: elemTy, repr: ld })
+      if (i !== length - 1) {
+        this.emitPrintRawString(", ")
+      }
+    }
+    this.emitPrintRawString("]\n")
+  }
+
+  private emitPrintRawString(s: string) {
+    const fmtPtr = this.module.gepStringPtr(s.includes("%") ? s.replace(/%/g, "%%") : s)
+    this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr})`)
+  }
+
+  private emitPrintScalar(val: Value) {
+    switch (val.type) {
+      case "i32": {
+        const fmtPtr = this.module.gepStringPtr("%d")
+        this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i32 ${val.repr})`)
+        break
+      }
+      case "i8": {
+        const fmtPtr = this.module.gepStringPtr("%d")
+        const widened = this.cast(val, "i32")
+        this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i32 ${widened.repr})`)
+        break
+      }
+      case "float": {
+        const fmtPtr = this.module.gepStringPtr("%f")
+        const widened = this.cast(val, "double")
+        this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, double ${widened.repr})`)
+        break
+      }
+      case "i1": {
+        const fmtPtr = this.module.gepStringPtr("%d")
+        const widened = this.cast(val, "i32")
+        this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i32 ${widened.repr})`)
+        break
+      }
+      default:
+        throw new Error("Unsupported scalar print")
     }
   }
 
