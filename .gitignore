@@ -6,3 +6,5 @@ coverage
 npm-debug.log*
 yarn-error.log*
 upstream-puffscript/
+test/tmp.wasm
+test/tmp.wat
