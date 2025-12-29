@@ -64,4 +64,24 @@ describe('IO builtins', () => {
     `, { args: ["hello"] })
     expect(result.output.trim()).toBe(["1", "5", "hello"].join("\n"))
   })
+
+  test('cat example reads file from fs', async () => {
+    const fs = require('fs')
+    const os = require('os')
+    const path = require('path')
+    const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'puff-io-'))
+    const filePath = path.join(tmpdir, 'in.txt')
+    fs.writeFileSync(filePath, 'xyz')
+    const catSource = fs.readFileSync(path.resolve(__dirname, '..', 'examples', 'cat.puff'), 'utf8')
+    const result = await runSource(catSource, { args: [filePath] })
+    expect(result.output).toBe('xyz')
+  })
+
+  test('echo example reads stdin', async () => {
+    const fs = require('fs')
+    const path = require('path')
+    const echoSource = fs.readFileSync(path.resolve(__dirname, '..', 'examples', 'echo.puff'), 'utf8')
+    const result = await runSource(echoSource, { stdin: 'hello\n' })
+    expect(result.output).toBe('hello\n')
+  })
 })
