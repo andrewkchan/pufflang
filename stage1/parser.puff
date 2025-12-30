@@ -2,39 +2,8 @@
 // Recognizes: def IDENT ( ) { return NUMBER; }
 // Token constants provided by scanner.puff (aligned with Stage0 TokenType).
 
-// --- Tiny AST scaffolding (parser-local, prefixed to avoid collisions) ---
-var PARSE_NODE_FUNCTION int = 1;
-var PARSE_NODE_RETURN int = 2;
-var PARSE_NODE_VAR int = 3;
-var PARSE_NODE_CALL int = 4;
-var PARSE_NODE_LITERAL int = 5;
-var PARSE_NODE_BLOCK int = 6;
-
-struct ParseNode { kind int, a int, b int, c int }
-struct ParseModule { nodes Vec, root int }
-
-def pnode_new(kind int, a int, b int, c int) ParseNode { return ParseNode{kind, a, b, c}; }
-
-def pmodule_new() ParseModule {
-  var v = vec_new(16, 16);
-  v.length = 0;
-  return ParseModule{v, -1};
-}
-
-def pmodule_add(mod ParseModule, n ParseNode) ParseModule {
-  var out = vec_reserve(mod.nodes, mod.nodes.length + 1);
-  var dest = vec_get_ptr(out, out.length);
-  (int~(dest))~ = n.kind;
-  (int~(dest + 4))~ = n.a;
-  (int~(dest + 8))~ = n.b;
-  (int~(dest + 12))~ = n.c;
-  out.length = out.length + 1;
-  return ParseModule{out, mod.root};
-}
-
-def pmodule_set_root(mod ParseModule, idx int) ParseModule {
-  return ParseModule{mod.nodes, idx};
-}
+// --- Tiny AST result using shared NodeArena from ast.puff ---
+struct ParseResult { arena NodeArena, root int }
 
 def safe_get(v VecInt, idx int) int {
   if (idx < 0 || idx >= v.length) { return -1; }
@@ -136,43 +105,43 @@ def parse_simple(tokens VecInt) int {
   return 1;
 }
 
-// Build a tiny AST for def/return-number functions.
-// Returns ParseModule with root set to the function node index, or empty module on failure.
-def parse_simple_ast(tokens VecInt) ParseModule {
-  var mod = pmodule_new();
+// Build a tiny AST for def/return-number functions into NodeArena.
+// Returns ParseResult with root set to the function node index, or root=-1 on failure.
+def parse_simple_ast(tokens VecInt) ParseResult {
+  var arena = nodearena_new(8);
+  var root = -1;
   var idx = 0;
-  if (safe_get(tokens, idx) != TOKEN_DEF) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_DEF) { return ParseResult{arena, root}; }
   idx = idx + 1;
-  if (safe_get(tokens, idx) != TOKEN_IDENTIFIER) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_IDENTIFIER) { return ParseResult{arena, root}; }
   idx = idx + 1;
-  if (safe_get(tokens, idx) != TOKEN_LEFT_PAREN) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_LEFT_PAREN) { return ParseResult{arena, root}; }
   idx = idx + 1;
-  if (safe_get(tokens, idx) != TOKEN_RIGHT_PAREN) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_RIGHT_PAREN) { return ParseResult{arena, root}; }
   idx = idx + 1;
-  if (safe_get(tokens, idx) != TOKEN_LEFT_BRACE) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_LEFT_BRACE) { return ParseResult{arena, root}; }
   idx = idx + 1;
-  if (safe_get(tokens, idx) != TOKEN_RETURN) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_RETURN) { return ParseResult{arena, root}; }
   idx = idx + 1;
-  if (safe_get(tokens, idx) != TOKEN_NUMBER) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_NUMBER) { return ParseResult{arena, root}; }
   var litVal = vecint_get(tokens, idx);
   idx = idx + 1;
-  if (safe_get(tokens, idx) != TOKEN_SEMICOLON) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_SEMICOLON) { return ParseResult{arena, root}; }
   idx = idx + 1;
-  if (safe_get(tokens, idx) != TOKEN_RIGHT_BRACE) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_RIGHT_BRACE) { return ParseResult{arena, root}; }
   idx = idx + 1;
-  if (safe_get(tokens, idx) != TOKEN_EOF) { return mod; }
+  if (safe_get(tokens, idx) != TOKEN_EOF) { return ParseResult{arena, root}; }
 
   // build nodes: literal, return, block, function
-  mod = pmodule_add(mod, pnode_new(PARSE_NODE_LITERAL, litVal, 0, 0));
-  var litIdx = mod.nodes.length - 1;
-  mod = pmodule_add(mod, pnode_new(PARSE_NODE_RETURN, litIdx, 0, 0));
-  var retIdx = mod.nodes.length - 1;
-  mod = pmodule_add(mod, pnode_new(PARSE_NODE_BLOCK, retIdx, 0, 0));
-  var blkIdx = mod.nodes.length - 1;
-  mod = pmodule_add(mod, pnode_new(PARSE_NODE_FUNCTION, blkIdx, 0, 0));
-  var fnIdx = mod.nodes.length - 1;
-  mod = pmodule_set_root(mod, fnIdx);
-  return mod;
+  arena = nodearena_push(arena, Node{NODE_LITERAL, 0, 0, 0, 0, litVal, -1});
+  var litIdx = arena.nodes.length - 1;
+  arena = nodearena_push(arena, Node{NODE_RETURN, litIdx, 0, 0, 0, 0, -1});
+  var retIdx = arena.nodes.length - 1;
+  arena = nodearena_push(arena, Node{NODE_BLOCK, retIdx, 0, 0, 0, 0, -1});
+  var blkIdx = arena.nodes.length - 1;
+  arena = nodearena_push(arena, Node{NODE_FUNCTION, blkIdx, 0, 0, 0, 0, -1});
+  root = arena.nodes.length - 1;
+  return ParseResult{arena, root};
 }
 
 // --- Minimal S-expression printer for a single def/return program ---

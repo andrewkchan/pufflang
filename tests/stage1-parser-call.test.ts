@@ -2,12 +2,14 @@ import fs from "fs"
 import path from "path"
 import { compileAndRunWithStdlib } from "../src/harness"
 
+const astSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "ast.puff"), "utf8")
 const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "scanner.puff"), "utf8")
 const parserSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "parser.puff"), "utf8")
 
 describe("Stage1 parser call expression (Puffscript)", () => {
   test("accepts return foo(a, b)", () => {
     const source = `
+    ${astSrc}
     ${scannerSrc}
     ${parserSrc}
     def main() {
