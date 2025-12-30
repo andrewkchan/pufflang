@@ -4,6 +4,15 @@ import path from "path"
 import { spawnSync } from "child_process"
 import { compile } from "./index"
 
+const stdlibBasePath = path.join(__dirname, "..", "stdlib", "base.puff")
+let cachedStdlibBase: string | null = null
+
+function loadStdlibBase(): string {
+  if (cachedStdlibBase !== null) return cachedStdlibBase
+  cachedStdlibBase = fs.readFileSync(stdlibBasePath, "utf8")
+  return cachedStdlibBase
+}
+
 export interface RunResult {
   stdout: string
   stderr: string
@@ -30,6 +39,11 @@ export function compileToLl(source: string, workdir?: string): string {
   return writeTempFile("program", ".ll", result.program, workdir)
 }
 
+export function compileWithStdlib(source: string, workdir?: string): string {
+  const prelude = loadStdlibBase()
+  return compileToLl(`${prelude}\n${source}`, workdir)
+}
+
 export function buildWithClang(irPath: string, outPath?: string): string {
   const output = outPath ?? path.join(path.dirname(irPath), "a.out")
   const build = spawnSync("clang", ["-x", "ir", irPath, "-lm", "-o", output], { encoding: "utf8" })
@@ -50,6 +64,12 @@ export function runBinary(binPath: string, input?: string, env?: NodeJS.ProcessE
 
 export function compileAndRun(source: string, input?: string, env?: NodeJS.ProcessEnv, args?: string[]): RunResult {
   const irPath = compileToLl(source)
+  const binPath = buildWithClang(irPath)
+  return runBinary(binPath, input, env, args)
+}
+
+export function compileAndRunWithStdlib(source: string, input?: string, env?: NodeJS.ProcessEnv, args?: string[]): RunResult {
+  const irPath = compileWithStdlib(source)
   const binPath = buildWithClang(irPath)
   return runBinary(binPath, input, env, args)
 }
