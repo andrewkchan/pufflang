@@ -3,6 +3,7 @@ import path from "path"
 import { compileAndRunWithStdlib } from "../src/harness"
 
 const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "scanner.puff"), "utf8")
+const astSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "ast.puff"), "utf8")
 const parserSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "parser.puff"), "utf8")
 const resolverSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "resolver.puff"), "utf8")
 const codegenSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "codegen.puff"), "utf8")
@@ -14,6 +15,7 @@ describe("Stage1 driver (scan+parse)", () => {
   test("compile_simple returns 1 for valid source", () => {
     const source = `
     ${scannerSrc}
+    ${astSrc}
     ${parserSrc}
     ${resolverSrc}
     ${codegenSrc}
@@ -33,6 +35,7 @@ describe("Stage1 driver (scan+parse)", () => {
   test("compile_simple returns 0 for invalid source", () => {
     const source = `
     ${scannerSrc}
+    ${astSrc}
     ${parserSrc}
     ${resolverSrc}
     ${codegenSrc}
