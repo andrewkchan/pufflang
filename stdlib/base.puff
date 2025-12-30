@@ -264,6 +264,23 @@ def str_slice(src byte~, slen int, start int, count int) String {
   return String{src + start, count};
 }
 
+// Trim ASCII whitespace (space, tab, CR, LF) from both ends; zero-copy.
+def str_trim_ascii(ws byte~, n int) String {
+  var start = 0;
+  while (start < n) {
+    var c = (ws + start)~;
+    if (c != byte(32) && c != byte(9) && c != byte(10) && c != byte(13)) { break; }
+    start = start + 1;
+  }
+  var end = n;
+  while (end > start) {
+    var c2 = (ws + end - 1)~;
+    if (c2 != byte(32) && c2 != byte(9) && c2 != byte(10) && c2 != byte(13)) { break; }
+    end = end - 1;
+  }
+  return String{ws + start, end - start};
+}
+
 // --- argv/env/time wrappers ---
 def argv_count() int { return __argc__(); }
 
