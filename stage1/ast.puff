@@ -254,6 +254,14 @@ def scope_get_info(s Scope, idx int) SymInfo {
   return SymInfo{kind, a, b, t};
 }
 
+// Lookup symbol (with parents) and return info (kind=0 if not found).
+def scope_lookup_info(s Scope, name String) SymInfo {
+  var idx = scope_lookup_index_current(s, name);
+  if (idx != -1) { return scope_get_info(s, idx); }
+  if (s.hasParent == 0) { return SymInfo{0, -1, -1, -1}; }
+  return SymInfo{0, -1, -1, -1};
+}
+
 // ---- Mangling helper (arity-based) ----
 // If only one overload and exported, keep name; otherwise append "__<arity>".
 def mangle_name(name String, arity int, isExported int, overloadCount int) String {
