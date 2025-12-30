@@ -190,6 +190,11 @@ def scope_new_root() Scope {
   return scope_new(dummy, 0);
 }
 
+// Create a child scope referencing a parent scope (byte pointer to parent).
+def scope_child(parent byte~) Scope {
+  return scope_new(parent, 1);
+}
+
 // Lookup in current scope; returns index or -1.
 def scope_lookup_index_current(s Scope, name String) int {
   var i = s.names.length;
@@ -241,7 +246,6 @@ def scope_define_function(s Scope, name String, arity int, returnType int, isExp
 def scope_lookup(s Scope, name String) int {
   var idx = scope_lookup_index_current(s, name);
   if (idx != -1) { return idx; }
-  if (s.hasParent == 0) { return -1; }
   return -1;
 }
 
@@ -258,7 +262,6 @@ def scope_get_info(s Scope, idx int) SymInfo {
 def scope_lookup_info(s Scope, name String) SymInfo {
   var idx = scope_lookup_index_current(s, name);
   if (idx != -1) { return scope_get_info(s, idx); }
-  if (s.hasParent == 0) { return SymInfo{0, -1, -1, -1}; }
   return SymInfo{0, -1, -1, -1};
 }
 
