@@ -21,7 +21,8 @@ def parse_simple(tokens VecInt) int {
   i = i + 1;
   if (safe_get(tokens, i) != TOKEN_RETURN) { return 0; }
   i = i + 1;
-  if (safe_get(tokens, i) != TOKEN_NUMBER) { return 0; }
+  var retk = safe_get(tokens, i);
+  if (retk != TOKEN_NUMBER && retk != TOKEN_IDENTIFIER) { return 0; }
   i = i + 1;
   if (safe_get(tokens, i) != TOKEN_SEMICOLON) { return 0; }
   i = i + 1;
