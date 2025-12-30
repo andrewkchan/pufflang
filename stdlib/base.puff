@@ -175,6 +175,19 @@ def sb_append_string(sb StringBuilder, s String) StringBuilder {
 }
 
 // --- String helpers ---
+// C-string length (walk until NUL).
+def cstr_len(s byte~) int {
+  var i = 0;
+  while ((s + i)~ != byte(0)) { i = i + 1; }
+  return i;
+}
+
+// Clone a C-string (up to NUL).
+def cstr_clone(s byte~) String {
+  var n = cstr_len(s);
+  return str_clone(s, n);
+}
+
 def str_eq(a byte~, alen int, b byte~, blen int) int {
   if (alen != blen) { return 0; }
   var i = 0;
@@ -228,6 +241,25 @@ def str_contains(hay byte~, hlen int, needle byte~, nlen int) int {
   var idx = str_index_of(hay, hlen, needle, nlen);
   if (idx >= 0) { return 1; }
   return 0;
+}
+
+// --- argv/env/time wrappers ---
+def argv_count() int { return __argc__(); }
+
+def argv_at(idx int) String {
+  var p = __argv_at__(idx);
+  return cstr_clone(p);
+}
+
+def getenv_clone(key byte~) String {
+  var p = __getenv__(key);
+  return cstr_clone(p);
+}
+
+def time_seconds() int {
+  // time(NULL) equivalent; storage can be null but allocate scratch to satisfy type
+  var scratch = __malloc__(8);
+  return __time__(scratch);
 }
 
 // --- File helpers ---
