@@ -143,6 +143,7 @@ def scan_kinds(src byte~, n int) VecInt {
       out = vecint_push(out, TOKEN_NUMBER);
       continue;
     }
+    if (c == byte(47)) { out = vecint_push(out, TOKEN_SLASH); i = i + 1; continue; }
     if (c == byte(42)) { out = vecint_push(out, TOKEN_STAR); i = i + 1; continue; }
     if (c == byte(45)) { out = vecint_push(out, TOKEN_MINUS); i = i + 1; continue; }
     if (c == byte(43)) { out = vecint_push(out, TOKEN_PLUS); i = i + 1; continue; }
