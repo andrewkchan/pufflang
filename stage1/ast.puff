@@ -168,8 +168,8 @@ struct Scope {
   arityA VecInt,  // primary arity for functions (or -1)
   arityB VecInt,  // secondary arity for overload (or -1)
   typeIds VecInt, // var type or function return type (or -1)
-  parent byte~,   // parent Scope*
-  hasParent int
+  depths VecInt,  // depth per entry
+  depth int       // current depth level
 }
 
 def scope_new(parent byte~, hasParent int) Scope {
@@ -179,19 +179,56 @@ def scope_new(parent byte~, hasParent int) Scope {
     vecint_new(8),
     vecint_new(8),
     vecint_new(8),
-    parent,
-    hasParent
+    vecint_new(8),
+    0
   };
 }
 
-// Root scope convenience constructor (no parent lookup).
+// Root scope convenience constructor.
 def scope_new_root() Scope {
   var dummy = __malloc__(32);
   return scope_new(dummy, 0);
 }
 
+def scope_enter(s Scope) Scope {
+  return Scope{s.names, s.kinds, s.arityA, s.arityB, s.typeIds, s.depths, s.depth + 1};
+}
+
+def scope_exit(s Scope) Scope {
+  var target = s.depth;
+  var names = s.names;
+  var kinds = s.kinds;
+  var aA = s.arityA;
+  var aB = s.arityB;
+  var tIds = s.typeIds;
+  var depths = s.depths;
+  while (names.length > 0) {
+    var d = vecint_get(depths, names.length - 1);
+    if (d != target) { break; }
+    names.length = names.length - 1;
+    kinds.length = kinds.length - 1;
+    aA.length = aA.length - 1;
+    aB.length = aB.length - 1;
+    tIds.length = tIds.length - 1;
+    depths.length = depths.length - 1;
+  }
+  return Scope{names, kinds, aA, aB, tIds, depths, target - 1};
+}
+
 // Lookup in current scope; returns index or -1.
 def scope_lookup_index_current(s Scope, name String) int {
+  var i = s.names.length;
+  while (i > 0) {
+    i = i - 1;
+    var n = vecstr_get(s.names, i);
+    if (vecint_get(s.depths, i) != s.depth) { continue; }
+    if (str_eq(n.data, n.length, name.data, name.length) == 1) { return i; }
+  }
+  return -1;
+}
+
+// Lookup across all depths (innermost-first); returns index or -1.
+def scope_lookup_index_any(s Scope, name String) int {
   var i = s.names.length;
   while (i > 0) {
     i = i - 1;
@@ -210,6 +247,7 @@ def scope_define_var(s Scope, name String, typeId int) ScopeResult {
   s.arityA = vecint_push(s.arityA, -1);
   s.arityB = vecint_push(s.arityB, -1);
   s.typeIds = vecint_push(s.typeIds, typeId);
+  s.depths = vecint_push(s.depths, s.depth);
   return ScopeResult{s, 0};
 }
 
@@ -222,6 +260,7 @@ def scope_define_function(s Scope, name String, arity int, returnType int, isExp
     s.arityA = vecint_push(s.arityA, arity);
     s.arityB = vecint_push(s.arityB, -1);
     s.typeIds = vecint_push(s.typeIds, returnType);
+    s.depths = vecint_push(s.depths, s.depth);
     return ScopeResult{s, 0};
   }
   var kind = vecint_get(s.kinds, idx);
@@ -239,9 +278,7 @@ def scope_define_function(s Scope, name String, arity int, returnType int, isExp
 
 // Lookup through parents; returns index in found scope or -1.
 def scope_lookup(s Scope, name String) int {
-  var idx = scope_lookup_index_current(s, name);
-  if (idx != -1) { return idx; }
-  return -1;
+  return scope_lookup_index_any(s, name);
 }
 
 // Get symbol info by index in this scope.
@@ -255,7 +292,7 @@ def scope_get_info(s Scope, idx int) SymInfo {
 
 // Lookup symbol (with parents) and return info (kind=0 if not found).
 def scope_lookup_info(s Scope, name String) SymInfo {
-  var idx = scope_lookup_index_current(s, name);
+  var idx = scope_lookup_index_any(s, name);
   if (idx != -1) { return scope_get_info(s, idx); }
   return SymInfo{0, -1, -1, -1};
 }
