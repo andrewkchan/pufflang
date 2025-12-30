@@ -77,20 +77,16 @@ var TOKEN_WHILE int = 69;
 // EOF
 var TOKEN_EOF int = 70;
 
-// Rich token struct (for Stage1 compiler) stored in generic Vec.
+// Token storage (currently store only kind as int for minimal footprint).
 struct Token { kind int, start int, length int, line int }
 
-// Helper constructors for token Vec
-def make_token(kind int, start int, length int, line int) Token {
-  return Token{kind, start, length, line};
-}
-
 def vec_token_new(cap int) Vec {
-  return vec_new(16, cap); // 4 ints = 16 bytes
+  return vec_new(4, cap);
 }
 
-def push_token(v Vec, t Token) Vec {
-  return vec_push(v, byte~(&t));
+def push_token_kind(v Vec, kind int) Vec {
+  var k = kind;
+  return vec_push(v, byte~(&k));
 }
 
 def is_alpha(b byte) int {
@@ -179,7 +175,7 @@ def scan_tokens(src byte~, n int) Vec {
   var i = 0;
   while (i < kinds.length) {
     var k = vecint_get(kinds, i);
-    out = push_token(out, make_token(k, 0, 0, 1));
+    out = push_token_kind(out, k);
     i = i + 1;
   }
   return out;
@@ -194,5 +190,5 @@ def token_kind_at(tokens Vec, idx int) int {
 }
 
 def token_length_at(tokens Vec, idx int) int {
-  return (int~(vec_get_ptr(tokens, idx) + 8))~; // offset to length
+  return 0;
 }
