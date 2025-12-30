@@ -1264,7 +1264,8 @@ class FunctionBuilder {
     if (isPtr(value.type) && isPtr(target)) {
       const out = this.fresh("bitcast")
       this.emit(`${out} = bitcast ${value.type} ${value.repr} to ${target}`)
-      return { type: target, repr: out, array: value.array, ptr: value.ptr, struct: value.struct }
+      const elem = (target.endsWith("*") ? target.slice(0, -1) : "i8") as LlvmType
+      return { type: target, repr: out, array: value.array, ptr: { elem }, struct: value.struct }
     }
     if (isPtr(value.type) && target === "i32") {
       const out = this.fresh("ptrtoi32")
@@ -1333,7 +1334,8 @@ class FunctionBuilder {
   }
 
   private pointerValue(ptrRepr: string, elem: LlvmType): Value {
-    return { type: "i8*", repr: ptrRepr, ptr: { elem } }
+    const ty = `${elem}*` as LlvmType
+    return { type: ty, repr: ptrRepr, ptr: { elem } }
   }
 
   emitPrint(expr: ast.Expr) {

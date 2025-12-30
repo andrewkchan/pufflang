@@ -166,3 +166,91 @@ def read_file_all(path byte~) Buffer {
   __free__(tmp);
   return Buffer{buf, length};
 }
+
+// --- Map (int -> int) with open addressing ---
+struct Map { data byte~, cap int, length int }
+var MAP_EMPTY int = -2147483648;
+
+def map_new(cap int) Map {
+  var c = cap;
+  if (c < 8) { c = 8; }
+  // ensure power of two
+  var pow = 8;
+  while (pow < c) { pow = pow * 2; }
+  c = pow;
+  var bytes = c * 8; // each entry: key(int), value(int)
+  var data = __malloc__(bytes);
+  var i = 0;
+  while (i < c) {
+    var off = i * 8;
+    (int~(data + off))~ = MAP_EMPTY;
+    (int~(data + off + 4))~ = 0;
+    i = i + 1;
+  }
+  return Map{data, c, 0};
+}
+
+def map_hash(k int, mask int) int {
+  // Knuth multiplicative hash
+  var h = k * 2654435761;
+  return h & mask;
+}
+
+def map_resize(m Map, newCap int) Map {
+  var newMap = map_new(newCap);
+  var i = 0;
+  while (i < m.cap) {
+    var off = i * 8;
+    var key = (int~(m.data + off))~;
+    if (key != MAP_EMPTY) {
+      var val = (int~(m.data + off + 4))~;
+      newMap = map_put(newMap, key, val);
+    }
+    i = i + 1;
+  }
+  __free__(m.data);
+  return newMap;
+}
+
+def map_load_too_high(m Map) int {
+  // load factor > 0.7 -> len * 10 >= cap * 7
+  if (m.length * 10 >= m.cap * 7) { return 1; }
+  return 0;
+}
+
+def map_put(m Map, key int, value int) Map {
+  var mask = m.cap - 1;
+  var idx = map_hash(key, mask);
+  while (true) {
+    var off = idx * 8;
+    var k = (int~(m.data + off))~;
+    if (k == MAP_EMPTY || k == key) {
+      var newLen = m.length;
+      if (k == MAP_EMPTY) { newLen = newLen + 1; }
+      (int~(m.data + off))~ = key;
+      (int~(m.data + off + 4))~ = value;
+      var out = Map{m.data, m.cap, newLen};
+      if (map_load_too_high(out) == 1) {
+        return map_resize(out, m.cap * 2);
+      }
+      return out;
+    }
+    idx = (idx + 1) & mask;
+  }
+  return m; // unreachable
+}
+
+def map_get(m Map, key int) int {
+  var mask = m.cap - 1;
+  var idx = map_hash(key, mask);
+  var start = idx;
+  while (true) {
+    var off = idx * 8;
+    var k = (int~(m.data + off))~;
+    if (k == MAP_EMPTY) { return MAP_EMPTY; }
+    if (k == key) { return (int~(m.data + off + 4))~; }
+    idx = (idx + 1) & mask;
+    if (idx == start) { return MAP_EMPTY; }
+  }
+  return MAP_EMPTY;
+}
