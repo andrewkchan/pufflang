@@ -15,3 +15,76 @@ def resolve_simple(tokens VecInt) int {
   if (hasReturn == 0) { return 0; }
   return 1;
 }
+
+// --- Simple scope tracking for var uniqueness ---
+struct ScopeNames { names VecStr, depths VecInt, depth int }
+
+def scope_names_new() ScopeNames {
+  return ScopeNames{vecstr_new(8), vecint_new(8), 0};
+}
+
+def scope_names_enter(s ScopeNames) ScopeNames {
+  return ScopeNames{s.names, s.depths, s.depth + 1};
+}
+
+def scope_names_exit(s ScopeNames) ScopeNames {
+  if (s.depth == 0) { return s; }
+  var names = s.names;
+  var depths = s.depths;
+  var d = s.depth;
+  while (names.length > 0 && vecint_get(depths, names.length - 1) == d) {
+    var popped = vecstr_pop(names);
+    names = popped.vec;
+    var pd = vecint_pop(depths);
+    depths = pd.vec;
+  }
+  return ScopeNames{names, depths, d - 1};
+}
+
+def scope_names_lookup_current(s ScopeNames, name String) int {
+  var i = s.names.length;
+  while (i > 0) {
+    i = i - 1;
+    if (vecint_get(s.depths, i) != s.depth) { break; }
+    var n = vecstr_get(s.names, i);
+    if (str_eq(n.data, n.length, name.data, name.length) == 1) { return 1; }
+  }
+  return 0;
+}
+
+def scope_names_define(s ScopeNames, name String) ScopeNames {
+  var names = s.names;
+  var depths = s.depths;
+  var clone = str_clone(name.data, name.length);
+  names = vecstr_push(names, clone);
+  depths = vecint_push(depths, s.depth);
+  return ScopeNames{names, depths, s.depth};
+}
+
+// Resolve with duplicate-var detection and return presence.
+// Returns 1 if ok, 0 on error.
+def resolve_with_scopes(src byte~, n int) int {
+  var tokens = scan_tokens(src, n);
+  if (tokens.length == 0) { return 0; }
+  var lastKind = token_kind_at(tokens, tokens.length - 1);
+  if (lastKind != TOKEN_EOF) { return 0; }
+  var hasReturn = 0;
+  var scope = scope_names_new();
+  var i = 0;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == TOKEN_LEFT_BRACE) { scope = scope_names_enter(scope); i = i + 1; continue; }
+    if (k == TOKEN_RIGHT_BRACE) { scope = scope_names_exit(scope); i = i + 1; continue; }
+    if (k == TOKEN_VAR) {
+      var nameTok = i + 1;
+      if (nameTok >= tokens.length) { return 0; }
+      var name = String{token_start_at(tokens, nameTok) + src, token_length_at(tokens, nameTok)};
+      if (scope_names_lookup_current(scope, name) == 1) { return 0; }
+      scope = scope_names_define(scope, name);
+    }
+    if (k == TOKEN_RETURN) { hasReturn = 1; }
+    i = i + 1;
+  }
+  if (hasReturn == 0) { return 0; }
+  return 1;
+}
