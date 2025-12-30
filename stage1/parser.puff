@@ -7,18 +7,45 @@ def safe_get(v VecInt, idx int) int {
   return vecint_get(v, idx);
 }
 
-// Parse a tiny expression: IDENT|NUMBER [op IDENT|NUMBER] with op in {+, -, *, /}.
+// Parse a tiny expression (non-recursive):
+// primary: IDENT (opt zero-or-more args, each IDENT/NUMBER) | NUMBER
+// optional binop: (+|-|*|/) primary
 // Returns the next index on success, or -1 on failure.
-def parse_expr(tokens VecInt, i int) int {
+def parse_primary(tokens VecInt, i int) int {
   var k = safe_get(tokens, i);
   if (k != TOKEN_NUMBER && k != TOKEN_IDENTIFIER) { return -1; }
   i = i + 1;
+  if (k == TOKEN_IDENTIFIER && safe_get(tokens, i) == TOKEN_LEFT_PAREN) {
+    i = i + 1;
+    if (safe_get(tokens, i) == TOKEN_RIGHT_PAREN) {
+      i = i + 1;
+    } else {
+      var arg = safe_get(tokens, i);
+      if (arg != TOKEN_NUMBER && arg != TOKEN_IDENTIFIER) { return -1; }
+      i = i + 1;
+      while (safe_get(tokens, i) == TOKEN_COMMA) {
+        i = i + 1;
+        var arg2 = safe_get(tokens, i);
+        if (arg2 != TOKEN_NUMBER && arg2 != TOKEN_IDENTIFIER) { return -1; }
+        i = i + 1;
+      }
+      if (safe_get(tokens, i) != TOKEN_RIGHT_PAREN) { return -1; }
+      i = i + 1;
+    }
+  }
+  return i;
+}
+
+def parse_expr(tokens VecInt, i int) int {
+  var next = parse_primary(tokens, i);
+  if (next == -1) { return -1; }
+  i = next;
   var op = safe_get(tokens, i);
   if (op == TOKEN_PLUS || op == TOKEN_MINUS || op == TOKEN_STAR || op == TOKEN_SLASH) {
     i = i + 1;
-    var rhs = safe_get(tokens, i);
-    if (rhs != TOKEN_NUMBER && rhs != TOKEN_IDENTIFIER) { return -1; }
-    i = i + 1;
+    var rhs = parse_primary(tokens, i);
+    if (rhs == -1) { return -1; }
+    i = rhs;
   }
   return i;
 }
