@@ -276,7 +276,7 @@ def scope_define_function(s Scope, name String, arity int, returnType int, isExp
   return ScopeResult{s, 1};
 }
 
-// Lookup through parents; returns index in found scope or -1.
+// Lookup symbol across depths; returns index or -1.
 def scope_lookup(s Scope, name String) int {
   return scope_lookup_index_any(s, name);
 }
@@ -290,7 +290,7 @@ def scope_get_info(s Scope, idx int) SymInfo {
   return SymInfo{kind, a, b, t};
 }
 
-// Lookup symbol (with parents) and return info (kind=0 if not found).
+// Lookup symbol (any depth) and return info (kind=0 if not found).
 def scope_lookup_info(s Scope, name String) SymInfo {
   var idx = scope_lookup_index_any(s, name);
   if (idx != -1) { return scope_get_info(s, idx); }
