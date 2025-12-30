@@ -1,7 +1,7 @@
 import * as ast from "./nodes"
 import { UTF8Codec } from "./util"
 
-type LlvmType = "i1" | "i8" | "i32" | "i64" | "float" | "double" | "i8*" | `%struct.${string}*`
+type LlvmType = string
 
 interface ArrayInfo {
   elem: LlvmType // base element LLVM type (non-array)
@@ -40,7 +40,7 @@ function llvmTypeFromAst(type: ast.Type): LlvmType {
     case ast.TypeCategory.FLOAT:
       return "float"
     case ast.TypeCategory.POINTER:
-      return "i8*" // placeholder until pointer support
+      return `${llvmTypeFromAst((type as ast.PointerType).elementType)}*`
     case ast.TypeCategory.ARRAY: {
       const arr = type as ast.ArrayType
       const baseTy = baseElemType(arr)
@@ -174,6 +174,26 @@ class LlvmModuleBuilder {
     this.declare("declare i8* @getenv(i8*)")
     // memcpy
     this.declare("declare void @llvm.memcpy.p0.p0.i64(i8*, i8*, i64, i1)")
+    // argv/argc capture
+    this.addGlobal("@__puff_argc = global i32 0")
+    this.addGlobal("@__puff_argv = global i8** null")
+    this.addFunction(`define i32 @__argc__() {
+entry:
+  %v = load i32, i32* @__puff_argc
+  ret i32 %v
+}`)
+    this.addFunction(`define i8** @__argv__() {
+entry:
+  %v = load i8**, i8*** @__puff_argv
+  ret i8** %v
+}`)
+    this.addFunction(`define i8* @__argv_at(i32 %idx0) {
+entry:
+  %argv = load i8**, i8*** @__puff_argv
+  %ptr = getelementptr i8*, i8** %argv, i32 %idx0
+  %val = load i8*, i8** %ptr
+  ret i8* %val
+}`)
   }
 
   build(): string {
@@ -345,8 +365,8 @@ class FunctionBuilder {
       case "i8*":
         return 8
       default:
-        // struct pointer size (assume 8 on 64-bit)
-        if (ty.startsWith("%struct.")) return 8
+        // any pointer size (assume 8 on 64-bit)
+        if (ty.endsWith("*")) return 8
         throw new Error(`Unknown llvm type size for ${ty}`)
     }
   }
@@ -816,16 +836,9 @@ class FunctionBuilder {
               const basePtr = left.ptr ? left : right
               const offsetVal = left.ptr ? right : left
               const offCast = this.cast(offsetVal, "i32")
-              let elemTy = basePtr.ptr!.elem
-              let gepElem: LlvmType | string = elemTy
-              if (typeof elemTy === "string" && elemTy.endsWith("*")) {
-                gepElem = elemTy.substring(0, elemTy.length - 1)
-              }
-              if (typeof gepElem !== "string" || gepElem === "") {
-                gepElem = "i8"
-              }
-              const castPtr = this.fresh("ptrbc")
-              this.emit(`${castPtr} = bitcast i8* ${basePtr.repr} to ${gepElem}*`)
+              const elemTy = basePtr.ptr!.elem
+              const ptrTy = basePtr.type as LlvmType
+              const castPtr = basePtr.repr
               const signedOff = this.fresh("idx")
               if (b.operator.lexeme === "-") {
                 const neg = this.fresh("newoff")
@@ -835,7 +848,7 @@ class FunctionBuilder {
                 this.emit(`${signedOff} = add i32 0, ${offCast.repr}`)
               }
               const gep = this.fresh("ptradd")
-              this.emit(`${gep} = getelementptr ${gepElem}, ${gepElem}* ${castPtr}, i32 ${signedOff}`)
+              this.emit(`${gep} = getelementptr ${elemTy}, ${ptrTy} ${castPtr}, i32 ${signedOff}`)
               return this.pointerValue(gep, basePtr.ptr!.elem)
             }
             if (left.type === "i32") {
@@ -1724,6 +1737,12 @@ class FunctionBuilder {
       this.paramSlotsByName.set(p.name.lexeme, entry)
       this.paramArgsByName.set(p.name.lexeme, { type: llvmTy, repr: incoming })
     })
+    if (fn.name.lexeme === "main" && paramNames.length - paramOffset >= 2) {
+      const argcArg = paramNames[paramOffset + 0]
+      const argvArg = paramNames[paramOffset + 1]
+      this.lines.push(`  store i32 ${argcArg}, i32* @__puff_argc`)
+      this.lines.push(`  store i8** ${argvArg}, i8*** @__puff_argv`)
+    }
     if (this.currentFunctionName === "main" && this.fnSigs.has("__init_globals__")) {
       this.lines.push("  call void @__init_globals__()")
     }
@@ -1866,6 +1885,9 @@ export function emitLlvm(context: ast.Context): string {
   fnSigs.set("__close__/1", { ret: "i32", params: ["i32"], retAst: ast.IntType, mangled: "close" })
   fnSigs.set("__time__/1", { ret: "i32", params: ["i8*"], retAst: ast.IntType, mangled: "time" })
   fnSigs.set("__getenv__/1", { ret: "i8*", params: ["i8*"], retAst: ast.ptrType(ast.ByteType), mangled: "getenv" })
+  fnSigs.set("__argc__/0", { ret: "i32", params: [], retAst: ast.IntType, mangled: "__argc__" })
+  fnSigs.set("__argv__/0", { ret: "i8**", params: [], retAst: ast.ptrType(ast.ptrType(ast.ByteType)), mangled: "__argv__" })
+  fnSigs.set("__argv_at__/1", { ret: "i8*", params: ["i32"], retAst: ast.ptrType(ast.ByteType), mangled: "__argv_at" })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
