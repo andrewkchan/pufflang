@@ -105,6 +105,67 @@ def vecint_set(v VecInt, idx int, value int) VecInt {
   return v;
 }
 
+// --- VecStr helpers (store String structs) ---
+struct VecStr { data byte~, length int, cap int }
+struct PopStr { vec VecStr, value String }
+
+def vecstr_new(cap int) VecStr {
+  var c = cap;
+  if (c < 1) { c = 1; }
+  var data = __malloc__(c * 8); // String is two ints (ptr + length)
+  return VecStr{data, 0, c};
+}
+
+def vecstr_reserve(v VecStr, need int) VecStr {
+  if (need <= v.cap) { return v; }
+  var newCap = v.cap * 2;
+  if (newCap < need) { newCap = need; }
+  var newData = __malloc__(newCap * 8);
+  var i = 0;
+  while (i < v.length * 8) {
+    (newData + i)~ = (v.data + i)~;
+    i = i + 1;
+  }
+  __free__(v.data);
+  return VecStr{newData, v.length, newCap};
+}
+
+def vecstr_push(v VecStr, s String) VecStr {
+  var out = vecstr_reserve(v, v.length + 1);
+  var dest = out.data + (out.length * 8);
+  var i = 0;
+  while (i < 8) {
+    (dest + i)~ = (byte~(&s) + i)~;
+    i = i + 1;
+  }
+  out.length = out.length + 1;
+  return out;
+}
+
+def vecstr_pop(v VecStr) PopStr {
+  var out = v;
+  out.length = out.length - 1;
+  var dest = out.data + (out.length * 8);
+  var s = String{__malloc__(1), 0};
+  var i = 0;
+  while (i < 8) {
+    (byte~(&s) + i)~ = (dest + i)~;
+    i = i + 1;
+  }
+  return PopStr{out, s};
+}
+
+def vecstr_get(v VecStr, idx int) String {
+  var dest = v.data + (idx * 8);
+  var s = String{__malloc__(1), 0};
+  var i = 0;
+  while (i < 8) {
+    (byte~(&s) + i)~ = (dest + i)~;
+    i = i + 1;
+  }
+  return s;
+}
+
 // --- Generic Vec helpers ---
 def vec_new(elemSize int, cap int) Vec {
   var c = cap;
