@@ -1,0 +1,1554 @@
+import { fakeToken, Token } from './scanner'
+import { TokenType } from './tokens'
+import { assertUnreachable } from './util'
+
+export enum NodeKind {
+  // expressions
+  ASSIGN_EXPR,
+  BINARY_EXPR,
+  CALL_EXPR,
+  CAST_EXPR,
+  DEREF_EXPR,
+  DOT_EXPR,
+  GROUP_EXPR,
+  INDEX_EXPR,
+  LEN_EXPR,
+  LIST_EXPR,
+  LITERAL_EXPR,
+  LOGICAL_EXPR,
+  TERNARY_EXPR,
+  UPDATE_EXPR,
+  UNARY_EXPR,
+  VARIABLE_EXPR,
+
+  // statements
+  BLOCK_STMT,
+  EXPRESSION_STMT,
+  FUNCTION_STMT,
+  IF_STMT,
+  LOOP_CONTROL_STMT,
+  PRINT_STMT,
+  RETURN_STMT,
+  SWITCH_STMT,
+  STRUCT_STMT,
+  VAR_STMT,
+  WHILE_STMT
+}
+
+export interface Node {
+  kind: NodeKind
+}
+
+export type Expr = AssignExpr | BinaryExpr | CallExpr | CastExpr | DerefExpr | DotExpr | GroupExpr | IndexExpr | LenExpr | ListExpr | LiteralExpr | LogicalExpr | TernaryExpr | UpdateExpr | UnaryExpr | VariableExpr
+
+export interface AssignExpr extends Node {
+  kind: NodeKind.ASSIGN_EXPR
+  operator: Token
+  left: IndexExpr | VariableExpr | DerefExpr | DotExpr
+  right: Expr
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function assignExpr({ left, operator, right }: { left: IndexExpr | VariableExpr | DerefExpr | DotExpr; operator: Token; right: Expr }): AssignExpr {
+  return {
+    kind: NodeKind.ASSIGN_EXPR,
+    operator,
+    left,
+    right,
+    resolvedType: null
+  }
+}
+
+export interface BinaryExpr extends Node {
+  kind: NodeKind.BINARY_EXPR
+  left: Expr
+  operator: Token
+  right: Expr
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function binaryExpr({ left, operator, right }: { left: Expr; operator: Token; right: Expr }): BinaryExpr {
+  return {
+    kind: NodeKind.BINARY_EXPR,
+    left,
+    operator,
+    right,
+    resolvedType: null
+  }
+}
+
+export interface CallExpr extends Node {
+  kind: NodeKind.CALL_EXPR
+  callee: Expr
+  paren: Token
+  args: Expr[]
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function callExpr({ callee, paren, args }: { callee: Expr; paren: Token; args: Expr[] }): CallExpr {
+  return {
+    kind: NodeKind.CALL_EXPR,
+    callee,
+    paren,
+    args,
+    resolvedType: null
+  }
+}
+
+export interface CastExpr extends Node {
+  kind: NodeKind.CAST_EXPR
+  token: Token
+  type: Type
+  value: Expr
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function castExpr({ token, type, value }: { token: Token; type: Type; value: Expr }): CastExpr {
+  return {
+    kind: NodeKind.CAST_EXPR,
+    token,
+    type,
+    value,
+    resolvedType: null
+  }
+}
+
+export interface DerefExpr extends Node {
+  kind: NodeKind.DEREF_EXPR
+  operator: Token
+  value: Expr
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function derefExpr({ operator, value }: { operator: Token; value: Expr }): DerefExpr {
+  return {
+    kind: NodeKind.DEREF_EXPR,
+    operator,
+    value,
+    resolvedType: null
+  }
+}
+
+export interface DotExpr extends Node {
+  kind: NodeKind.DOT_EXPR
+  callee: Expr
+  dot: Token
+  identifier: Token
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function dotExpr({ callee, dot, identifier }: { callee: Expr; dot: Token; identifier: Token }): DotExpr {
+  return {
+    kind: NodeKind.DOT_EXPR,
+    callee,
+    dot,
+    identifier,
+    resolvedType: null
+  }
+}
+
+export interface GroupExpr extends Node {
+  kind: NodeKind.GROUP_EXPR
+  expression: Expr
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function groupExpr({ expression }: { expression: Expr }): GroupExpr {
+  return {
+    kind: NodeKind.GROUP_EXPR,
+    expression,
+    resolvedType: null
+  }
+}
+
+export interface IndexExpr extends Node {
+  kind: NodeKind.INDEX_EXPR
+  callee: Expr
+  bracket: Token
+  index: Expr
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function indexExpr({ callee, bracket, index }: { callee: Expr; bracket: Token; index: Expr }): IndexExpr {
+  return {
+    kind: NodeKind.INDEX_EXPR,
+    callee,
+    bracket,
+    index,
+    resolvedType: null
+  }
+}
+
+export interface LenExpr extends Node {
+  kind: NodeKind.LEN_EXPR
+  value: Expr
+  resolvedLength: number | null // filled in by resolver pass
+  resolvedType: typeof IntType
+}
+
+export function lenExpr({ value }: { value: Expr }): LenExpr {
+  return {
+    kind: NodeKind.LEN_EXPR,
+    value,
+    resolvedLength: null,
+    resolvedType: IntType
+  }
+}
+
+export enum ListKind {
+  LIST,
+  REPEAT
+}
+
+interface ListInitializer {
+  kind: ListKind.LIST
+  values: Expr[]
+}
+
+interface RepeatInitializer {
+  kind: ListKind.REPEAT
+  value: Expr
+  length: number
+}
+
+export interface ListExpr extends Node {
+  kind: NodeKind.LIST_EXPR
+  bracket: Token
+  initializer: ListInitializer | RepeatInitializer
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function listExpr({ values, bracket }: { values: Expr[]; bracket: Token }): ListExpr {
+  return {
+    kind: NodeKind.LIST_EXPR,
+    bracket,
+    initializer: {
+      kind: ListKind.LIST,
+      values
+    },
+    resolvedType: null
+  }
+}
+
+export function repeatExpr({ bracket, value, length }: { bracket: Token; value: Expr; length: number }): ListExpr {
+  return {
+    kind: NodeKind.LIST_EXPR,
+    bracket,
+    initializer: {
+      kind: ListKind.REPEAT,
+      value,
+      length
+    },
+    resolvedType: null
+  }
+}
+
+export interface LiteralExpr extends Node {
+  kind: NodeKind.LITERAL_EXPR
+  value: any
+  type: Type
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function literalExpr({ value, type }: { value: any; type: Type }): LiteralExpr {
+  return {
+    kind: NodeKind.LITERAL_EXPR,
+    value,
+    type,
+    resolvedType: null
+  }
+}
+
+export interface LogicalExpr extends Node {
+  kind: NodeKind.LOGICAL_EXPR
+  left: Expr
+  operator: Token
+  right: Expr
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function logicalExpr({ left, operator, right }: { left: Expr; operator: Token; right: Expr }): LogicalExpr {
+  return {
+    kind: NodeKind.LOGICAL_EXPR,
+    left,
+    operator,
+    right,
+    resolvedType: null
+  }
+}
+
+export interface TernaryExpr extends Node {
+  kind: NodeKind.TERNARY_EXPR
+  condition: Expr
+  thenBranch: Expr
+  elseBranch: Expr
+  resolvedType: Type | null
+}
+
+export function ternaryExpr({ condition, thenBranch, elseBranch }: { condition: Expr; thenBranch: Expr; elseBranch: Expr }): TernaryExpr {
+  return {
+    kind: NodeKind.TERNARY_EXPR,
+    condition,
+    thenBranch,
+    elseBranch,
+    resolvedType: null
+  }
+}
+
+export interface UpdateExpr extends Node {
+  kind: NodeKind.UPDATE_EXPR
+  operator: Token // ++ or --
+  operand: Expr
+  isPrefix: boolean
+  resolvedType: Type | null
+}
+
+export function updateExpr({ operator, operand, isPrefix }: { operator: Token; operand: Expr; isPrefix: boolean }): UpdateExpr {
+  return {
+    kind: NodeKind.UPDATE_EXPR,
+    operator,
+    operand,
+    isPrefix,
+    resolvedType: null
+  }
+}
+
+export interface UnaryExpr extends Node {
+  kind: NodeKind.UNARY_EXPR
+  operator: Token
+  value: Expr
+  resolvedType: Type | null // filled in by resolver pass
+}
+
+export function unaryExpr({ operator, value }: { operator: Token; value: Expr }): UnaryExpr {
+  return {
+    kind: NodeKind.UNARY_EXPR,
+    operator,
+    value,
+    resolvedType: null
+  }
+}
+
+export interface VariableExpr extends Node {
+  kind: NodeKind.VARIABLE_EXPR
+  name: Token
+  resolvedType: Type | null // filled in by resolver pass
+  resolvedSymbol: Symbol | null // filled in by resolver pass
+}
+
+export function variableExpr({ name }: { name: Token }): VariableExpr {
+  return {
+    kind: NodeKind.VARIABLE_EXPR,
+    name,
+    resolvedType: null,
+    resolvedSymbol: null
+  }
+}
+
+export enum TypeCategory {
+  ARRAY,
+  BOOL,
+  BYTE,
+  ERROR,
+  FLOAT,
+  INT,
+  POINTER,
+  STRUCT,
+  VOID
+}
+
+export const ErrorType = {
+  category: TypeCategory.ERROR as const
+}
+
+export const VoidType = {
+  category: TypeCategory.VOID as const
+}
+
+export const IntType = {
+  category: TypeCategory.INT as const
+}
+
+export const FloatType = {
+  category: TypeCategory.FLOAT as const
+}
+
+export const ByteType = {
+  category: TypeCategory.BYTE as const
+}
+
+export const BoolType = {
+  category: TypeCategory.BOOL as const
+}
+
+export type SimpleType = typeof IntType | typeof FloatType | typeof ByteType | typeof BoolType
+
+export interface ArrayType {
+  category: TypeCategory.ARRAY
+  elementType: Type
+  length: number
+}
+
+export function arrayType(elementType: Type, length: number): ArrayType {
+  return {
+    category: TypeCategory.ARRAY,
+    elementType,
+    length
+  }
+}
+
+export interface StructType {
+  category: TypeCategory.STRUCT
+  name: Token
+  resolvedStruct: StructStmt | null // filled in by resolver
+}
+
+export function unresolvedStructType(name: Token): StructType {
+  return {
+    category: TypeCategory.STRUCT,
+    name,
+    resolvedStruct: null
+  }
+}
+
+export function resolvedStructType(struct: StructStmt): StructType {
+  return {
+    category: TypeCategory.STRUCT,
+    name: struct.name,
+    resolvedStruct: struct
+  }
+}
+
+export interface PointerType {
+  category: TypeCategory.POINTER
+  elementType: Type
+}
+
+export function ptrType(elementType: Type): PointerType {
+  return {
+    category: TypeCategory.POINTER,
+    elementType
+  }
+}
+
+export type Type = ArrayType | PointerType | SimpleType | StructType | typeof ErrorType | typeof VoidType
+
+export function isEqual(a: Type, b: Type): boolean {
+  if (a.category === TypeCategory.ARRAY && b.category === TypeCategory.ARRAY) {
+    return isEqual(a.elementType, b.elementType) && a.length === b.length
+  }
+  if (a.category === TypeCategory.STRUCT && b.category === TypeCategory.STRUCT) {
+    if (a.resolvedStruct === null) {
+      throw new Error(`Attempting to compare an unresolved type ${a.name.lexeme}`)
+    }
+    if (b.resolvedStruct === null) {
+      throw new Error(`Attempting to compare an unresolved type ${b.name.lexeme}`)
+    }
+    return a.resolvedStruct === b.resolvedStruct
+  }
+  if (a.category === TypeCategory.POINTER && b.category === TypeCategory.POINTER) {
+    return isEqual(a.elementType, b.elementType)
+  }
+  return a.category === b.category
+}
+
+export function isValidElementType(t: Type): boolean {
+  if (isEqual(t, ErrorType)) {
+    return true
+  }
+  return !isEqual(t, VoidType)
+}
+
+export function sizeof(t: Type): number {
+  switch (t.category) {
+    case TypeCategory.ARRAY: {
+      return sizeof(t.elementType) * t.length
+    }
+    case TypeCategory.STRUCT: {
+      let size = 0
+      if (t.resolvedStruct) {
+        t.resolvedStruct.members.forEach((member) => {
+          size += sizeof(member.type)
+        })
+      } else {
+        throw new Error("Cannot compute sizeof unresolved struct type")
+      }
+      return size
+    }
+    case TypeCategory.POINTER:
+    case TypeCategory.INT:
+    case TypeCategory.FLOAT: {
+      return 4
+    }
+    case TypeCategory.BYTE:
+    case TypeCategory.BOOL: {
+      return 1
+    }
+    case TypeCategory.VOID: {
+      return 0
+    }
+    case TypeCategory.ERROR: {
+      throw new Error(`Unhandled type ${typeToString(t)} for sizeof`)
+    }
+  }
+}
+
+export function isScalar(t: Type): boolean {
+  switch (t.category) {
+    case TypeCategory.ARRAY:
+    case TypeCategory.ERROR:
+    case TypeCategory.STRUCT:
+    case TypeCategory.VOID: {
+      return false
+    }
+    case TypeCategory.BOOL:
+    case TypeCategory.BYTE:
+    case TypeCategory.FLOAT:
+    case TypeCategory.INT:
+    case TypeCategory.POINTER: {
+      return true
+    }
+  }
+}
+
+export function isNumeric(t: Type): boolean {
+  switch (t.category) {
+    case TypeCategory.ARRAY:
+    case TypeCategory.BOOL:
+    case TypeCategory.ERROR:
+    case TypeCategory.POINTER:
+    case TypeCategory.STRUCT:
+    case TypeCategory.VOID: {
+      return false
+    }
+    case TypeCategory.INT:
+    case TypeCategory.FLOAT:
+    case TypeCategory.BYTE: {
+      return true
+    }
+  }
+}
+
+export function canCast(from: Type, to: Type): boolean {
+  if (isEqual(from, ErrorType) || isEqual(to, ErrorType)) {
+    // We already threw an error somewhere.
+    // Pretend we can cast the result so we don't cascade errors.
+    return true
+  }
+  if ((isNumeric(from) || isEqual(from, BoolType)) && (isNumeric(to) || isEqual(to, BoolType))) {
+    // Numerics and bools can always be casted to and from each other.
+    return true
+  }
+  if (from.category === TypeCategory.POINTER && to.category === TypeCategory.POINTER) {
+    // Pointers are a type escape hatch and can always be casted to/from each other.
+    return true
+  }
+  return isEqual(from, to)
+}
+
+export function canCoerce(from: Type, to: Type): boolean {
+  if (from.category === TypeCategory.ERROR || to.category === TypeCategory.ERROR) {
+    // We already threw an error somewhere.
+    // Pretend we can coerce the result so we don't cascade errors.
+    return true
+  }
+  if (isEqual(from, to)) {
+    return true
+  }
+  if (from.category === TypeCategory.ARRAY && to.category === TypeCategory.POINTER) {
+    const fromArr = from as ArrayType
+    const toPtr = to as PointerType
+    return isEqual(fromArr.elementType, toPtr.elementType)
+  }
+  if (from.category === TypeCategory.ARRAY) return false
+  switch (from.category) {
+    case TypeCategory.VOID:
+    case TypeCategory.POINTER:
+    case TypeCategory.STRUCT: {
+      return false
+    }
+  }
+  switch (to.category) {
+    case TypeCategory.ARRAY:
+    case TypeCategory.VOID:
+    case TypeCategory.STRUCT: {
+      return false
+    }
+    case TypeCategory.POINTER: {
+      return false
+    }
+  }
+  switch (from.category) {
+    case TypeCategory.INT: {
+      switch (to.category) {
+        case TypeCategory.INT: {
+          return true
+        }
+        case TypeCategory.FLOAT: {
+          return true
+        }
+        case TypeCategory.BYTE: {
+          return false
+        }
+        case TypeCategory.BOOL: {
+          return true
+        }
+      }
+    }
+    case TypeCategory.FLOAT: {
+      switch (to.category) {
+        case TypeCategory.INT: {
+          return false
+        }
+        case TypeCategory.FLOAT: {
+          return true
+        }
+        case TypeCategory.BYTE: {
+          return false
+        }
+        case TypeCategory.BOOL: {
+          return false
+        }
+      }
+    }
+    case TypeCategory.BYTE: {
+      switch (to.category) {
+        case TypeCategory.INT: {
+          return true
+        }
+        case TypeCategory.FLOAT: {
+          return true
+        }
+        case TypeCategory.BYTE: {
+          return true
+        }
+        case TypeCategory.BOOL: {
+          return false
+        }
+      }
+    }
+    case TypeCategory.BOOL: {
+      switch (to.category) {
+        case TypeCategory.INT: {
+          return false
+        }
+        case TypeCategory.FLOAT: {
+          return false
+        }
+        case TypeCategory.BYTE: {
+          return false
+        }
+        case TypeCategory.BOOL: {
+          return true
+        }
+      }
+    }
+    default: {
+      assertUnreachable(from)
+    }
+  }
+}
+
+export function isNumberLiteral(node: Node): boolean {
+  if (node.kind !== NodeKind.LITERAL_EXPR) {
+    return false
+  }
+  return isNumeric((node as LiteralExpr).type)
+}
+
+export function canCoerceNumberLiteral(value: number, to: Type): boolean {
+  if (!isNumeric(to)) {
+    return false
+  }
+  switch (to.category) {
+    case TypeCategory.BYTE: {
+      return Number.isInteger(value) && value >= BYTE_MIN && value <= BYTE_MAX
+    }
+    case TypeCategory.INT: {
+      return Number.isInteger(value) && value >= INT_MIN && value <= INT_MAX
+    }
+    case TypeCategory.FLOAT: {
+      return true
+    }
+    default: {
+      return false
+    }
+  }
+}
+
+const NUMERIC_TYPE_PRECEDENCE: readonly SimpleType[] = [ByteType, IntType, FloatType]
+
+// Get lowest common numeric type to which we can coerce both `a` and `b`.
+// If one of the args is not a numeric, returns null.
+export function getLowestCommonNumeric(a: Type, b: Type): Type | null {
+  if (!isNumeric(a) || !isNumeric(b)) {
+    return null
+  }
+  if (isEqual(a, b)) {
+    return a
+  }
+  for (let i = 0; i < NUMERIC_TYPE_PRECEDENCE.length; i++) {
+    const t = NUMERIC_TYPE_PRECEDENCE[i]
+    if (canCoerce(a, t) && canCoerce(b, t)) {
+      return t
+    }
+  }
+  return null
+}
+
+export const INT_MIN = -2147483647
+export const INT_MAX = 2147483647
+export const BYTE_MIN = 0
+export const BYTE_MAX = 255
+
+export interface Param {
+  type: Type
+  name: Token
+  defaultValue?: Expr | null
+}
+
+export type Stmt = BlockStmt | ExpressionStmt | IfStmt | LoopControlStmt | PrintStmt | ReturnStmt | SwitchStmt | VarStmt | WhileStmt
+export type TopStmt = FunctionStmt | StructStmt | VarStmt
+
+export interface BlockStmt extends Node {
+  kind: NodeKind.BLOCK_STMT
+  statements: Stmt[]
+  scope: Scope
+  isLiveAtEnd: boolean | null // filled in by resolver pass
+}
+
+export interface SwitchCase {
+  value: Expr | null // null for default
+  statements: Stmt[]
+}
+
+export interface SwitchStmt extends Node {
+  kind: NodeKind.SWITCH_STMT
+  expression: Expr
+  cases: SwitchCase[]
+  isLiveAtEnd: boolean | null
+}
+
+export function switchStmt({ expression, cases }: { expression: Expr; cases: SwitchCase[] }): SwitchStmt {
+  return {
+    kind: NodeKind.SWITCH_STMT,
+    expression,
+    cases,
+    isLiveAtEnd: null
+  }
+}
+
+export function blockStmt({ statements, scope }: { statements: Stmt[]; scope: Scope }): BlockStmt {
+  return {
+    kind: NodeKind.BLOCK_STMT,
+    statements,
+    scope,
+    isLiveAtEnd: null
+  }
+}
+
+export interface ExpressionStmt extends Node {
+  kind: NodeKind.EXPRESSION_STMT
+  expression: Expr
+  isLiveAtEnd: boolean | null // filled in by resolver pass
+}
+
+export function expressionStmt({ expression }: { expression: Expr }): ExpressionStmt {
+  return {
+    kind: NodeKind.EXPRESSION_STMT,
+    expression,
+    isLiveAtEnd: null
+  }
+}
+
+export interface FunctionStmt extends Node {
+  kind: NodeKind.FUNCTION_STMT
+  name: Token
+  params: Param[]
+  returnType: Type
+  body: {
+    block: Stmt[]
+    scope: Scope
+  } | null // "null" means the function is imported or built-in
+  symbol: FunctionSymbol | null // filled in by parser
+  // After resolve pass, `hoistedLocals` should contain
+  // all local variables declared in descendant scopes
+  // (e.g. nested blocks) *not* including the function
+  // scope itself.
+  hoistedLocals: Set<VariableSymbol> | null // filled in by resolver
+  isExported?: boolean
+  isImported?: boolean
+}
+
+export function functionStmt(
+  { name, params, returnType, block, scope, symbol }: {
+    name: Token;
+    params: Param[];
+    returnType: Type;
+    block: Stmt[];
+    scope: Scope;
+    symbol: FunctionSymbol | null
+}): FunctionStmt {
+  return {
+    kind: NodeKind.FUNCTION_STMT,
+    name,
+    params,
+    returnType,
+    body: {
+      block,
+      scope
+    },
+    symbol,
+    hoistedLocals: null,
+    isExported: false,
+    isImported: false
+  }
+}
+
+export function importedFunctionStmt(
+  { name, params, returnType, symbol }: {
+    name: Token;
+    params: Param[];
+    returnType: Type;
+    symbol: FunctionSymbol | null
+}): FunctionStmt {
+  return {
+    kind: NodeKind.FUNCTION_STMT,
+    name,
+    params,
+    returnType,
+    body: null,
+    symbol,
+    hoistedLocals: null,
+    isExported: false,
+    isImported: true
+  }
+}
+
+export interface IfStmt extends Node {
+  kind: NodeKind.IF_STMT
+  expression: Expr
+  thenBranch: Stmt
+  elseBranch: Stmt | null
+  isLiveAtEnd: boolean | null // filled in by resolver pass
+}
+
+export function ifStmt({ expression, thenBranch, elseBranch }: { expression: Expr; thenBranch: Stmt; elseBranch: Stmt | null }): IfStmt {
+  return {
+    kind: NodeKind.IF_STMT,
+    expression,
+    thenBranch,
+    elseBranch,
+    isLiveAtEnd: null
+  }
+}
+
+export interface LoopControlStmt extends Node {
+  kind: NodeKind.LOOP_CONTROL_STMT
+  keyword: Token
+  isLiveAtEnd: boolean | null // filled in by resolver pass
+}
+
+export function loopControlStmt({ keyword }: { keyword: Token }): LoopControlStmt {
+  return {
+    kind: NodeKind.LOOP_CONTROL_STMT,
+    keyword,
+    isLiveAtEnd: null
+  }
+}
+
+export interface PrintStmt extends Node {
+  kind: NodeKind.PRINT_STMT
+  keyword: Token
+  expression: Expr
+  isLiveAtEnd: boolean | null // filled in by resolver pass
+}
+
+export function printStmt({ expression, keyword }: { expression: Expr; keyword: Token }): PrintStmt {
+  return {
+    kind: NodeKind.PRINT_STMT,
+    keyword,
+    expression,
+    isLiveAtEnd: null
+  }
+}
+
+export interface ReturnStmt extends Node {
+  kind: NodeKind.RETURN_STMT
+  keyword: Token
+  value: Expr | null
+  isLiveAtEnd: boolean | null // filled in by resolver pass
+}
+
+export function returnStmt({ keyword, value }: { keyword: Token; value: Expr | null }): ReturnStmt {
+  return {
+    kind: NodeKind.RETURN_STMT,
+    keyword,
+    value,
+    isLiveAtEnd: null
+  }
+}
+
+export interface StructStmt extends Node {
+  kind: NodeKind.STRUCT_STMT
+  name: Token
+  members: Param[]
+  symbol: StructSymbol | null // filled in by parser
+  isLiveAtEnd: boolean | null // filled in by resolver pass
+  isExported?: boolean
+}
+
+export function structStmt({ name, members, isExported = false }: { name: Token; members: Param[]; isExported?: boolean }): StructStmt {
+  return {
+    kind: NodeKind.STRUCT_STMT,
+    name,
+    members,
+    symbol: null,
+    isLiveAtEnd: null,
+    isExported
+  }
+}
+
+export interface VarStmt extends Node {
+  kind: NodeKind.VAR_STMT
+  name: Token
+  initializer: Expr
+  type: Type | null // null means 'infer from initializer in resolver step'
+  isLiveAtEnd: boolean | null // filled in by resolver pass
+  symbol: VariableSymbol | null // filled in by parser
+  isExported?: boolean
+}
+
+export function varStmt({ name, initializer, type, symbol, isExported = false }: { name: Token; initializer: Expr; type: Type | null; symbol: VariableSymbol | null; isExported?: boolean }): VarStmt {
+  return {
+    kind: NodeKind.VAR_STMT,
+    name,
+    initializer,
+    type,
+    isLiveAtEnd: null,
+    symbol,
+    isExported
+  }
+}
+
+export interface WhileStmt extends Node {
+  kind: NodeKind.WHILE_STMT
+  expression: Expr
+  body: Stmt
+  increment: ExpressionStmt | null // used by for loops
+  isLiveAtEnd: boolean | null // filled in by resolver pass
+}
+
+export function whileStmt({ expression, body, increment }: { expression: Expr; body: Stmt; increment?: ExpressionStmt | null }): WhileStmt {
+  return {
+    kind: NodeKind.WHILE_STMT,
+    expression,
+    body,
+    increment: increment ?? null,
+    isLiveAtEnd: null
+  }
+}
+
+export enum SymbolKind {
+  VARIABLE,
+  FUNCTION,
+  FUNCTION_OVERLOAD,
+  PARAM,
+  STRUCT
+}
+
+export type Symbol = VariableSymbol | FunctionSymbol | FunctionOverloadSymbol | ParamSymbol | StructSymbol
+
+export interface VariableSymbol {
+  kind: SymbolKind.VARIABLE
+  node: VarStmt
+  isGlobal: boolean
+  id: number
+  isAddressTaken: boolean
+}
+
+export interface FunctionSymbol {
+  kind: SymbolKind.FUNCTION
+  node: FunctionStmt
+  id: number
+}
+
+export interface FunctionOverloadSymbol {
+  kind: SymbolKind.FUNCTION_OVERLOAD
+  overloads: FunctionSymbol[]
+}
+
+export interface ParamSymbol {
+  kind: SymbolKind.PARAM
+  param: Param
+  id: number
+  isAddressTaken: boolean
+}
+
+export interface StructSymbol {
+  kind: SymbolKind.STRUCT
+  node: StructStmt
+  id: number
+}
+
+export class Scope {
+  private readonly parent: Scope | null
+  private readonly map: Map<string, Symbol>
+
+  constructor(parent: Scope | null) {
+    this.parent = parent
+    this.map = new Map()
+  }
+
+  define(name: string, symbol: Symbol): void {
+    const existing = this.map.get(name)
+    if (!existing) {
+      this.map.set(name, symbol)
+      return
+    }
+    // Support function overloading by arity. Only functions can overload.
+    if (symbol.kind === SymbolKind.FUNCTION) {
+      if (existing.kind === SymbolKind.FUNCTION) {
+        // create overload
+        this.map.set(name, {
+          kind: SymbolKind.FUNCTION_OVERLOAD,
+          overloads: [existing, symbol]
+        } as FunctionOverloadSymbol)
+        return
+      } else if (existing.kind === SymbolKind.FUNCTION_OVERLOAD) {
+        const fo = existing as FunctionOverloadSymbol
+        const arity = symbol.node.params.length
+        const clash = fo.overloads.find((f) => f.node.params.length === arity)
+        if (clash) {
+          throw new Error(`Function '${name}' with arity ${arity} already declared.`)
+        }
+        fo.overloads.push(symbol)
+        return
+      }
+    } else if (symbol.kind === SymbolKind.FUNCTION_OVERLOAD) {
+      throw new Error("Cannot define FUNCTION_OVERLOAD directly")
+    }
+    // any other combo is a conflict
+    throw new Error(`'${name}' is already declared in this scope.`)
+  }
+
+  hasDirect(name: string): boolean {
+    return this.map.has(name)
+  }
+
+  forEach(cb: (name: string, symbol: Symbol) => void): void {
+    this.map.forEach((symbol, key) => {
+      cb(key, symbol)
+    })
+  }
+
+  lookup(name: string, filter: (symbol: Symbol) => boolean): Symbol | null {
+    if (this.map.has(name)) {
+      const symbol = this.map.get(name)!
+      if (symbol.kind === SymbolKind.FUNCTION_OVERLOAD) {
+        const fo = symbol as FunctionOverloadSymbol
+        const match = fo.overloads.find((f) => filter(f))
+        if (match) return symbol
+      } else if (filter(symbol)) {
+        return symbol
+      }
+    }
+    if (this.parent) {
+      return this.parent.lookup(name, filter)
+    }
+    return null
+  }
+}
+
+export class Context {
+  global: Scope
+  stringLiterals: Map<string, LiteralExpr>
+  topLevelStatements: TopStmt[]
+  globalInitOrder: VarStmt[] | null // filled in by resolver
+
+  private nextID: number = 0
+
+  constructor() {
+    this.global = new Scope(null)
+    this.stringLiterals = new Map()
+    this.topLevelStatements = []
+    this.globalInitOrder = null
+
+    // Define built-ins
+    const memcpy = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__memcpy__"),
+      params: [
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "src"),
+          type: ptrType(ByteType)
+        },
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "dst"),
+          type: ptrType(ByteType)
+        }
+      ],
+      returnType: VoidType,
+      symbol: null
+    })
+    memcpy.symbol = this.functionSymbol(memcpy)
+    const sqrt = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__sqrt__"),
+      params: [
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "x"),
+          type: FloatType
+        },
+      ],
+      returnType: FloatType,
+      symbol: null
+    })
+    sqrt.symbol = this.functionSymbol(sqrt)
+    const mallocFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__malloc__"),
+      params: [
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "n"),
+          type: IntType
+        }
+      ],
+      returnType: ptrType(ByteType),
+      symbol: null
+    })
+    mallocFn.symbol = this.functionSymbol(mallocFn)
+    const freeFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__free__"),
+      params: [
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "p"),
+          type: ptrType(ByteType)
+        }
+      ],
+      returnType: VoidType,
+      symbol: null
+    })
+    freeFn.symbol = this.functionSymbol(freeFn)
+    const exitFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__exit__"),
+      params: [
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "code"),
+          type: IntType
+        }
+      ],
+      returnType: VoidType,
+      symbol: null
+    })
+    exitFn.symbol = this.functionSymbol(exitFn)
+    const putcharFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__putchar__"),
+      params: [
+        {
+          name: fakeToken(TokenType.IDENTIFIER, "c"),
+          type: IntType
+        }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    putcharFn.symbol = this.functionSymbol(putcharFn)
+    const writeFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__write__"),
+      params: [
+        { name: fakeToken(TokenType.IDENTIFIER, "fd"), type: IntType },
+        { name: fakeToken(TokenType.IDENTIFIER, "buf"), type: ptrType(ByteType) },
+        { name: fakeToken(TokenType.IDENTIFIER, "len"), type: IntType }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    writeFn.symbol = this.functionSymbol(writeFn)
+    const readFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__read__"),
+      params: [
+        { name: fakeToken(TokenType.IDENTIFIER, "fd"), type: IntType },
+        { name: fakeToken(TokenType.IDENTIFIER, "buf"), type: ptrType(ByteType) },
+        { name: fakeToken(TokenType.IDENTIFIER, "len"), type: IntType }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    readFn.symbol = this.functionSymbol(readFn)
+    const openFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__open__"),
+      params: [
+        { name: fakeToken(TokenType.IDENTIFIER, "path"), type: ptrType(ByteType) },
+        { name: fakeToken(TokenType.IDENTIFIER, "flags"), type: IntType },
+        { name: fakeToken(TokenType.IDENTIFIER, "mode"), type: IntType }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    openFn.symbol = this.functionSymbol(openFn)
+    const closeFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__close__"),
+      params: [
+        { name: fakeToken(TokenType.IDENTIFIER, "fd"), type: IntType }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    closeFn.symbol = this.functionSymbol(closeFn)
+    this.global.define(memcpy.name.lexeme, memcpy.symbol)
+    this.global.define(sqrt.name.lexeme, sqrt.symbol)
+    this.global.define(mallocFn.name.lexeme, mallocFn.symbol)
+    this.global.define(freeFn.name.lexeme, freeFn.symbol)
+    this.global.define(exitFn.name.lexeme, exitFn.symbol)
+    this.global.define(putcharFn.name.lexeme, putcharFn.symbol)
+    this.global.define(writeFn.name.lexeme, writeFn.symbol)
+    this.global.define(readFn.name.lexeme, readFn.symbol)
+    this.global.define(openFn.name.lexeme, openFn.symbol)
+    this.global.define(closeFn.name.lexeme, closeFn.symbol)
+  }
+
+  variableSymbol(node: VarStmt, isGlobal: boolean): VariableSymbol {
+    return {
+      kind: SymbolKind.VARIABLE,
+      node,
+      isGlobal,
+      id: this.nextID++,
+      isAddressTaken: false
+    }
+  }
+
+  functionSymbol(node: FunctionStmt): FunctionSymbol {
+    return {
+      kind: SymbolKind.FUNCTION,
+      node,
+      id: this.nextID++
+    }
+  }
+
+  paramSymbol(param: Param): ParamSymbol {
+    return {
+      kind: SymbolKind.PARAM,
+      param,
+      id: this.nextID++,
+      isAddressTaken: false
+    }
+  }
+
+  structSymbol(node: StructStmt): StructSymbol {
+    return {
+      kind: SymbolKind.STRUCT,
+      node,
+      id: this.nextID++
+    }
+  }
+}
+
+function typeToSExpr(type: Type): string {
+  switch (type.category) {
+    case TypeCategory.ARRAY: {
+      return `(arraytype ${type.length} ${typeToSExpr(type.elementType)})`
+    }
+    case TypeCategory.POINTER: {
+      return `(ptr ${typeToSExpr(type.elementType)})`
+    }
+    case TypeCategory.STRUCT: {
+      let out = "("
+      out += "struct "
+      out += "("
+      if (type.resolvedStruct) {
+        type.resolvedStruct.members.forEach((member) => {
+          out += `(${member.name.lexeme} ${typeToSExpr(member.type)})`
+        })
+      } else {
+        out += `unresolved '${type.name.lexeme}'`
+      }
+      out += ")"
+      out += ")"
+      return out
+    }
+    case TypeCategory.ERROR: {
+      return "<error-type>"
+    }
+    case TypeCategory.INT:
+    case TypeCategory.FLOAT:
+    case TypeCategory.BYTE:
+    case TypeCategory.BOOL:
+    case TypeCategory.VOID: {
+      return TypeCategory[type.category].toLowerCase()
+    }
+  }
+}
+
+export function typeToString(type: Type): string {
+  switch (type.category) {
+    case TypeCategory.ARRAY: {
+      return `[${typeToString(type.elementType)}; ${type.length}]`
+    }
+    case TypeCategory.POINTER: {
+      return `${typeToString(type.elementType)}~`
+    }
+    case TypeCategory.STRUCT: {
+      return `${type.name.lexeme}`
+    }
+    case TypeCategory.ERROR: {
+      return "<error-type>"
+    }
+    case TypeCategory.INT:
+    case TypeCategory.FLOAT:
+    case TypeCategory.BYTE:
+    case TypeCategory.BOOL:
+    case TypeCategory.VOID: {
+      return TypeCategory[type.category].toLowerCase()
+    }
+  }
+}
+
+export function astToSExpr(node: Node): string {
+  let out = ""
+  switch (node.kind) {
+    // expressions
+    case NodeKind.ASSIGN_EXPR: {
+      const op = node as AssignExpr
+      out += "("
+      out += `assign ${astToSExpr(op.left)} ${astToSExpr(op.right)}`
+      out += ")"
+      break
+    }
+    case NodeKind.BINARY_EXPR: {
+      const op = node as BinaryExpr
+      const operator = op.operator.lexeme
+      out += "("
+      out += `${operator} ${astToSExpr(op.left)} ${astToSExpr(op.right)}`
+      out += ")"
+      break
+    }
+    case NodeKind.CALL_EXPR: {
+      const op = node as CallExpr
+      out += "("
+      out += `call ${astToSExpr(op.callee)} `
+      out += "("
+      op.args.forEach((arg, i) => {
+        if (i > 0) out += " "
+        out += astToSExpr(arg)
+      })
+      out += ")"
+      out += ")"
+      break
+    }
+    case NodeKind.CAST_EXPR: {
+      const op = node as CastExpr
+      out += "("
+      out += `${typeToSExpr(op.type)} ${astToSExpr(op.value)}`
+      out += ")"
+      break
+    }
+    case NodeKind.DEREF_EXPR: {
+      const op = node as DerefExpr
+      out += `(deref ${astToSExpr(op.value)})`
+      break
+    }
+    case NodeKind.DOT_EXPR: {
+      const op = node as DotExpr
+      out += `(. ${astToSExpr(op.callee)} ${op.identifier.lexeme})`
+      break
+    }
+    case NodeKind.GROUP_EXPR: {
+      const op = node as GroupExpr
+      out += "("
+      out += astToSExpr(op.expression)
+      out += ")"
+      break
+    }
+    case NodeKind.INDEX_EXPR: {
+      const op = node as IndexExpr
+      out += "("
+      out += `index ${astToSExpr(op.callee)} ${astToSExpr(op.index)}`
+      out += ")"
+      break
+    }
+    case NodeKind.LEN_EXPR: {
+      const op = node as LenExpr
+      out += `(len ${astToSExpr(op.value)})`
+      break
+    }
+    case NodeKind.LIST_EXPR: {
+      const op = node as ListExpr
+      out += "("
+      if (op.initializer.kind === ListKind.LIST) {
+        out += "list-initializer"
+        op.initializer.values.forEach((val) => {
+          out += ` ${astToSExpr(val)}`
+        })
+      } else {
+        out += `repeat-initializer ${op.initializer.length} ${astToSExpr(op.initializer.value)}`
+      }
+      out += ")"
+      break
+    }
+    case NodeKind.LITERAL_EXPR: {
+      const op = node as LiteralExpr
+      if (op.type.category === TypeCategory.FLOAT && Number.isInteger(op.value)) {
+        out += (op.value as Number).toFixed(1)
+      } else {
+        out += JSON.stringify(op.value)
+      }
+      break
+    }
+    case NodeKind.LOGICAL_EXPR: {
+      const op = node as LogicalExpr
+      const operator = op.operator.lexeme
+      out += "("
+      out += `${operator} ${astToSExpr(op.left)} ${astToSExpr(op.right)}`
+      out += ")"
+      break
+    }
+    case NodeKind.TERNARY_EXPR: {
+      const op = node as TernaryExpr
+      out += "("
+      out += `?: ${astToSExpr(op.condition)} ${astToSExpr(op.thenBranch)} ${astToSExpr(op.elseBranch)}`
+      out += ")"
+      break
+    }
+    case NodeKind.UPDATE_EXPR: {
+      const op = node as UpdateExpr
+      out += "("
+      out += `${op.isPrefix ? "pre" : "post"}${op.operator.lexeme} ${astToSExpr(op.operand)}`
+      out += ")"
+      break
+    }
+    case NodeKind.UNARY_EXPR: {
+      const op = node as UnaryExpr
+      const operator = op.operator.lexeme
+      out += "("
+      out += `${operator} ${astToSExpr(op.value)}`
+      out += ")"
+      break
+    }
+    case NodeKind.VARIABLE_EXPR: {
+      const op = node as VariableExpr
+      out += op.name.lexeme
+      break
+    }
+
+    // statements
+    case NodeKind.BLOCK_STMT: {
+      const op = node as BlockStmt
+      out += "("
+      out += "block "
+      op.statements.forEach((stmt, i) => {
+        if (i > 0) out += " "
+        out += astToSExpr(stmt)
+      })
+      out += ")"
+      break
+    }
+    case NodeKind.EXPRESSION_STMT: {
+      const op = node as ExpressionStmt
+      out += astToSExpr(op.expression)
+      break
+    }
+    case NodeKind.FUNCTION_STMT: {
+      const op = node as FunctionStmt
+      out += "("
+      out += `def ${op.name.lexeme} `
+      out += "("
+      op.params.forEach((param, i) => {
+        if (i > 0) out += " "
+        out += `(param ${param.name.lexeme} ${typeToSExpr(param.type)})`
+      })
+      out += ") "
+      out += "("
+      op.body?.block.forEach((stmt, i) => {
+        if (i > 0) out += " "
+        out += astToSExpr(stmt)
+      })
+      out += ")"
+      out += ")"
+      break
+    }
+    case NodeKind.IF_STMT: {
+      const op = node as IfStmt
+      out += "("
+      out += `if ${astToSExpr(op.expression)} ${astToSExpr(op.thenBranch)} `
+      if (op.elseBranch !== null) {
+        out += `${astToSExpr(op.elseBranch)} `
+      }
+      out += ")"
+      break
+    }
+    case NodeKind.SWITCH_STMT: {
+      const op = node as SwitchStmt
+      out += "("
+      out += `switch ${astToSExpr(op.expression)} `
+      op.cases.forEach((c, i) => {
+        if (i > 0) out += " "
+        if (c.value === null) {
+          out += "(default "
+        } else {
+          out += `(case ${astToSExpr(c.value)} `
+        }
+        c.statements.forEach((s, j) => {
+          if (j > 0) out += " "
+          out += astToSExpr(s)
+        })
+        out += ")"
+      })
+      out += ")"
+      break
+    }
+    case NodeKind.LOOP_CONTROL_STMT: {
+      const op = node as PrintStmt
+      out += `(${op.keyword.lexeme})`
+      break
+    }
+    case NodeKind.PRINT_STMT: {
+      const op = node as PrintStmt
+      out += "("
+      out += `print ${astToSExpr(op.expression)}`
+      out += ")"
+      break
+    }
+    case NodeKind.RETURN_STMT: {
+      const op = node as ReturnStmt
+      out += "("
+      out += `return ${op.value !== null ? astToSExpr(op.value) : "void"}`
+      out += ")"
+      break
+    }
+    case NodeKind.STRUCT_STMT: {
+      const op = node as StructStmt
+      out += "("
+      out += `struct ${op.name.lexeme} `
+      out += "("
+      op.members.forEach((member) => {
+        out += `(${member.name.lexeme} ${typeToSExpr(member.type)})`
+      })
+      out += ")"
+      out += ")"
+      break
+    }
+    case NodeKind.VAR_STMT: {
+      const op = node as VarStmt
+      out += "("
+      out += `var ${op.name.lexeme} `
+      if (op.type !== null) {
+        out += `${typeToSExpr(op.type)} `
+      }
+      out += `${astToSExpr(op.initializer)}`
+      out += ")"
+      break
+    }
+    case NodeKind.WHILE_STMT: {
+      const op = node as WhileStmt
+      out += "("
+      out += `while ${astToSExpr(op.expression)} ${astToSExpr(op.body)}`
+      if (op.increment) {
+        out += ` ${astToSExpr(op.increment)}`
+      }
+      out += ")"
+      break
+    }
+    default: {
+      assertUnreachable(node.kind)
+    }
+  }
+  return out
+}
