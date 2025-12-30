@@ -13,6 +13,7 @@ describe("LLVM backend pointer printing", () => {
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
     const line = res.stdout.trim()
-    expect(line).toMatch(/^0x[0-9a-f]+$/)
+    // should be zero-padded to 16 hex digits (64-bit) per backend format string
+    expect(line).toMatch(/^0x[0-9a-f]{16}$/)
   })
 })
