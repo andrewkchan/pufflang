@@ -80,6 +80,19 @@ var TOKEN_EOF int = 70;
 // Rich token struct (for Stage1 compiler) stored in generic Vec.
 struct Token { kind int, start int, length int, line int }
 
+// Helper constructors for token Vec
+def make_token(kind int, start int, length int, line int) Token {
+  return Token{kind, start, length, line};
+}
+
+def vec_token_new(cap int) Vec {
+  return vec_new(16, cap); // 4 ints = 16 bytes
+}
+
+def push_token(v Vec, t Token) Vec {
+  return vec_push(v, byte~(&t));
+}
+
 def is_alpha(b byte) int {
   if (b >= byte(65) && b <= byte(90)) { return 1; }   // A-Z
   if (b >= byte(97) && b <= byte(122)) { return 1; }  // a-z
@@ -145,73 +158,56 @@ def scan_kinds(src byte~, n int) VecInt {
   return out;
 }
 
-// --- Full token scanner for Stage1 compiler (WIP) ---
-// Produces a Vec of Token structs; lexemes are referenced by start/length into the original source.
-
-def make_token(kind int, start int, length int, line int) Token {
-  return Token{kind, start, length, line};
-}
-
-def vec_token_new(cap int) Vec {
-  return vec_new(16, cap); // Token is 4 ints = 16 bytes
-}
-
-def push_token(v Vec, t Token) Vec {
-  return vec_push(v, byte~(&t));
-}
-
-def match_keyword_full(src byte~, start int, length int) int {
-  // handle all keywords in TokenType
-  if (length == 2) {
-    if ((src + start)~ == byte(105) && (src + start + 1)~ == byte(102)) { return TOKEN_IF; }
-  }
+// Minimal keyword matcher for scan_tokens (def/return/int/var).
+def match_keyword_tokens(src byte~, start int, length int) int {
   if (length == 3) {
     if ((src + start)~ == byte(100) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(102)) { return TOKEN_DEF; }
     if ((src + start)~ == byte(105) && (src + start + 1)~ == byte(110) && (src + start + 2)~ == byte(116)) { return TOKEN_INT; }
     if ((src + start)~ == byte(118) && (src + start + 1)~ == byte(97) && (src + start + 2)~ == byte(114)) { return TOKEN_VAR; }
-    if ((src + start)~ == byte(102) && (src + start + 1)~ == byte(111) && (src + start + 2)~ == byte(114)) { return TOKEN_FOR; }
-    if ((src + start)~ == byte(108) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(110)) { return TOKEN_LEN; }
-  }
-  if (length == 4) {
-    if ((src + start)~ == byte(98) && (src + start + 1)~ == byte(111) && (src + start + 2)~ == byte(111) && (src + start + 3)~ == byte(108)) { return TOKEN_BOOL; }
-    if ((src + start)~ == byte(98) && (src + start + 1)~ == byte(121) && (src + start + 2)~ == byte(116) && (src + start + 3)~ == byte(101)) { return TOKEN_BYTE; }
-    if ((src + start)~ == byte(116) && (src + start + 1)~ == byte(114) && (src + start + 2)~ == byte(117) && (src + start + 3)~ == byte(101)) { return TOKEN_TRUE; }
-    if ((src + start)~ == byte(101) && (src + start + 1)~ == byte(108) && (src + start + 2)~ == byte(115) && (src + start + 3)~ == byte(101)) { return TOKEN_ELSE; }
-    if ((src + start)~ == byte(118) && (src + start + 1)~ == byte(111) && (src + start + 2)~ == byte(105) && (src + start + 3)~ == byte(100)) { return TOKEN_VOID; }
-    if ((src + start)~ == byte(99) && (src + start + 1)~ == byte(97) && (src + start + 2)~ == byte(115) && (src + start + 3)~ == byte(101)) { return TOKEN_CASE; }
-  }
-  if (length == 5) {
-    if ((src + start)~ == byte(119) && (src + start + 1)~ == byte(104) && (src + start + 2)~ == byte(105) && (src + start + 3)~ == byte(108) && (src + start + 4)~ == byte(101)) { return TOKEN_WHILE; }
-    if ((src + start)~ == byte(98) && (src + start + 1)~ == byte(114) && (src + start + 2)~ == byte(101) && (src + start + 3)~ == byte(97) && (src + start + 4)~ == byte(107)) { return TOKEN_BREAK; }
-    if ((src + start)~ == byte(102) && (src + start + 1)~ == byte(108) && (src + start + 2)~ == byte(111) && (src + start + 3)~ == byte(97) && (src + start + 4)~ == byte(116)) { return TOKEN_FLOAT; }
-    if ((src + start)~ == byte(102) && (src + start + 1)~ == byte(97) && (src + start + 2)~ == byte(108) && (src + start + 3)~ == byte(115) && (src + start + 4)~ == byte(101)) { return TOKEN_FALSE; }
-    if ((src + start)~ == byte(112) && (src + start + 1)~ == byte(114) && (src + start + 2)~ == byte(105) && (src + start + 3)~ == byte(110) && (src + start + 4)~ == byte(116)) { return TOKEN_PRINT; }
   }
   if (length == 6) {
-    if ((src + start)~ == byte(115) && (src + start + 1)~ == byte(116) && (src + start + 2)~ == byte(114) && (src + start + 3)~ == byte(117) && (src + start + 4)~ == byte(99) && (src + start + 5)~ == byte(116)) { return TOKEN_STRUCT; }
     if ((src + start)~ == byte(114) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(116) && (src + start + 3)~ == byte(117) && (src + start + 4)~ == byte(114) && (src + start + 5)~ == byte(110)) { return TOKEN_RETURN; }
-    if ((src + start)~ == byte(115) && (src + start + 1)~ == byte(119) && (src + start + 2)~ == byte(105) && (src + start + 3)~ == byte(116) && (src + start + 4)~ == byte(99) && (src + start + 5)~ == byte(104)) { return TOKEN_SWITCH; }
-    if ((src + start)~ == byte(101) && (src + start + 1)~ == byte(120) && (src + start + 2)~ == byte(112) && (src + start + 3)~ == byte(111) && (src + start + 4)~ == byte(114) && (src + start + 5)~ == byte(116)) { return TOKEN_EXPORT; }
-    if ((src + start)~ == byte(105) && (src + start + 1)~ == byte(109) && (src + start + 2)~ == byte(112) && (src + start + 3)~ == byte(111) && (src + start + 4)~ == byte(114) && (src + start + 5)~ == byte(116)) { return TOKEN_IMPORT; }
-  }
-  if (length == 7) {
-    if ((src + start)~ == byte(99) && (src + start + 1)~ == byte(111) && (src + start + 2)~ == byte(110) && (src + start + 3)~ == byte(116) && (src + start + 4)~ == byte(105) && (src + start + 5)~ == byte(110) && (src + start + 6)~ == byte(117)) { return TOKEN_CONTINUE; }
-    if ((src + start)~ == byte(100) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(102) && (src + start + 3)~ == byte(97) && (src + start + 4)~ == byte(117) && (src + start + 5)~ == byte(108) && (src + start + 6)~ == byte(116)) { return TOKEN_DEFAULT; }
   }
   return -1;
 }
 
-// Full scanner placeholder (was full implementation; currently disabled to avoid codegen crashes).
-def scan_tokens_full(src byte~, n int) Vec {
-  return scan_tokens(src, n);
-}
-
-// Temporary stub to keep codegen light until Stage1 compiler consumes full tokens.
+// Simplified token scanner (safe, low-IR) returning Vec<Token> for basic constructs used in current Stage1 tests.
 def scan_tokens(src byte~, n int) Vec {
-  var out = vec_token_new(1);
-  out = push_token(out, make_token(TOKEN_EOF, n, 0, 1));
+  var i = 0;
+  var line = 1;
+  var out = vec_token_new(16);
+  while (i < n) {
+    var c = (src + i)~;
+    if (c == byte(32) || c == byte(9) || c == byte(13)) { i = i + 1; continue; }
+    if (c == byte(10)) { line = line + 1; i = i + 1; continue; }
+    if (is_alpha(c) == 1) {
+      var start = i;
+      while (i < n && is_alnum((src + i)~) == 1) { i = i + 1; }
+      var kw = match_keyword_tokens(src, start, i - start);
+      if (kw != -1) { out = push_token(out, make_token(kw, start, i - start, line)); }
+      else { out = push_token(out, make_token(TOKEN_IDENTIFIER, start, i - start, line)); }
+      continue;
+    }
+    if (is_digit(c) == 1) {
+      var startNum = i;
+      while (i < n && is_digit((src + i)~) == 1) { i = i + 1; }
+      out = push_token(out, make_token(TOKEN_NUMBER, startNum, i - startNum, line));
+      continue;
+    }
+    if (c == byte(40)) { out = push_token(out, make_token(TOKEN_LEFT_PAREN, i, 1, line)); i = i + 1; continue; }
+    if (c == byte(41)) { out = push_token(out, make_token(TOKEN_RIGHT_PAREN, i, 1, line)); i = i + 1; continue; }
+    if (c == byte(123)) { out = push_token(out, make_token(TOKEN_LEFT_BRACE, i, 1, line)); i = i + 1; continue; }
+    if (c == byte(125)) { out = push_token(out, make_token(TOKEN_RIGHT_BRACE, i, 1, line)); i = i + 1; continue; }
+    if (c == byte(59)) { out = push_token(out, make_token(TOKEN_SEMICOLON, i, 1, line)); i = i + 1; continue; }
+    // unknown, skip
+    i = i + 1;
+  }
+  out = push_token(out, make_token(TOKEN_EOF, n, 0, line));
   return out;
 }
+
+// Full scanner alias (for future use).
+def scan_tokens_full(src byte~, n int) Vec { return scan_tokens(src, n); }
 
 // Helpers for reading Token fields from the Vec returned by scan_tokens.
 def token_kind_at(tokens Vec, idx int) int {
