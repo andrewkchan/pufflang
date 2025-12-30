@@ -12,7 +12,7 @@ interface ArrayInfo {
 
 interface StructInfo {
   name: string
-  fields: { name: string; type: LlvmType }[]
+  fields: { name: string; type: LlvmType; astType: ast.Type }[]
 }
 
 interface PointerInfo {
@@ -474,6 +474,9 @@ class FunctionBuilder {
         if (v.resolvedType?.category === ast.TypeCategory.POINTER) {
           const elemTy = llvmTypeFromAst((v.resolvedType as ast.PointerType).elementType)
           loaded.ptr = { elem: elemTy }
+        } else if (v.resolvedType?.category === ast.TypeCategory.STRUCT) {
+          const info = this.structs.get((v.resolvedType as ast.StructType).name.lexeme)
+          loaded.struct = info
         }
         return loaded
       }
@@ -756,6 +759,15 @@ class FunctionBuilder {
         const ptrVal = this.emitExpr(d.value)
         if (!ptrVal.ptr) throw new Error("Dereference target is not pointer")
         const elemTy = ptrVal.ptr.elem
+        if (typeof elemTy === "string") {
+          const m = /^%struct\.([A-Za-z0-9_]+)\*$/.exec(elemTy)
+          if (m) {
+            const castedPtr = this.fresh("structptr")
+            this.emit(`${castedPtr} = bitcast i8* ${ptrVal.repr} to ${elemTy}`)
+            const info = this.structs.get(m[1])
+            return { type: elemTy as LlvmType, repr: castedPtr, struct: info }
+          }
+        }
         const castedPtr = this.fresh("deref")
         this.emit(`${castedPtr} = bitcast i8* ${ptrVal.repr} to ${elemTy}*`)
         const out = this.fresh("ldderef")
@@ -800,20 +812,28 @@ class FunctionBuilder {
             if ((left.ptr && right.type === "i32") || (right.ptr && left.type === "i32")) {
               const basePtr = left.ptr ? left : right
               const offsetVal = left.ptr ? right : left
-              const elemSize = this.sizeofLlvm(basePtr.ptr!.elem)
-              const scale = this.fresh("offset")
               const offCast = this.cast(offsetVal, "i32")
-              this.emit(`${scale} = mul nsw i32 ${offCast.repr}, ${elemSize}`)
-              const ptrInt = this.fresh("ptrint")
-              this.emit(`${ptrInt} = ptrtoint i8* ${basePtr.repr} to i64`)
-              const scaled64 = this.fresh("scale64")
-              this.emit(`${scaled64} = sext i32 ${scale} to i64`)
-              const adjusted = this.fresh("ptradj")
-              const op = b.operator.lexeme === "-" ? "sub" : "add"
-              this.emit(`${adjusted} = ${op} i64 ${ptrInt}, ${scaled64}`)
-              const outPtr = this.fresh("ptrout")
-              this.emit(`${outPtr} = inttoptr i64 ${adjusted} to i8*`)
-              return this.pointerValue(outPtr, basePtr.ptr!.elem)
+              let elemTy = basePtr.ptr!.elem
+              let gepElem: LlvmType | string = elemTy
+              if (typeof elemTy === "string" && elemTy.endsWith("*")) {
+                gepElem = elemTy.substring(0, elemTy.length - 1)
+              }
+              if (typeof gepElem !== "string" || gepElem === "") {
+                gepElem = "i8"
+              }
+              const castPtr = this.fresh("ptrbc")
+              this.emit(`${castPtr} = bitcast i8* ${basePtr.repr} to ${gepElem}*`)
+              const signedOff = this.fresh("idx")
+              if (b.operator.lexeme === "-") {
+                const neg = this.fresh("newoff")
+                this.emit(`${neg} = sub nsw i32 0, ${offCast.repr}`)
+                this.emit(`${signedOff} = add i32 0, ${neg}`)
+              } else {
+                this.emit(`${signedOff} = add i32 0, ${offCast.repr}`)
+              }
+              const gep = this.fresh("ptradd")
+              this.emit(`${gep} = getelementptr ${gepElem}, ${gepElem}* ${castPtr}, i32 ${signedOff}`)
+              return this.pointerValue(gep, basePtr.ptr!.elem)
             }
             if (left.type === "i32") {
               const op =
@@ -952,16 +972,19 @@ class FunctionBuilder {
           // struct construction if name matches struct
           const structInfo = this.structs.get(name)
           if (structInfo) {
-            const ptr = this.fresh("struct")
-            const structTy = this.structPtrType(structInfo)
-            this.addAlloca(`${ptr} = alloca %struct.${structInfo.name}`)
+            const rawPtr = this.fresh("structmalloc")
+            const structPtr = this.fresh("structptr")
+            const bytes = this.sizeofStruct(structInfo)
+            this.emit(`${rawPtr} = call i8* @malloc(i64 ${bytes})`)
+            this.emit(`${structPtr} = bitcast i8* ${rawPtr} to %struct.${structInfo.name}*`)
             structInfo.fields.forEach((f, i) => {
               const argVal = this.cast(this.emitExpr(c.args[i]), f.type)
               const fieldPtr = this.fresh("field")
-              this.emit(`${fieldPtr} = getelementptr %struct.${structInfo.name}, %struct.${structInfo.name}* ${ptr}, i32 0, i32 ${i}`)
+              this.emit(`${fieldPtr} = getelementptr %struct.${structInfo.name}, %struct.${structInfo.name}* ${structPtr}, i32 0, i32 ${i}`)
               this.emit(`store ${f.type} ${argVal.repr}, ${f.type}* ${fieldPtr}`)
             })
-            return { type: structTy, repr: ptr, struct: structInfo }
+            const structTy = this.structPtrType(structInfo)
+            return { type: structTy, repr: structPtr, struct: structInfo, ptr: { elem: structTy } }
           }
 
           // builtin sqrt
@@ -1096,7 +1119,25 @@ class FunctionBuilder {
         )
         const out = this.fresh("ldfld")
         this.emit(`${out} = load ${field.type}, ${field.type}* ${fieldPtr}`)
-        return { type: field.type, repr: out }
+        const val: Value = { type: field.type, repr: out }
+        switch (field.astType.category) {
+          case ast.TypeCategory.POINTER: {
+            val.ptr = { elem: llvmTypeFromAst((field.astType as ast.PointerType).elementType) }
+            break
+          }
+          case ast.TypeCategory.ARRAY: {
+            const info = this.arrayInfoFromType(field.astType as ast.ArrayType)
+            val.array = info
+            val.type = `${info.elem}*` as LlvmType
+            val.repr = fieldPtr
+            break
+          }
+          case ast.TypeCategory.STRUCT: {
+            val.struct = this.structs.get((field.astType as ast.StructType).name.lexeme)
+            break
+          }
+        }
+        return val
       }
       case ast.NodeKind.INDEX_EXPR: {
         const idx = node as ast.IndexExpr
@@ -1597,6 +1638,13 @@ class FunctionBuilder {
   buildFunction(fn: ast.FunctionStmt, mangledName: string, isExported = false): string {
     this.paramSlotsByName.clear()
     this.paramArgsByName.clear()
+    this.locals.clear()
+    this.allocas = []
+    this.lines = []
+    this.loopStack = []
+    this.hasReturn = false
+    this.terminated = false
+    this.tempCounter = 0
     this.currentFunctionName = mangledName
     this.arrayReturnDest = null
     // Force main to return i32 for proper process exit codes.
@@ -1682,7 +1730,8 @@ class FunctionBuilder {
         this.emitStmt(stmt)
       }
     }
-    if (!this.hasReturn) {
+    const lastLine = this.lines.length > 0 ? this.lines[this.lines.length - 1].trim() : ""
+    if (!lastLine.startsWith("ret")) {
       if (retTy === "void") this.lines.push("  ret void")
       else {
         const zero = retTy === "float" || retTy === "double" ? "0.0" : "0"
@@ -1725,7 +1774,8 @@ export function emitLlvm(context: ast.Context): string {
   structs.forEach((s) => {
     const fields = s.members.map((m) => ({
       name: m.name.lexeme,
-      type: llvmTypeFromAst(m.type)
+      type: llvmTypeFromAst(m.type),
+      astType: m.type
     }))
     const info: StructInfo = { name: s.name.lexeme, fields }
     structInfos.set(s.name.lexeme, info)
