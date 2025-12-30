@@ -1,0 +1,9 @@
+// Stage1 Puffscript driver stub: scan + parse minimal function.
+
+// Expect scanner.puff and parser.puff contents to be concatenated ahead of this file.
+
+def compile_simple(src byte~, n int) int {
+  var toks = scan_kinds(src, n);
+  var ok = parse_simple(toks);
+  return ok;
+}
