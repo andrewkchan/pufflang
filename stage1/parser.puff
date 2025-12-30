@@ -8,10 +8,15 @@ def safe_get(v VecInt, idx int) int {
 }
 
 // Parse a tiny expression (non-recursive):
-// primary: IDENT (opt zero-or-more args, each IDENT/NUMBER) | NUMBER
+// primary: [ - ] (IDENT (opt call args) | NUMBER)
 // optional binop: (+|-|*|/) primary
 // Returns the next index on success, or -1 on failure.
 def parse_primary(tokens VecInt, i int) int {
+  var unaryMinus = 0;
+  if (safe_get(tokens, i) == TOKEN_MINUS) {
+    unaryMinus = 1;
+    i = i + 1;
+  }
   var k = safe_get(tokens, i);
   if (k != TOKEN_NUMBER && k != TOKEN_IDENTIFIER) { return -1; }
   i = i + 1;
