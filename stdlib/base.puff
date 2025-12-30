@@ -205,6 +205,31 @@ def str_starts_with(a byte~, alen int, b byte~, blen int) int {
   return 1;
 }
 
+// Returns first index of needle in haystack, or -1.
+def str_index_of(hay byte~, hlen int, needle byte~, nlen int) int {
+  if (nlen == 0) { return 0; }
+  if (nlen > hlen) { return -1; }
+  var max = hlen - nlen;
+  var i = 0;
+  while (i <= max) {
+    var j = 0;
+    var match = 1;
+    while (j < nlen) {
+      if ((hay + i + j)~ != (needle + j)~) { match = 0; break; }
+      j = j + 1;
+    }
+    if (match == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+def str_contains(hay byte~, hlen int, needle byte~, nlen int) int {
+  var idx = str_index_of(hay, hlen, needle, nlen);
+  if (idx >= 0) { return 1; }
+  return 0;
+}
+
 // --- File helpers ---
 def write_file_all(path byte~, data byte~, length int) int {
   var fd = __open__(path, 577, 420); // O_WRONLY|O_CREAT|O_TRUNC, 0644
