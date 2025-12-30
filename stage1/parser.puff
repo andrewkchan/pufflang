@@ -15,6 +15,15 @@ def parse_simple(tokens VecInt) int {
   i = i + 1;
   if (safe_get(tokens, i) != TOKEN_LEFT_PAREN) { return 0; }
   i = i + 1;
+  // Optional parameter list: IDENT { , IDENT }.
+  if (safe_get(tokens, i) == TOKEN_IDENTIFIER) {
+    i = i + 1;
+    while (safe_get(tokens, i) == TOKEN_COMMA) {
+      i = i + 1;
+      if (safe_get(tokens, i) != TOKEN_IDENTIFIER) { return 0; }
+      i = i + 1;
+    }
+  }
   if (safe_get(tokens, i) != TOKEN_RIGHT_PAREN) { return 0; }
   i = i + 1;
   if (safe_get(tokens, i) != TOKEN_LEFT_BRACE) { return 0; }
