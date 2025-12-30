@@ -97,6 +97,14 @@ def vecint_get(v VecInt, idx int) int {
   return (int~(base + off))~;
 }
 
+// Set element at idx for VecInt.
+def vecint_set(v VecInt, idx int, value int) VecInt {
+  var base = byte~(v.data);
+  var off = idx * 4;
+  (int~(base + off))~ = value;
+  return v;
+}
+
 // --- Generic Vec helpers ---
 def vec_new(elemSize int, cap int) Vec {
   var c = cap;
@@ -183,6 +191,59 @@ def sb_clear(sb StringBuilder) StringBuilder {
 def sb_append_cstr(sb StringBuilder, s byte~) StringBuilder {
   var n = cstr_len(s);
   return sb_append_bytes(sb, s, n);
+}
+
+// Append signed int in decimal.
+def sb_append_int(sb StringBuilder, value int) StringBuilder {
+  if (value == 0) { return sb_append_byte(sb, byte(48)); }
+  var neg = 0;
+  var n = value;
+  if (n < 0) {
+    neg = 1;
+    n = 0 - n;
+  }
+  var tmp = vecbyte_new(16);
+  while (n > 0) {
+    var digit = n % 10;
+    tmp = vecbyte_push(tmp, byte(48 + digit));
+    n = n / 10;
+  }
+  if (neg == 1) {
+    tmp = vecbyte_push(tmp, byte(45)); // '-'
+  }
+  var i = tmp.length - 1;
+  var out = sb;
+  while (i >= 0) {
+    out = sb_append_byte(out, (tmp.data + i)~);
+    i = i - 1;
+  }
+  return out;
+}
+
+// Append unsigned int as lowercase hex, zero-padded to width (up to 8).
+def sb_append_hex(sb StringBuilder, value int, width int) StringBuilder {
+  var tmp = vecbyte_new(16);
+  var n = value;
+  while (n != 0) {
+    var nib = n & 15;
+    var c = 0;
+    if (nib < 10) { c = 48 + nib; } else { c = 87 + nib; } // 'a' = 97, 97-10=87
+    tmp = vecbyte_push(tmp, byte(c));
+    n = n >> 4;
+  }
+  if (tmp.length == 0) {
+    tmp = vecbyte_push(tmp, byte(48)); // 0
+  }
+  while (tmp.length < width) {
+    tmp = vecbyte_push(tmp, byte(48));
+  }
+  var i = tmp.length - 1;
+  var out = sb;
+  while (i >= 0) {
+    out = sb_append_byte(out, (tmp.data + i)~);
+    i = i - 1;
+  }
+  return out;
 }
 
 // --- String helpers ---
@@ -469,6 +530,164 @@ def map_delete(m Map, key int) Map {
         next = (next + 1) & mask;
       }
       return out;
+    }
+    idx = (idx + 1) & mask;
+    if (idx == start) { return m; }
+  }
+  return m;
+}
+
+// --- MapStr (string -> int) with open addressing ---
+struct MapStr { keys Vec, values VecInt, states VecInt, cap int, length int }
+var MAPSTR_EMPTY int = 0;
+var MAPSTR_FILLED int = 1;
+var MAPSTR_TOMB int = 2;
+
+def mapstr_new(cap int) MapStr {
+  var c = cap;
+  if (c < 8) { c = 8; }
+  var pow = 8;
+  while (pow < c) { pow = pow * 2; }
+  c = pow;
+  var keys = vec_new(8, c);
+  keys.length = c;
+  var values = vecint_new(c);
+  values.length = c;
+  var states = vecint_new(c);
+  states.length = c;
+  var i = 0;
+  while (i < c) {
+    states = vecint_set(states, i, MAPSTR_EMPTY);
+    // zero out key + value slots
+    var kptr = vec_get_ptr(keys, i);
+    var j = 0;
+    while (j < 8) { (kptr + j)~ = byte(0); j = j + 1; }
+    values = vecint_set(values, i, 0);
+    i = i + 1;
+  }
+  return MapStr{keys, values, states, c, 0};
+}
+
+def mapstr_hash(key String, mask int) int {
+  // djb2
+  var h = 5381;
+  var i = 0;
+  while (i < key.length) {
+    h = ((h << 5) + h) + int((key.data + i)~);
+    i = i + 1;
+  }
+  return h & mask;
+}
+
+def mapstr_key_at(m MapStr, idx int) String {
+  var ptr = vec_get_ptr(m.keys, idx);
+  var out = String{ptr, 0};
+  var i = 0;
+  while (i < 8) {
+    (byte~(&out) + i)~ = (ptr + i)~;
+    i = i + 1;
+  }
+  return out;
+}
+
+def mapstr_set_slot(m MapStr, idx int, key String, value int) MapStr {
+  m.keys = vec_set(m.keys, idx, byte~(&key));
+  m.values = vecint_set(m.values, idx, value);
+  m.states = vecint_set(m.states, idx, MAPSTR_FILLED);
+  return m;
+}
+
+def mapstr_load_too_high(m MapStr) int {
+  if (m.length * 10 >= m.cap * 7) { return 1; }
+  return 0;
+}
+
+def mapstr_resize(m MapStr, newCap int) MapStr {
+  var newMap = mapstr_new(newCap);
+  var i = 0;
+  while (i < m.cap) {
+    var state = vecint_get(m.states, i);
+    if (state == MAPSTR_FILLED) {
+      var k = mapstr_key_at(m, i);
+      var v = vecint_get(m.values, i);
+      newMap = mapstr_put(newMap, k, v);
+    }
+    i = i + 1;
+  }
+  return newMap;
+}
+
+def mapstr_put(m MapStr, key String, value int) MapStr {
+  var out = m;
+  if (mapstr_load_too_high(out) == 1) {
+    out = mapstr_resize(out, out.cap * 2);
+  }
+  var kclone = str_clone(key.data, key.length);
+  var mask = out.cap - 1;
+  var idx = mapstr_hash(kclone, mask);
+  var firstTomb = -1;
+  while (true) {
+    var state = vecint_get(out.states, idx);
+    if (state == MAPSTR_EMPTY) {
+      var useIdx = idx;
+      if (firstTomb != -1) { useIdx = firstTomb; }
+      out = mapstr_set_slot(out, useIdx, kclone, value);
+      out.length = out.length + 1;
+      return out;
+    }
+    if (state == MAPSTR_TOMB) {
+      if (firstTomb == -1) { firstTomb = idx; }
+    } else { // filled
+      var existing = mapstr_key_at(out, idx);
+      if (str_eq(existing.data, existing.length, key.data, key.length) == 1) {
+        out = mapstr_set_slot(out, idx, kclone, value);
+        return out;
+      }
+    }
+    idx = (idx + 1) & mask;
+  }
+  return out;
+}
+
+def mapstr_get(m MapStr, key String) int {
+  var mask = m.cap - 1;
+  var idx = mapstr_hash(key, mask);
+  var start = idx;
+  while (true) {
+    var state = vecint_get(m.states, idx);
+    if (state == MAPSTR_EMPTY) { return MAP_EMPTY; }
+    if (state == MAPSTR_FILLED) {
+      var existing = mapstr_key_at(m, idx);
+      if (str_eq(existing.data, existing.length, key.data, key.length) == 1) {
+        return vecint_get(m.values, idx);
+      }
+    }
+    idx = (idx + 1) & mask;
+    if (idx == start) { return MAP_EMPTY; }
+  }
+  return MAP_EMPTY;
+}
+
+def mapstr_has(m MapStr, key String) int {
+  var v = mapstr_get(m, key);
+  if (v == MAP_EMPTY) { return 0; }
+  return 1;
+}
+
+def mapstr_delete(m MapStr, key String) MapStr {
+  var mask = m.cap - 1;
+  var idx = mapstr_hash(key, mask);
+  var start = idx;
+  while (true) {
+    var state = vecint_get(m.states, idx);
+    if (state == MAPSTR_EMPTY) { return m; }
+    if (state == MAPSTR_FILLED) {
+      var existing = mapstr_key_at(m, idx);
+      if (str_eq(existing.data, existing.length, key.data, key.length) == 1) {
+        m.states = vecint_set(m.states, idx, MAPSTR_TOMB);
+        m.length = m.length - 1;
+        return m;
+      }
     }
     idx = (idx + 1) & mask;
     if (idx == start) { return m; }
