@@ -254,6 +254,16 @@ def str_contains(hay byte~, hlen int, needle byte~, nlen int) int {
   return 0;
 }
 
+// Slice without copying; clamps count to bounds.
+def str_slice(src byte~, slen int, start int, count int) String {
+  if (start < 0) { start = 0; }
+  if (start > slen) { start = slen; }
+  var maxCount = slen - start;
+  if (count < 0) { count = 0; }
+  if (count > maxCount) { count = maxCount; }
+  return String{src + start, count};
+}
+
 // --- argv/env/time wrappers ---
 def argv_count() int { return __argc__(); }
 
