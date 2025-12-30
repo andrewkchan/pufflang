@@ -166,6 +166,30 @@ def vecstr_get(v VecStr, idx int) String {
   return s;
 }
 
+// --- String interner (string -> int index) ---
+struct Interner { map MapStr, vec VecStr }
+struct Interned { interner Interner, index int }
+
+def interner_new(cap int) Interner {
+  return Interner{mapstr_new(cap), vecstr_new(cap)};
+}
+
+def interner_intern(in Interner, s String) Interned {
+  var existing = mapstr_get(in.map, s);
+  if (existing != MAP_EMPTY) {
+    return Interned{in, existing};
+  }
+  var clone = str_clone(s.data, s.length);
+  var idx = in.vec.length;
+  var vec2 = vecstr_push(in.vec, clone);
+  var map2 = mapstr_put(in.map, clone, idx);
+  return Interned{Interner{map2, vec2}, idx};
+}
+
+def interner_get(in Interner, idx int) String {
+  return vecstr_get(in.vec, idx);
+}
+
 // --- Generic Vec helpers ---
 def vec_new(elemSize int, cap int) Vec {
   var c = cap;
