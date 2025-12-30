@@ -1,0 +1,7 @@
+// Stage1 Puffscript codegen stub.
+// Emits success (1) if resolver passed.
+
+def codegen_simple(ok int) int {
+  if (ok == 1) { return 1; }
+  return 0;
+}

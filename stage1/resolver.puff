@@ -1,0 +1,7 @@
+// Stage1 Puffscript resolver stub (placeholder).
+// For now, simply returns 1 if parse succeeded and tokens end with EOF.
+
+def resolve_simple(tokens VecInt) int {
+  if (tokens.length == 0) { return 0; }
+  return 1;
+}

@@ -4,6 +4,8 @@ import { compileAndRunWithStdlib } from "../src/harness"
 
 const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "scanner.puff"), "utf8")
 const parserSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "parser.puff"), "utf8")
+const resolverSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "resolver.puff"), "utf8")
+const codegenSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "codegen.puff"), "utf8")
 const driverSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "driver.puff"), "utf8")
 
 const lines = (res: { stdout: string }) => res.stdout.trim().split("\n").map((s) => s.trim())
@@ -13,6 +15,8 @@ describe("Stage1 driver (scan+parse)", () => {
     const source = `
     ${scannerSrc}
     ${parserSrc}
+    ${resolverSrc}
+    ${codegenSrc}
     ${driverSrc}
     def main() {
       var src = "def foo() { return 123; }";
@@ -30,6 +34,8 @@ describe("Stage1 driver (scan+parse)", () => {
     const source = `
     ${scannerSrc}
     ${parserSrc}
+    ${resolverSrc}
+    ${codegenSrc}
     ${driverSrc}
     def main() {
       var src = "def foo( { return 123; }"; // missing )
