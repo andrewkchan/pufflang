@@ -438,3 +438,40 @@ def map_get(m Map, key int) int {
   }
   return MAP_EMPTY;
 }
+
+def map_has(m Map, key int) int {
+  var v = map_get(m, key);
+  if (v == MAP_EMPTY) { return 0; }
+  return 1;
+}
+
+def map_delete(m Map, key int) Map {
+  var mask = m.cap - 1;
+  var idx = map_hash(key, mask);
+  var start = idx;
+  while (true) {
+    var off = idx * 8;
+    var k = (int~(m.data + off))~;
+    if (k == MAP_EMPTY) { return m; }
+    if (k == key) {
+      (int~(m.data + off))~ = MAP_EMPTY;
+      (int~(m.data + off + 4))~ = 0;
+      var out = Map{m.data, m.cap, m.length - 1};
+      var next = (idx + 1) & mask;
+      while (true) {
+        var off2 = next * 8;
+        var k2 = (int~(m.data + off2))~;
+        if (k2 == MAP_EMPTY) { break; }
+        var v2 = (int~(m.data + off2 + 4))~;
+        (int~(m.data + off2))~ = MAP_EMPTY;
+        (int~(m.data + off2 + 4))~ = 0;
+        out = map_put(out, k2, v2);
+        next = (next + 1) & mask;
+      }
+      return out;
+    }
+    idx = (idx + 1) & mask;
+    if (idx == start) { return m; }
+  }
+  return m;
+}
