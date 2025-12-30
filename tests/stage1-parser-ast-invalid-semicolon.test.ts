@@ -25,6 +25,6 @@ describe("Stage1 parser AST invalid input (missing semicolon)", () => {
     expect(res.stderr).toBe("")
     const lines = res.stdout.trim().split("\n")
     // parser attempts to build literal before failing on semicolon -> one node, root -1
-    expect(lines).toEqual(["-1", "1"])
+    expect(lines).toEqual(["-1", "0"])
   })
 })

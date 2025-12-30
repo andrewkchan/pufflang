@@ -110,7 +110,11 @@ def parse_simple(tokens VecInt) int {
 def parse_simple_ast(tokens VecInt) ParseResult {
   var arena = nodearena_new(8);
   var root = -1;
+  // Validate first using the existing parse_simple; only build AST if valid.
+  if (parse_simple(tokens) == 0) { return ParseResult{arena, root}; }
+
   var idx = 0;
+  // From here, shape is already validated; minimal checks remain for safety.
   if (safe_get(tokens, idx) != TOKEN_DEF) { return ParseResult{arena, root}; }
   idx = idx + 1;
   if (safe_get(tokens, idx) != TOKEN_IDENTIFIER) { return ParseResult{arena, root}; }
