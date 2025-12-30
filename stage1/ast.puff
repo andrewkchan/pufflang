@@ -152,55 +152,37 @@ var NODE_VAR_STMT int = 6;
 var NODE_FUNCTION int = 7;
 var NODE_BLOCK int = 8;
 
-// Simple global arity tracking for scaffolding tests.
-var FN_SEEN1 int = -1;
-var FN_SEEN2 int = -1;
-
-// ---- Symbol scaffolding ----
+// ---- Symbol/scoping scaffolding ----
 var SYMKIND_VAR int = 1;
 var SYMKIND_PARAM int = 2;
 var SYMKIND_FUNCTION int = 3;
 var SYMKIND_FUNCTION_OVERLOAD int = 4;
 var SYMKIND_STRUCT int = 5;
 
-struct FunctionInfo { arity int, returnType int, isExported int, isImported int }
-struct Symbol {
-  kind int,
-  nameIdx int,
-  typeId int,
-  func FunctionInfo,
-  overloadArity int // -1 if none; simple two-arity support
-}
-
 struct Scope {
-  names VecStr,
-  symbols Vec,
-  parent byte~,
-  hasParent int,
-  fnArities VecInt
+  names VecStr,   // identifiers
+  kinds VecInt,   // SYMKIND_* per name
+  arityA VecInt,  // primary arity for functions (or -1)
+  arityB VecInt,  // secondary arity for overload (or -1)
+  parent byte~,   // unused for now
+  hasParent int
 }
 
 def scope_new(parent byte~, hasParent int) Scope {
-  return Scope{vecstr_new(8), vec_new(32, 8), parent, hasParent, vecint_new(4)};
+  return Scope{
+    vecstr_new(8),
+    vecint_new(8),
+    vecint_new(8),
+    vecint_new(8),
+    parent,
+    hasParent
+  };
 }
 
 // Root scope convenience constructor (no parent lookup).
 def scope_new_root() Scope {
   var dummy = __malloc__(32);
   return scope_new(dummy, 0);
-}
-
-// Define a variable symbol; returns err=0 (stub).
-def scope_define_var(s Scope, name String, typeId int) int { return 0; }
-
-// Define function with arity; handles overload aggregation.
-// Returns error flag (0 ok, 1 duplicate arity). Uses simple global tracking for now.
-def scope_define_function(s Scope, name String, arity int, returnType int, isExported int, isImported int) int {
-  if (FN_SEEN1 == -1) { FN_SEEN1 = arity; return 0; }
-  if (FN_SEEN1 == arity) { return 1; }
-  if (FN_SEEN2 == -1) { FN_SEEN2 = arity; return 0; }
-  if (FN_SEEN2 == arity) { return 1; }
-  return 1;
 }
 
 // Lookup in current scope; returns index or -1.
@@ -214,76 +196,47 @@ def scope_lookup_index_current(s Scope, name String) int {
   return -1;
 }
 
+// Define a variable symbol; returns err flag (0 ok, 1 duplicate).
+def scope_define_var(s Scope, name String, typeId int) int {
+  var idx = scope_lookup_index_current(s, name);
+  if (idx != -1) { return 1; }
+  s.names = vecstr_push(s.names, str_clone(name.data, name.length));
+  s.kinds = vecint_push(s.kinds, SYMKIND_VAR);
+  s.arityA = vecint_push(s.arityA, -1);
+  s.arityB = vecint_push(s.arityB, -1);
+  return 0;
+}
+
+// Define function with arity; handles overload aggregation.
+// Returns error flag (0 ok, 1 duplicate arity).
+def scope_define_function(s Scope, name String, arity int, returnType int, isExported int, isImported int) int {
+  var idx = scope_lookup_index_current(s, name);
+  if (idx == -1) {
+    s.names = vecstr_push(s.names, str_clone(name.data, name.length));
+    s.kinds = vecint_push(s.kinds, SYMKIND_FUNCTION);
+    s.arityA = vecint_push(s.arityA, arity);
+    s.arityB = vecint_push(s.arityB, -1);
+    return 0;
+  }
+  var kind = vecint_get(s.kinds, idx);
+  if (kind != SYMKIND_FUNCTION && kind != SYMKIND_FUNCTION_OVERLOAD) { return 1; }
+  var a = vecint_get(s.arityA, idx);
+  var b = vecint_get(s.arityB, idx);
+  if (a == arity || b == arity) { return 1; }
+  if (b == -1) {
+    vecint_set(s.arityB, idx, arity);
+    vecint_set(s.kinds, idx, SYMKIND_FUNCTION_OVERLOAD);
+    return 0;
+  }
+  return 1;
+}
+
 // Lookup through parents; returns index in current scope if found, else -1.
 def scope_lookup(s Scope, name String) int {
   var idx = scope_lookup_index_current(s, name);
   if (idx != -1) { return idx; }
   if (s.hasParent == 0) { return -1; }
   return -1;
-}
-
-// --- Symbol Vec helpers (elemSize = 32 bytes) ---
-def scope_symbols_push(v Vec, sym Symbol) Vec {
-  var out = vec_reserve(v, v.length + 1);
-  var dest = vec_get_ptr(out, out.length);
-  (int~(dest))~ = sym.kind;               // 0
-  (int~(dest + 4))~ = sym.nameIdx;        // 4
-  (int~(dest + 8))~ = sym.typeId;         // 8
-  (int~(dest + 12))~ = sym.func.arity;    // 12
-  (int~(dest + 16))~ = sym.func.returnType; // 16
-  (int~(dest + 20))~ = sym.func.isExported; // 20
-  (int~(dest + 24))~ = sym.func.isImported; // 24
-  (int~(dest + 28))~ = sym.overloadArity;   // 28
-  out.length = out.length + 1;
-  return out;
-}
-
-def scope_symbols_get(v Vec, idx int) Symbol {
-  var ptr = vec_get_ptr(v, idx);
-  var kind = (int~(ptr))~;
-  var nameIdx = (int~(ptr + 4))~;
-  var typeId = (int~(ptr + 8))~;
-  var arity = (int~(ptr + 12))~;
-  var retType = (int~(ptr + 16))~;
-  var isExp = (int~(ptr + 20))~;
-  var isImp = (int~(ptr + 24))~;
-  var ovAr = (int~(ptr + 28))~;
-  return Symbol{kind, nameIdx, typeId, FunctionInfo{arity, retType, isExp, isImp}, ovAr};
-}
-
-def scope_symbols_set(v Vec, idx int, sym Symbol) Vec {
-  var out = v;
-  var ptr = vec_get_ptr(out, idx);
-  (int~(ptr))~ = sym.kind;
-  (int~(ptr + 4))~ = sym.nameIdx;
-  (int~(ptr + 8))~ = sym.typeId;
-  (int~(ptr + 12))~ = sym.func.arity;
-  (int~(ptr + 16))~ = sym.func.returnType;
-  (int~(ptr + 20))~ = sym.func.isExported;
-  (int~(ptr + 24))~ = sym.func.isImported;
-  (int~(ptr + 28))~ = sym.overloadArity;
-  return out;
-}
-
-// --- FunctionInfo Vec helpers (elemSize = 16 bytes) ---
-def scope_funcinfo_push(v Vec, fi FunctionInfo) Vec {
-  var out = vec_reserve(v, v.length + 1);
-  var dest = vec_get_ptr(out, out.length);
-  (int~(dest))~ = fi.arity;
-  (int~(dest + 4))~ = fi.returnType;
-  (int~(dest + 8))~ = fi.isExported;
-  (int~(dest + 12))~ = fi.isImported;
-  out.length = out.length + 1;
-  return out;
-}
-
-def scope_funcinfo_get(v Vec, idx int) FunctionInfo {
-  var ptr = vec_get_ptr(v, idx);
-  var arity = (int~(ptr))~;
-  var ret = (int~(ptr + 4))~;
-  var isExp = (int~(ptr + 8))~;
-  var isImp = (int~(ptr + 12))~;
-  return FunctionInfo{arity, ret, isExp, isImp};
 }
 
 // ---- Mangling helper (arity-based) ----
