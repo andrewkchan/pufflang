@@ -1,0 +1,60 @@
+// Simple scope stack for Stage1 resolver work.
+// Maintains (name, depth) pairs; lookup is linear from the end.
+
+struct ScopeStack { names VecStr, depths VecInt, depth int }
+
+def scope_new() ScopeStack {
+  return ScopeStack{vecstr_new(8), vecint_new(8), 0};
+}
+
+def scope_enter(s ScopeStack) ScopeStack {
+  return ScopeStack{s.names, s.depths, s.depth + 1};
+}
+
+// Pop all names at current depth and decrement.
+def scope_exit(s ScopeStack) ScopeStack {
+  var d = s.depth;
+  if (d == 0) { return s; }
+  var names = s.names;
+  var depths = s.depths;
+  while (names.length > 0 && vecint_get(depths, names.length - 1) == d) {
+    var popped = vecstr_pop(names);
+    names = popped.vec;
+    var poppedDepth = vecint_pop(depths);
+    depths = poppedDepth.vec;
+  }
+  return ScopeStack{names, depths, d - 1};
+}
+
+// Define name at current depth; returns updated stack.
+def scope_define(s ScopeStack, name String) ScopeStack {
+  var names = s.names;
+  var depths = s.depths;
+  var clone = str_clone(name.data, name.length);
+  names = vecstr_push(names, clone);
+  depths = vecint_push(depths, s.depth);
+  return ScopeStack{names, depths, s.depth};
+}
+
+// Check if name exists at any depth.
+def scope_lookup(s ScopeStack, name String) int {
+  var i = s.names.length;
+  while (i > 0) {
+    i = i - 1;
+    var n = vecstr_get(s.names, i);
+    if (str_eq(n.data, n.length, name.data, name.length) == 1) { return 1; }
+  }
+  return 0;
+}
+
+// Check if name exists at current depth only.
+def scope_lookup_current(s ScopeStack, name String) int {
+  var i = s.names.length;
+  while (i > 0) {
+    i = i - 1;
+    if (vecint_get(s.depths, i) != s.depth) { return 0; }
+    var n = vecstr_get(s.names, i);
+    if (str_eq(n.data, n.length, name.data, name.length) == 1) { return 1; }
+  }
+  return 0;
+}
