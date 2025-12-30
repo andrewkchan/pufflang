@@ -1193,6 +1193,25 @@ export class Context {
       symbol: null
     })
     closeFn.symbol = this.functionSymbol(closeFn)
+    const timeFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__time__"),
+      params: [
+        // mirror time(NULL) by passing null pointer explicitly
+        { name: fakeToken(TokenType.IDENTIFIER, "out"), type: ptrType(ByteType) }
+      ],
+      returnType: IntType,
+      symbol: null
+    })
+    timeFn.symbol = this.functionSymbol(timeFn)
+    const getenvFn = importedFunctionStmt({
+      name: fakeToken(TokenType.IDENTIFIER, "__getenv__"),
+      params: [
+        { name: fakeToken(TokenType.IDENTIFIER, "name"), type: ptrType(ByteType) }
+      ],
+      returnType: ptrType(ByteType),
+      symbol: null
+    })
+    getenvFn.symbol = this.functionSymbol(getenvFn)
     this.global.define(memcpy.name.lexeme, memcpy.symbol)
     this.global.define(sqrt.name.lexeme, sqrt.symbol)
     this.global.define(mallocFn.name.lexeme, mallocFn.symbol)
@@ -1203,6 +1222,8 @@ export class Context {
     this.global.define(readFn.name.lexeme, readFn.symbol)
     this.global.define(openFn.name.lexeme, openFn.symbol)
     this.global.define(closeFn.name.lexeme, closeFn.symbol)
+    this.global.define(timeFn.name.lexeme, timeFn.symbol)
+    this.global.define(getenvFn.name.lexeme, getenvFn.symbol)
   }
 
   variableSymbol(node: VarStmt, isGlobal: boolean): VariableSymbol {

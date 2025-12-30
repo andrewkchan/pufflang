@@ -160,15 +160,18 @@ class LlvmModuleBuilder {
     // putchar
     this.declare("declare i32 @putchar(i32)")
     // write
-    this.declare("declare i64 @write(i32, i8*, i64)")
+    this.declare("declare i32 @write(i32, i8*, i64)")
     // read
-    this.declare("declare i64 @read(i32, i8*, i64)")
+    this.declare("declare i32 @read(i32, i8*, i64)")
     // open/close
     this.declare("declare i32 @open(i8*, i32, i32)")
     this.declare("declare i32 @close(i32)")
     // malloc/free
     this.declare("declare i8* @malloc(i64)")
     this.declare("declare void @free(i8*)")
+    // time/getenv
+    this.declare("declare i32 @time(i8*)")
+    this.declare("declare i8* @getenv(i8*)")
     // memcpy
     this.declare("declare void @llvm.memcpy.p0.p0.i64(i8*, i8*, i64, i1)")
   }
@@ -1861,6 +1864,8 @@ export function emitLlvm(context: ast.Context): string {
   fnSigs.set("__read__/3", { ret: "i32", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "read" })
   fnSigs.set("__open__/3", { ret: "i32", params: ["i8*", "i32", "i32"], retAst: ast.IntType, mangled: "open" })
   fnSigs.set("__close__/1", { ret: "i32", params: ["i32"], retAst: ast.IntType, mangled: "close" })
+  fnSigs.set("__time__/1", { ret: "i32", params: ["i8*"], retAst: ast.IntType, mangled: "time" })
+  fnSigs.set("__getenv__/1", { ret: "i8*", params: ["i8*"], retAst: ast.ptrType(ast.ByteType), mangled: "getenv" })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
