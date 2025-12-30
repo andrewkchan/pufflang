@@ -260,6 +260,33 @@ def scope_lookup_info(s Scope, name String) SymInfo {
   return SymInfo{0, -1, -1, -1};
 }
 
+// Lookup symbol kind only (local scope).
+def scope_lookup_kind(s Scope, name String) int {
+  var idx = scope_lookup_index_current(s, name);
+  if (idx == -1) { return 0; }
+  return vecint_get(s.kinds, idx);
+}
+
+// Return overload count for a function name (0 if not a function).
+def scope_function_overload_count(s Scope, name String) int {
+  var idx = scope_lookup_index_current(s, name);
+  if (idx == -1) { return 0; }
+  var kind = vecint_get(s.kinds, idx);
+  if (kind != SYMKIND_FUNCTION && kind != SYMKIND_FUNCTION_OVERLOAD) { return 0; }
+  var b = vecint_get(s.arityB, idx);
+  if (b == -1) { return 1; }
+  return 2;
+}
+
+// Return function return type id (or -1).
+def scope_function_return_type(s Scope, name String) int {
+  var idx = scope_lookup_index_current(s, name);
+  if (idx == -1) { return -1; }
+  var kind = vecint_get(s.kinds, idx);
+  if (kind != SYMKIND_FUNCTION && kind != SYMKIND_FUNCTION_OVERLOAD) { return -1; }
+  return vecint_get(s.typeIds, idx);
+}
+
 // ---- Mangling helper (arity-based) ----
 // If only one overload and exported, keep name; otherwise append "__<arity>".
 def mangle_name(name String, arity int, isExported int, overloadCount int) String {
