@@ -11,10 +11,27 @@
 
 ## Language extensions and semantics notes
 - Overloading & defaults: Functions overload by arity/types; arity is mangled (`foo__2`); default args supported. Exports with a single overload keep the unmangled name; overloads stay mangled but are `external`.
+  - Example:
+  ```
+  export def bar(x int) int { return x + 1; }           // external @bar
+  export def bar(x int, y int = 2) int { return x + y; } // external @bar__2
+  ```
 - Internal vs external linkage: Non-exported functions/globals are emitted `internal`; exported ones are external. Overloaded exports remain mangled but external. Tests cover both to prevent regressions.
+  - Example:
+  ```
+  def internal_fn(x int) int { return x + 1; }   // define internal @internal_fn
+  export def public_fn(x int) int { return x + 1; } // define i32 @public_fn
+  ```
 - Import/export parsing: `export` marks symbols for external linkage; `import` supported in Stage0 parsing and codegen.
 - Pointer printing: Runtime prints pointers as zero-padded 16-hex digits (`0x%016llx`) with regression coverage.
 - Builtins: libc-backed double-underscore intrinsics for memory, I/O, env/time, argv/argc helpers; map to corresponding libc calls in the LLVM backend.
+  - Examples:
+  ```
+  var buf = __malloc__(16);
+  __free__(buf);
+  var t = __time__(0);
+  var env = __getenv__(byte~(&"PATH\0"[0]));
+  ```
 - Scanner tokens: Added support for commas, `=`, arithmetic ops (+, -, *, /) to enable richer Stage1 parsing paths.
 
 ## How to run tests
