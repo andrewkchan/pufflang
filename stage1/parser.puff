@@ -46,6 +46,13 @@ def parse_simple(tokens VecInt) int {
   var retk = safe_get(tokens, i);
   if (retk != TOKEN_NUMBER && retk != TOKEN_IDENTIFIER) { return 0; }
   i = i + 1;
+  // Optional single '+' expression: (ident|number) '+' (ident|number)
+  if (safe_get(tokens, i) == TOKEN_PLUS) {
+    i = i + 1;
+    var rhs = safe_get(tokens, i);
+    if (rhs != TOKEN_NUMBER && rhs != TOKEN_IDENTIFIER) { return 0; }
+    i = i + 1;
+  }
   if (safe_get(tokens, i) != TOKEN_SEMICOLON) { return 0; }
   i = i + 1;
   if (safe_get(tokens, i) != TOKEN_RIGHT_BRACE) { return 0; }
