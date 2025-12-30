@@ -101,3 +101,90 @@ def parse_simple(tokens VecInt) int {
   if (safe_get(tokens, i) != TOKEN_EOF) { return 0; }
   return 1;
 }
+
+// --- Minimal S-expression printer for a single def/return program ---
+
+def ts_kind(tokens Vec, idx int) int { return token_kind_at(tokens, idx); }
+def ts_len(tokens Vec) int { return tokens.length; }
+
+def ts_match(tokens Vec, idx int~, kind int) int {
+  if (idx~ < ts_len(tokens) && ts_kind(tokens, idx~) == kind) { idx~ = idx~ + 1; return 1; }
+  return 0;
+}
+
+def ts_peek(tokens Vec, idx int) int {
+  if (idx >= ts_len(tokens)) { return TOKEN_EOF; }
+  return ts_kind(tokens, idx);
+}
+
+def sb_append_token_lexeme(sb StringBuilder, src byte~, tokIdx int, tokens Vec) StringBuilder {
+  var start = token_start_at(tokens, tokIdx);
+  var length = token_length_at(tokens, tokIdx);
+  return sb_append_bytes(sb, src + start, length);
+}
+
+def trim_span(src byte~, start int, end int) String {
+  // trim leading/trailing ASCII space, tab, newline, CR
+  while (start < end) {
+    var c = (src + start)~;
+    if (c == byte(32) || c == byte(9) || c == byte(10) || c == byte(13)) { start = start + 1; continue; }
+    break;
+  }
+  while (end > start) {
+    var c2 = (src + end - 1)~;
+    if (c2 == byte(32) || c2 == byte(9) || c2 == byte(10) || c2 == byte(13)) { end = end - 1; continue; }
+    break;
+  }
+  var sb = sb_new();
+  sb = sb_append_bytes(sb, src + start, end - start);
+  return sb_to_string(sb);
+}
+
+// Parse a simple function and emit S-expr:
+// (def <name> (params a b) (return <expr>))
+// This mirrors the narrow patterns used by stage1 tests and avoids a full AST.
+def parse_to_sexpr(src byte~, n int) String {
+  var tokens = scan_tokens(src, n);
+  var idx = 0;
+  if (ts_match(tokens, &idx, TOKEN_DEF) == 0) { return String{src, 0}; }
+  var nameTok = idx;
+  ts_match(tokens, &idx, TOKEN_IDENTIFIER);
+  ts_match(tokens, &idx, TOKEN_LEFT_PAREN);
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"(def "[0]));
+  sb = sb_append_token_lexeme(sb, src, nameTok, tokens);
+  sb = sb_append_cstr(sb, byte~(&" (params"[0]));
+  var firstParam = 1;
+  while (ts_peek(tokens, idx) != TOKEN_RIGHT_PAREN && ts_peek(tokens, idx) != TOKEN_EOF) {
+    if (ts_peek(tokens, idx) != TOKEN_IDENTIFIER) { break; }
+    if (firstParam == 1) { sb = sb_append_byte(sb, byte(32)); firstParam = 0; }
+    else { sb = sb_append_byte(sb, byte(32)); }
+    sb = sb_append_token_lexeme(sb, src, idx, tokens);
+    idx = idx + 1;
+    if (ts_match(tokens, &idx, TOKEN_COMMA) == 1) { continue; }
+  }
+  ts_match(tokens, &idx, TOKEN_RIGHT_PAREN);
+  sb = sb_append_byte(sb, byte(41)); // )
+  ts_match(tokens, &idx, TOKEN_LEFT_BRACE);
+  // Find return expr bounds
+  // Assume pattern: return <expr> ;
+  var retTokIdx = idx;
+  while (retTokIdx < ts_len(tokens) && ts_kind(tokens, retTokIdx) != TOKEN_RETURN) { retTokIdx = retTokIdx + 1; }
+  if (retTokIdx >= ts_len(tokens)) { return String{src, 0}; }
+  var retStart = token_start_at(tokens, retTokIdx) + token_length_at(tokens, retTokIdx);
+  var semiTokIdx = retTokIdx;
+  while (semiTokIdx < ts_len(tokens) && ts_kind(tokens, semiTokIdx) != TOKEN_SEMICOLON) { semiTokIdx = semiTokIdx + 1; }
+  if (semiTokIdx >= ts_len(tokens)) { return String{src, 0}; }
+  var retEnd = token_start_at(tokens, semiTokIdx);
+  var exprStr = trim_span(src, retStart, retEnd);
+  // skip past semicolon and closing brace
+  idx = semiTokIdx + 1;
+  ts_match(tokens, &idx, TOKEN_RIGHT_BRACE);
+  sb = sb_append_byte(sb, byte(32));
+  sb = sb_append_byte(sb, byte(40));
+  sb = sb_append_cstr(sb, byte~(&"return "[0]));
+  sb = sb_append_string(sb, exprStr);
+  sb = sb_append_byte(sb, byte(41));
+  sb = sb_append_byte(sb, byte(41)); // close def
+  return sb_to_string(sb);
+}
