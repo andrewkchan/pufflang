@@ -10,3 +10,21 @@ def compile_simple(src byte~, n int) int {
   var codegen = codegen_simple(resolved);
   return codegen;
 }
+
+// Variant that uses full tokens and depth-aware resolver.
+def compile_simple2(src byte~, n int) int {
+  var toksFull = scan_tokens_full(src, n);
+  // derive kinds for parser
+  var kinds = vecint_new(toksFull.length);
+  var i = 0;
+  while (i < toksFull.length) {
+    kinds = vecint_push(kinds, token_kind_at(toksFull, i));
+    i = i + 1;
+  }
+  var parsed = parse_simple(kinds);
+  if (parsed == 0) { return 0; }
+  var resolved = resolve_with_scope2(src, n);
+  if (resolved == 0) { return 0; }
+  var codegen = codegen_simple(resolved);
+  return codegen;
+}

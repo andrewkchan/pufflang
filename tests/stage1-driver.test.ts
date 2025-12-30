@@ -51,4 +51,44 @@ describe("Stage1 driver (scan+parse)", () => {
     expect(res.stderr).toBe("")
     expect(lines(res)).toEqual(["0"])
   })
+
+  test("compile_simple2 returns 1 for valid source", () => {
+    const source = `
+    ${scannerSrc}
+    ${astSrc}
+    ${parserSrc}
+    ${resolverSrc}
+    ${codegenSrc}
+    ${driverSrc}
+    def main() {
+      var src = "def foo() { return 123; }";
+      var ok = compile_simple2(byte~(&src[0]), len(src));
+      print ok;
+    }
+    `
+    const res = compileAndRunWithStdlib(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(lines(res)).toEqual(["1"])
+  })
+
+  test("compile_simple2 returns 0 for invalid source", () => {
+    const source = `
+    ${scannerSrc}
+    ${astSrc}
+    ${parserSrc}
+    ${resolverSrc}
+    ${codegenSrc}
+    ${driverSrc}
+    def main() {
+      var src = "def foo( { return 123; }"; // missing )
+      var ok = compile_simple2(byte~(&src[0]), len(src));
+      print ok;
+    }
+    `
+    const res = compileAndRunWithStdlib(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(lines(res)).toEqual(["0"])
+  })
 })
