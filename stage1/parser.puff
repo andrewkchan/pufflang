@@ -117,6 +117,17 @@ def parse_simple_ast(tokens VecInt) ParseResult {
   idx = idx + 1;
   if (safe_get(tokens, idx) != TOKEN_LEFT_PAREN) { return ParseResult{arena, root}; }
   idx = idx + 1;
+  var paramCount = 0;
+  if (safe_get(tokens, idx) == TOKEN_IDENTIFIER) {
+    paramCount = paramCount + 1;
+    idx = idx + 1;
+    while (safe_get(tokens, idx) == TOKEN_COMMA) {
+      idx = idx + 1;
+      if (safe_get(tokens, idx) != TOKEN_IDENTIFIER) { return ParseResult{arena, root}; }
+      paramCount = paramCount + 1;
+      idx = idx + 1;
+    }
+  }
   if (safe_get(tokens, idx) != TOKEN_RIGHT_PAREN) { return ParseResult{arena, root}; }
   idx = idx + 1;
   if (safe_get(tokens, idx) != TOKEN_LEFT_BRACE) { return ParseResult{arena, root}; }
@@ -137,9 +148,12 @@ def parse_simple_ast(tokens VecInt) ParseResult {
   var litIdx = arena.nodes.length - 1;
   arena = nodearena_push(arena, Node{NODE_RETURN, litIdx, 0, 0, 0, 0, -1});
   var retIdx = arena.nodes.length - 1;
-  arena = nodearena_push(arena, Node{NODE_BLOCK, retIdx, 0, 0, 0, 0, -1});
+  // block holds contiguous statements starting at litIdx (literal+return).
+  var blockStart = litIdx;
+  var blockCount = 2;
+  arena = nodearena_push(arena, Node{NODE_BLOCK, blockStart, blockCount, 0, 0, 0, -1});
   var blkIdx = arena.nodes.length - 1;
-  arena = nodearena_push(arena, Node{NODE_FUNCTION, blkIdx, 0, 0, 0, 0, -1});
+  arena = nodearena_push(arena, Node{NODE_FUNCTION, blkIdx, paramCount, 0, 0, 0, -1});
   root = arena.nodes.length - 1;
   return ParseResult{arena, root};
 }
