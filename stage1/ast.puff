@@ -159,18 +159,23 @@ var SYMKIND_FUNCTION int = 3;
 var SYMKIND_FUNCTION_OVERLOAD int = 4;
 var SYMKIND_STRUCT int = 5;
 
+struct SymInfo { kind int, arityA int, arityB int, typeId int }
+struct ScopeResult { scope Scope, err int }
+
 struct Scope {
   names VecStr,   // identifiers
   kinds VecInt,   // SYMKIND_* per name
   arityA VecInt,  // primary arity for functions (or -1)
   arityB VecInt,  // secondary arity for overload (or -1)
-  parent byte~,   // unused for now
+  typeIds VecInt, // var type or function return type (or -1)
+  parent byte~,   // parent Scope*
   hasParent int
 }
 
 def scope_new(parent byte~, hasParent int) Scope {
   return Scope{
     vecstr_new(8),
+    vecint_new(8),
     vecint_new(8),
     vecint_new(8),
     vecint_new(8),
@@ -196,47 +201,57 @@ def scope_lookup_index_current(s Scope, name String) int {
   return -1;
 }
 
-// Define a variable symbol; returns err flag (0 ok, 1 duplicate).
-def scope_define_var(s Scope, name String, typeId int) int {
+// Define a variable symbol; returns updated scope (duplicate ignored).
+def scope_define_var(s Scope, name String, typeId int) ScopeResult {
   var idx = scope_lookup_index_current(s, name);
-  if (idx != -1) { return 1; }
+  if (idx != -1) { return ScopeResult{s, 1}; }
   s.names = vecstr_push(s.names, str_clone(name.data, name.length));
   s.kinds = vecint_push(s.kinds, SYMKIND_VAR);
   s.arityA = vecint_push(s.arityA, -1);
   s.arityB = vecint_push(s.arityB, -1);
-  return 0;
+  s.typeIds = vecint_push(s.typeIds, typeId);
+  return ScopeResult{s, 0};
 }
 
-// Define function with arity; handles overload aggregation.
-// Returns error flag (0 ok, 1 duplicate arity).
-def scope_define_function(s Scope, name String, arity int, returnType int, isExported int, isImported int) int {
+// Define function with arity; handles overload aggregation (max 2). Duplicate arity ignored.
+def scope_define_function(s Scope, name String, arity int, returnType int, isExported int, isImported int) ScopeResult {
   var idx = scope_lookup_index_current(s, name);
   if (idx == -1) {
     s.names = vecstr_push(s.names, str_clone(name.data, name.length));
     s.kinds = vecint_push(s.kinds, SYMKIND_FUNCTION);
     s.arityA = vecint_push(s.arityA, arity);
     s.arityB = vecint_push(s.arityB, -1);
-    return 0;
+    s.typeIds = vecint_push(s.typeIds, returnType);
+    return ScopeResult{s, 0};
   }
   var kind = vecint_get(s.kinds, idx);
-  if (kind != SYMKIND_FUNCTION && kind != SYMKIND_FUNCTION_OVERLOAD) { return 1; }
+  if (kind != SYMKIND_FUNCTION && kind != SYMKIND_FUNCTION_OVERLOAD) { return ScopeResult{s, 1}; }
   var a = vecint_get(s.arityA, idx);
   var b = vecint_get(s.arityB, idx);
-  if (a == arity || b == arity) { return 1; }
+  if (a == arity || b == arity) { return ScopeResult{s, 1}; }
   if (b == -1) {
     vecint_set(s.arityB, idx, arity);
     vecint_set(s.kinds, idx, SYMKIND_FUNCTION_OVERLOAD);
-    return 0;
+    return ScopeResult{s, 0};
   }
-  return 1;
+  return ScopeResult{s, 1};
 }
 
-// Lookup through parents; returns index in current scope if found, else -1.
+// Lookup through parents; returns index in found scope or -1.
 def scope_lookup(s Scope, name String) int {
   var idx = scope_lookup_index_current(s, name);
   if (idx != -1) { return idx; }
   if (s.hasParent == 0) { return -1; }
   return -1;
+}
+
+// Get symbol info by index in this scope.
+def scope_get_info(s Scope, idx int) SymInfo {
+  var kind = vecint_get(s.kinds, idx);
+  var a = vecint_get(s.arityA, idx);
+  var b = vecint_get(s.arityB, idx);
+  var t = vecint_get(s.typeIds, idx);
+  return SymInfo{kind, a, b, t};
 }
 
 // ---- Mangling helper (arity-based) ----
