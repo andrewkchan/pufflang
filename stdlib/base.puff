@@ -1,0 +1,168 @@
+struct Buffer { data byte~, length int }
+
+struct VecByte { data byte~, length int, cap int }
+struct PopByte { vec VecByte, value byte }
+
+struct VecInt { data int~, length int, cap int }
+struct PopInt { vec VecInt, value int }
+
+struct String { data byte~, length int }
+struct StringBuilder { buf VecByte }
+
+// --- VecByte helpers ---
+def vecbyte_new(cap int) VecByte {
+  var c = cap;
+  if (c < 1) { c = 1; }
+  var data = __malloc__(c);
+  return VecByte{data, 0, c};
+}
+
+def vecbyte_reserve(v VecByte, need int) VecByte {
+  if (need <= v.cap) { return v; }
+  var newCap = v.cap * 2;
+  if (newCap < need) { newCap = need; }
+  var newData = __malloc__(newCap);
+  var i = 0;
+  while (i < v.length) {
+    (newData + i)~ = (v.data + i)~;
+    i = i + 1;
+  }
+  __free__(v.data);
+  return VecByte{newData, v.length, newCap};
+}
+
+def vecbyte_push(v VecByte, x byte) VecByte {
+  var out = vecbyte_reserve(v, v.length + 1);
+  (out.data + out.length)~ = x;
+  out.length = out.length + 1;
+  return out;
+}
+
+def vecbyte_pop(v VecByte) PopByte {
+  var out = v;
+  out.length = out.length - 1;
+  var val = (out.data + out.length)~;
+  return PopByte{out, val};
+}
+
+// --- VecInt helpers ---
+def vecint_new(cap int) VecInt {
+  var c = cap;
+  if (c < 1) { c = 1; }
+  var data = int~(__malloc__(c * 4));
+  return VecInt{data, 0, c};
+}
+
+def vecint_reserve(v VecInt, need int) VecInt {
+  if (need <= v.cap) { return v; }
+  var newCap = v.cap * 2;
+  if (newCap < need) { newCap = need; }
+  var newData = int~(__malloc__(newCap * 4));
+  var src = byte~(v.data);
+  var dst = byte~(newData);
+  var i = 0;
+  while (i < v.length) {
+    var off = i * 4;
+    (int~(dst + off))~ = (int~(src + off))~;
+    i = i + 1;
+  }
+  __free__(byte~(v.data));
+  return VecInt{newData, v.length, newCap};
+}
+
+def vecint_push(v VecInt, x int) VecInt {
+  var out = vecint_reserve(v, v.length + 1);
+  var base = byte~(out.data);
+  var off = out.length * 4;
+  (int~(base + off))~ = x;
+  out.length = out.length + 1;
+  return out;
+}
+
+def vecint_pop(v VecInt) PopInt {
+  var out = v;
+  out.length = out.length - 1;
+  var base = byte~(out.data);
+  var off = out.length * 4;
+  var val = (int~(base + off))~;
+  return PopInt{out, val};
+}
+
+def vecint_get(v VecInt, idx int) int {
+  var base = byte~(v.data);
+  var off = idx * 4;
+  return (int~(base + off))~;
+}
+
+// --- StringBuilder ---
+def sb_new() StringBuilder {
+  return StringBuilder{vecbyte_new(16)};
+}
+
+def sb_append_byte(sb StringBuilder, b byte) StringBuilder {
+  var buf = vecbyte_push(sb.buf, b);
+  return StringBuilder{buf};
+}
+
+def sb_append_bytes(sb StringBuilder, data byte~, n int) StringBuilder {
+  var out = sb;
+  var i = 0;
+  while (i < n) {
+    out = sb_append_byte(out, (data + i)~);
+    i = i + 1;
+  }
+  return out;
+}
+
+def sb_to_string(sb StringBuilder) String { return String{sb.buf.data, sb.buf.length}; }
+
+// --- File helpers ---
+def write_file_all(path byte~, data byte~, length int) int {
+  var fd = __open__(path, 577, 420); // O_WRONLY|O_CREAT|O_TRUNC, 0644
+  if (fd < 0) { return -1; }
+  var written = 0;
+  while (written < length) {
+    var n = __write__(fd, data + written, length - written);
+    if (n <= 0) { __close__(fd); return -1; }
+    written = written + n;
+  }
+  __close__(fd);
+  return written;
+}
+
+def read_file_all(path byte~) Buffer {
+  var fd = __open__(path, 0, 0); // O_RDONLY
+  if (fd < 0) {
+    var dummy = __malloc__(1);
+    return Buffer{dummy, 0};
+  }
+  var tmp = __malloc__(1024);
+  var buf = __malloc__(1024);
+  var cap = 1024;
+  var length = 0;
+  while (true) {
+    var n = __read__(fd, tmp, 1024);
+    if (n <= 0) { break; }
+    while (length + n > cap) {
+      var newCap = cap * 2;
+      var newBuf = __malloc__(newCap);
+      var i = 0;
+      while (i < length) {
+        (newBuf + i)~ = (buf + i)~;
+        i = i + 1;
+      }
+      __free__(buf);
+      buf = newBuf;
+      cap = newCap;
+    }
+    var j = 0;
+    while (j < n) {
+      (buf + length + j)~ = (tmp + j)~;
+      j = j + 1;
+    }
+    length = length + n;
+  }
+  __close__(fd);
+  __free__(tmp);
+  return Buffer{buf, length};
+}
