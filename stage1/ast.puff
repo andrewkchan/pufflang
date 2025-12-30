@@ -287,6 +287,15 @@ def scope_function_return_type(s Scope, name String) int {
   return vecint_get(s.typeIds, idx);
 }
 
+// Return variable type id (or -1 if not found or not a var).
+def scope_variable_type(s Scope, name String) int {
+  var idx = scope_lookup_index_current(s, name);
+  if (idx == -1) { return -1; }
+  var kind = vecint_get(s.kinds, idx);
+  if (kind != SYMKIND_VAR) { return -1; }
+  return vecint_get(s.typeIds, idx);
+}
+
 // ---- Mangling helper (arity-based) ----
 // If only one overload and exported, keep name; otherwise append "__<arity>".
 def mangle_name(name String, arity int, isExported int, overloadCount int) String {
