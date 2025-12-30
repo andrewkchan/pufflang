@@ -171,42 +171,21 @@ def match_keyword_tokens(src byte~, start int, length int) int {
   return -1;
 }
 
-// Simplified token scanner (safe, low-IR) returning Vec<Token> for basic constructs used in current Stage1 tests.
+// Simplified token scanner: leverage scan_kinds to avoid duplicate logic, and wrap into Token Vec.
+// start/length/line are stubbed (0/0/1) for now; enough for current use and avoids heavy IR.
 def scan_tokens(src byte~, n int) Vec {
+  var kinds = scan_kinds(src, n);
+  var out = vec_token_new(kinds.length + 1);
   var i = 0;
-  var line = 1;
-  var out = vec_token_new(16);
-  while (i < n) {
-    var c = (src + i)~;
-    if (c == byte(32) || c == byte(9) || c == byte(13)) { i = i + 1; continue; }
-    if (c == byte(10)) { line = line + 1; i = i + 1; continue; }
-    if (is_alpha(c) == 1) {
-      var start = i;
-      while (i < n && is_alnum((src + i)~) == 1) { i = i + 1; }
-      var kw = match_keyword_tokens(src, start, i - start);
-      if (kw != -1) { out = push_token(out, make_token(kw, start, i - start, line)); }
-      else { out = push_token(out, make_token(TOKEN_IDENTIFIER, start, i - start, line)); }
-      continue;
-    }
-    if (is_digit(c) == 1) {
-      var startNum = i;
-      while (i < n && is_digit((src + i)~) == 1) { i = i + 1; }
-      out = push_token(out, make_token(TOKEN_NUMBER, startNum, i - startNum, line));
-      continue;
-    }
-    if (c == byte(40)) { out = push_token(out, make_token(TOKEN_LEFT_PAREN, i, 1, line)); i = i + 1; continue; }
-    if (c == byte(41)) { out = push_token(out, make_token(TOKEN_RIGHT_PAREN, i, 1, line)); i = i + 1; continue; }
-    if (c == byte(123)) { out = push_token(out, make_token(TOKEN_LEFT_BRACE, i, 1, line)); i = i + 1; continue; }
-    if (c == byte(125)) { out = push_token(out, make_token(TOKEN_RIGHT_BRACE, i, 1, line)); i = i + 1; continue; }
-    if (c == byte(59)) { out = push_token(out, make_token(TOKEN_SEMICOLON, i, 1, line)); i = i + 1; continue; }
-    // unknown, skip
+  while (i < kinds.length) {
+    var k = vecint_get(kinds, i);
+    out = push_token(out, make_token(k, 0, 0, 1));
     i = i + 1;
   }
-  out = push_token(out, make_token(TOKEN_EOF, n, 0, line));
   return out;
 }
 
-// Full scanner alias (for future use).
+// Full scanner alias.
 def scan_tokens_full(src byte~, n int) Vec { return scan_tokens(src, n); }
 
 // Helpers for reading Token fields from the Vec returned by scan_tokens.
