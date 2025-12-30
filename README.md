@@ -3,11 +3,12 @@
 ## Progress against the plan
 - Phase 1: Completed. Harness (`npm test`/compile-and-run via clang -x ir) in place; original spec mirrored.
 - Phase 2: Stage0 frontend + LLVM IR backend implemented; all original and ported suites now pass.
-- Phase 3 (partial/major): Added bitwise ops, ++/--, ternary, switch, function overloading (arity, defaults), default args, UTF-8 strings, pointer differencing, import/export parsing, internal linkage for non-exported symbols.
-- Runtime/I/O: Added libc-backed builtins (__malloc__/__free__/__exit__/__putchar__/__write__/__read__/__open__/__close__/__sqrt__) and tests for stdin, stdout, file round-trip. Harness can feed stdin.
-- Stdlib growth: generic Vec + string helpers (eq/starts_with/clone/index_of/contains/slice/trim), StringBuilder helpers (clear/append cstr), argv/env/time wrappers, map_has/map_delete. New regression suites cover these.
-- Stage1 progress: scanner now emits comma/=/-/+/*// tokens; parser handles parameter lists, multiple var decls, simple binops, call expressions, and unary minus; resolver minimally validates EOF/RETURN. Added focused Stage1 tests for scanner/parser/resolver paths.
-- Remaining (Phases 3 tail/4–6): export codegen polish, pointer hex printing, fuller stdlib for Stage1 compiler data structures, Stage1 codegen/CLI, bootstrap pipeline.
+- Phase 3 (ongoing/major):
+  - Language/features: bitwise ops, ++/--, ternary, switch, function overloading (arity, defaults), default args, UTF-8 strings, pointer differencing, import/export parsing, internal linkage for non-exported symbols.
+  - Runtime/I/O: libc-backed builtins (__malloc__/__free__/__exit__/__putchar__/__write__/__read__/__open__/__close__/__sqrt__) with stdin/stdout/file round-trip tests; harness can feed stdin.
+  - Stdlib growth: generic Vec/VecInt/VecByte, String helpers (eq/starts_with/clone/index_of/contains/slice/trim), StringBuilder helpers (clear/append cstr/int/hex), argv/env/time wrappers, Map<int,int>, MapStr (string->int), VecStr, String interner utilities, file helpers; new regression suites cover these.
+  - Stage1 progress: full scanner parity (all tokens, spans/lines); parser helpers for S-expr printing, meta counts, param/return extraction, function shape extraction; scope stack utilities; resolver enhanced with duplicate-var detection and return presence checks. Added focused Stage1 tests for scanner, parser helpers, scopes, and resolver paths.
+- Remaining (Phases 3 tail/4–6): export codegen polish, pointer hex printing already covered in Stage0 runtime, fuller Stage1 parser/AST + resolver parity, Stage1 codegen/CLI, bootstrap pipeline (Stage0 → Stage1 → Stage2).
 
 ## Language extensions and semantics notes
 - Overloading & defaults: Functions overload by arity/types; arity is mangled (`foo__2`); default args supported. Exports with a single overload keep the unmangled name; overloads stay mangled but are `external`.
@@ -35,7 +36,7 @@
 - Scanner tokens: Added support for commas, `=`, arithmetic ops (+, -, *, /) to enable richer Stage1 parsing paths.
 
 ## How to run tests
-- Full suite: `npm test`
+- Full suite: `npm test` (currently 68 suites / 158 tests)
 
 ## Notes
 - Builtin names are double-underscore prefixed and map to libc where relevant.
