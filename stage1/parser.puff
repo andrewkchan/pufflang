@@ -28,6 +28,19 @@ def parse_simple(tokens VecInt) int {
   i = i + 1;
   if (safe_get(tokens, i) != TOKEN_LEFT_BRACE) { return 0; }
   i = i + 1;
+  // Optional single var decl: var ident = expr;
+  if (safe_get(tokens, i) == TOKEN_VAR) {
+    i = i + 1;
+    if (safe_get(tokens, i) != TOKEN_IDENTIFIER) { return 0; }
+    i = i + 1;
+    if (safe_get(tokens, i) != TOKEN_EQUAL) { return 0; }
+    i = i + 1;
+    var initk = safe_get(tokens, i);
+    if (initk != TOKEN_NUMBER && initk != TOKEN_IDENTIFIER) { return 0; }
+    i = i + 1;
+    if (safe_get(tokens, i) != TOKEN_SEMICOLON) { return 0; }
+    i = i + 1;
+  }
   if (safe_get(tokens, i) != TOKEN_RETURN) { return 0; }
   i = i + 1;
   var retk = safe_get(tokens, i);
