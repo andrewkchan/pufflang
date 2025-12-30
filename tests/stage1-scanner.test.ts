@@ -25,16 +25,16 @@ describe("Stage1 scanner (Puffscript)", () => {
     expect(res.stderr).toBe("")
     const out = lines(res).map((x) => parseInt(x, 10))
     expect(out).toEqual([
-      7,  // TOKEN_DEF
-      1,  // IDENTIFIER
-      3,  // (
-      4,  // )
-      5,  // {
-      8,  // RETURN
-      2,  // NUMBER
-      9,  // ;
-      6,  // }
-      0   // EOF
+      50, // DEF
+      0,  // IDENTIFIER
+      7,  // (
+      8,  // )
+      9,  // {
+      61, // RETURN
+      5,  // NUMBER
+      17, // ;
+      10, // }
+      70  // EOF
     ])
   })
 })

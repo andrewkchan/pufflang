@@ -1,7 +1,6 @@
 // Stage1 Puffscript parser (minimal) consuming token kinds from scanner.
 // Recognizes: def IDENT ( ) { return NUMBER; }
-
-// Token constants expected to be provided by scanner.puff.
+// Token constants provided by scanner.puff (aligned with Stage0 TokenType).
 
 def safe_get(v VecInt, idx int) int {
   if (idx < 0 || idx >= v.length) { return -1; }
