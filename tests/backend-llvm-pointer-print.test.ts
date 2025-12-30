@@ -12,6 +12,7 @@ describe("LLVM backend pointer printing", () => {
     const res = compileAndRun(source)
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
-    expect(res.stdout.trim().length).toBeGreaterThan(0)
+    const line = res.stdout.trim()
+    expect(line).toMatch(/^0x[0-9a-f]+$/)
   })
 })

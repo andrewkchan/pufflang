@@ -1,0 +1,12 @@
+// Stage1 Puffscript driver stub: scan + parse + resolve + codegen.
+// Expect scanner.puff, parser.puff, resolver.puff, and codegen.puff concatenated ahead.
+
+def compile_simple(src byte~, n int) int {
+  var toks = scan_kinds(src, n);
+  var parsed = parse_simple(toks);
+  if (parsed == 0) { return 0; }
+  var resolved = resolve_simple(toks);
+  if (resolved == 0) { return 0; }
+  var codegen = codegen_simple(resolved);
+  return codegen;
+}

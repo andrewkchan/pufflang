@@ -6,6 +6,9 @@
 - Phase 3 (partial/major): Added bitwise ops, ++/--, ternary, switch, function overloading (arity, defaults), default args, UTF-8 strings, pointer differencing, import/export parsing, internal linkage for non-exported symbols.
 - Runtime/I/O: Added libc-backed builtins (__malloc__/__free__/__exit__/__putchar__/__write__/__read__/__open__/__close__/__sqrt__) and tests for stdin, stdout, file round-trip. Harness can feed stdin.
 - Remaining (Phases 3 tail/4–6): export codegen polish, pointer hex printing, fuller stdlib (Vec/String/Map), argv/env/time/file helpers, Stage1 compiler in Puffscript, bootstrap pipeline.
+- Added env/time + argv/argc helpers wired to libc; stdlib seed now includes Vec, StringBuilder, file helpers, and Map (int->int).
+- New: libc env/time support wired via builtins `__getenv__` and `__time__` (time(NULL)); harness can pass custom env vars.
+- New: Puffscript stdlib seed in `stdlib/base.puff` (VecByte/VecInt push/pop/get, StringBuilder, file helpers).
 
 ## How to run tests
 - Full suite: `npm test`

@@ -1,0 +1,33 @@
+// Stage1 Puffscript parser (minimal) consuming token kinds from scanner.
+// Recognizes: def IDENT ( ) { return NUMBER; }
+
+// Token constants expected to be provided by scanner.puff.
+
+def safe_get(v VecInt, idx int) int {
+  if (idx < 0 || idx >= v.length) { return -1; }
+  return vecint_get(v, idx);
+}
+
+def parse_simple(tokens VecInt) int {
+  var i = 0;
+  if (safe_get(tokens, i) != TOKEN_DEF) { return 0; }
+  i = i + 1;
+  if (safe_get(tokens, i) != TOKEN_IDENTIFIER) { return 0; }
+  i = i + 1;
+  if (safe_get(tokens, i) != TOKEN_LEFT_PAREN) { return 0; }
+  i = i + 1;
+  if (safe_get(tokens, i) != TOKEN_RIGHT_PAREN) { return 0; }
+  i = i + 1;
+  if (safe_get(tokens, i) != TOKEN_LEFT_BRACE) { return 0; }
+  i = i + 1;
+  if (safe_get(tokens, i) != TOKEN_RETURN) { return 0; }
+  i = i + 1;
+  if (safe_get(tokens, i) != TOKEN_NUMBER) { return 0; }
+  i = i + 1;
+  if (safe_get(tokens, i) != TOKEN_SEMICOLON) { return 0; }
+  i = i + 1;
+  if (safe_get(tokens, i) != TOKEN_RIGHT_BRACE) { return 0; }
+  i = i + 1;
+  if (safe_get(tokens, i) != TOKEN_EOF) { return 0; }
+  return 1;
+}

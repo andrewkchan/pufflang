@@ -1,7 +1,7 @@
 import * as ast from "./nodes"
 import { UTF8Codec } from "./util"
 
-type LlvmType = "i1" | "i8" | "i32" | "i64" | "float" | "double" | "i8*" | `%struct.${string}*`
+type LlvmType = string
 
 interface ArrayInfo {
   elem: LlvmType // base element LLVM type (non-array)
@@ -12,7 +12,7 @@ interface ArrayInfo {
 
 interface StructInfo {
   name: string
-  fields: { name: string; type: LlvmType }[]
+  fields: { name: string; type: LlvmType; astType: ast.Type }[]
 }
 
 interface PointerInfo {
@@ -40,7 +40,7 @@ function llvmTypeFromAst(type: ast.Type): LlvmType {
     case ast.TypeCategory.FLOAT:
       return "float"
     case ast.TypeCategory.POINTER:
-      return "i8*" // placeholder until pointer support
+      return `${llvmTypeFromAst((type as ast.PointerType).elementType)}*`
     case ast.TypeCategory.ARRAY: {
       const arr = type as ast.ArrayType
       const baseTy = baseElemType(arr)
@@ -160,17 +160,40 @@ class LlvmModuleBuilder {
     // putchar
     this.declare("declare i32 @putchar(i32)")
     // write
-    this.declare("declare i64 @write(i32, i8*, i64)")
+    this.declare("declare i32 @write(i32, i8*, i64)")
     // read
-    this.declare("declare i64 @read(i32, i8*, i64)")
+    this.declare("declare i32 @read(i32, i8*, i64)")
     // open/close
     this.declare("declare i32 @open(i8*, i32, i32)")
     this.declare("declare i32 @close(i32)")
     // malloc/free
     this.declare("declare i8* @malloc(i64)")
     this.declare("declare void @free(i8*)")
+    // time/getenv
+    this.declare("declare i32 @time(i8*)")
+    this.declare("declare i8* @getenv(i8*)")
     // memcpy
     this.declare("declare void @llvm.memcpy.p0.p0.i64(i8*, i8*, i64, i1)")
+    // argv/argc capture
+    this.addGlobal("@__puff_argc = global i32 0")
+    this.addGlobal("@__puff_argv = global i8** null")
+    this.addFunction(`define i32 @__argc__() {
+entry:
+  %v = load i32, i32* @__puff_argc
+  ret i32 %v
+}`)
+    this.addFunction(`define i8** @__argv__() {
+entry:
+  %v = load i8**, i8*** @__puff_argv
+  ret i8** %v
+}`)
+    this.addFunction(`define i8* @__argv_at(i32 %idx0) {
+entry:
+  %argv = load i8**, i8*** @__puff_argv
+  %ptr = getelementptr i8*, i8** %argv, i32 %idx0
+  %val = load i8*, i8** %ptr
+  ret i8* %val
+}`)
   }
 
   build(): string {
@@ -342,8 +365,8 @@ class FunctionBuilder {
       case "i8*":
         return 8
       default:
-        // struct pointer size (assume 8 on 64-bit)
-        if (ty.startsWith("%struct.")) return 8
+        // any pointer size (assume 8 on 64-bit)
+        if (ty.endsWith("*")) return 8
         throw new Error(`Unknown llvm type size for ${ty}`)
     }
   }
@@ -474,6 +497,9 @@ class FunctionBuilder {
         if (v.resolvedType?.category === ast.TypeCategory.POINTER) {
           const elemTy = llvmTypeFromAst((v.resolvedType as ast.PointerType).elementType)
           loaded.ptr = { elem: elemTy }
+        } else if (v.resolvedType?.category === ast.TypeCategory.STRUCT) {
+          const info = this.structs.get((v.resolvedType as ast.StructType).name.lexeme)
+          loaded.struct = info
         }
         return loaded
       }
@@ -756,6 +782,15 @@ class FunctionBuilder {
         const ptrVal = this.emitExpr(d.value)
         if (!ptrVal.ptr) throw new Error("Dereference target is not pointer")
         const elemTy = ptrVal.ptr.elem
+        if (typeof elemTy === "string") {
+          const m = /^%struct\.([A-Za-z0-9_]+)\*$/.exec(elemTy)
+          if (m) {
+            const castedPtr = this.fresh("structptr")
+            this.emit(`${castedPtr} = bitcast i8* ${ptrVal.repr} to ${elemTy}`)
+            const info = this.structs.get(m[1])
+            return { type: elemTy as LlvmType, repr: castedPtr, struct: info }
+          }
+        }
         const castedPtr = this.fresh("deref")
         this.emit(`${castedPtr} = bitcast i8* ${ptrVal.repr} to ${elemTy}*`)
         const out = this.fresh("ldderef")
@@ -800,20 +835,21 @@ class FunctionBuilder {
             if ((left.ptr && right.type === "i32") || (right.ptr && left.type === "i32")) {
               const basePtr = left.ptr ? left : right
               const offsetVal = left.ptr ? right : left
-              const elemSize = this.sizeofLlvm(basePtr.ptr!.elem)
-              const scale = this.fresh("offset")
               const offCast = this.cast(offsetVal, "i32")
-              this.emit(`${scale} = mul nsw i32 ${offCast.repr}, ${elemSize}`)
-              const ptrInt = this.fresh("ptrint")
-              this.emit(`${ptrInt} = ptrtoint i8* ${basePtr.repr} to i64`)
-              const scaled64 = this.fresh("scale64")
-              this.emit(`${scaled64} = sext i32 ${scale} to i64`)
-              const adjusted = this.fresh("ptradj")
-              const op = b.operator.lexeme === "-" ? "sub" : "add"
-              this.emit(`${adjusted} = ${op} i64 ${ptrInt}, ${scaled64}`)
-              const outPtr = this.fresh("ptrout")
-              this.emit(`${outPtr} = inttoptr i64 ${adjusted} to i8*`)
-              return this.pointerValue(outPtr, basePtr.ptr!.elem)
+              const elemTy = basePtr.ptr!.elem
+              const ptrTy = basePtr.type as LlvmType
+              const castPtr = basePtr.repr
+              const signedOff = this.fresh("idx")
+              if (b.operator.lexeme === "-") {
+                const neg = this.fresh("newoff")
+                this.emit(`${neg} = sub nsw i32 0, ${offCast.repr}`)
+                this.emit(`${signedOff} = add i32 0, ${neg}`)
+              } else {
+                this.emit(`${signedOff} = add i32 0, ${offCast.repr}`)
+              }
+              const gep = this.fresh("ptradd")
+              this.emit(`${gep} = getelementptr ${elemTy}, ${ptrTy} ${castPtr}, i32 ${signedOff}`)
+              return this.pointerValue(gep, basePtr.ptr!.elem)
             }
             if (left.type === "i32") {
               const op =
@@ -952,16 +988,19 @@ class FunctionBuilder {
           // struct construction if name matches struct
           const structInfo = this.structs.get(name)
           if (structInfo) {
-            const ptr = this.fresh("struct")
-            const structTy = this.structPtrType(structInfo)
-            this.addAlloca(`${ptr} = alloca %struct.${structInfo.name}`)
+            const rawPtr = this.fresh("structmalloc")
+            const structPtr = this.fresh("structptr")
+            const bytes = this.sizeofStruct(structInfo)
+            this.emit(`${rawPtr} = call i8* @malloc(i64 ${bytes})`)
+            this.emit(`${structPtr} = bitcast i8* ${rawPtr} to %struct.${structInfo.name}*`)
             structInfo.fields.forEach((f, i) => {
               const argVal = this.cast(this.emitExpr(c.args[i]), f.type)
               const fieldPtr = this.fresh("field")
-              this.emit(`${fieldPtr} = getelementptr %struct.${structInfo.name}, %struct.${structInfo.name}* ${ptr}, i32 0, i32 ${i}`)
+              this.emit(`${fieldPtr} = getelementptr %struct.${structInfo.name}, %struct.${structInfo.name}* ${structPtr}, i32 0, i32 ${i}`)
               this.emit(`store ${f.type} ${argVal.repr}, ${f.type}* ${fieldPtr}`)
             })
-            return { type: structTy, repr: ptr, struct: structInfo }
+            const structTy = this.structPtrType(structInfo)
+            return { type: structTy, repr: structPtr, struct: structInfo, ptr: { elem: structTy } }
           }
 
           // builtin sqrt
@@ -1096,7 +1135,25 @@ class FunctionBuilder {
         )
         const out = this.fresh("ldfld")
         this.emit(`${out} = load ${field.type}, ${field.type}* ${fieldPtr}`)
-        return { type: field.type, repr: out }
+        const val: Value = { type: field.type, repr: out }
+        switch (field.astType.category) {
+          case ast.TypeCategory.POINTER: {
+            val.ptr = { elem: llvmTypeFromAst((field.astType as ast.PointerType).elementType) }
+            break
+          }
+          case ast.TypeCategory.ARRAY: {
+            const info = this.arrayInfoFromType(field.astType as ast.ArrayType)
+            val.array = info
+            val.type = `${info.elem}*` as LlvmType
+            val.repr = fieldPtr
+            break
+          }
+          case ast.TypeCategory.STRUCT: {
+            val.struct = this.structs.get((field.astType as ast.StructType).name.lexeme)
+            break
+          }
+        }
+        return val
       }
       case ast.NodeKind.INDEX_EXPR: {
         const idx = node as ast.IndexExpr
@@ -1207,7 +1264,8 @@ class FunctionBuilder {
     if (isPtr(value.type) && isPtr(target)) {
       const out = this.fresh("bitcast")
       this.emit(`${out} = bitcast ${value.type} ${value.repr} to ${target}`)
-      return { type: target, repr: out, array: value.array, ptr: value.ptr, struct: value.struct }
+      const elem = (target.endsWith("*") ? target.slice(0, -1) : "i8") as LlvmType
+      return { type: target, repr: out, array: value.array, ptr: { elem }, struct: value.struct }
     }
     if (isPtr(value.type) && target === "i32") {
       const out = this.fresh("ptrtoi32")
@@ -1276,7 +1334,8 @@ class FunctionBuilder {
   }
 
   private pointerValue(ptrRepr: string, elem: LlvmType): Value {
-    return { type: "i8*", repr: ptrRepr, ptr: { elem } }
+    const ty = `${elem}*` as LlvmType
+    return { type: ty, repr: ptrRepr, ptr: { elem } }
   }
 
   emitPrint(expr: ast.Expr) {
@@ -1321,9 +1380,10 @@ class FunctionBuilder {
         break
       }
       case ast.TypeCategory.POINTER: {
-        const fmtPtr = this.module.gepStringPtr("%p\n")
-        const casted = this.cast(val, "i8*")
-        this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i8* ${casted.repr})`)
+        // Print pointers in deterministic lowercase hex with 0x prefix and fixed width.
+        const fmtPtr = this.module.gepStringPtr("0x%016llx\n")
+        const asI64 = this.cast(val, "i64")
+        this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i64 ${asI64.repr})`)
         break
       }
       default:
@@ -1596,6 +1656,13 @@ class FunctionBuilder {
   buildFunction(fn: ast.FunctionStmt, mangledName: string, isExported = false): string {
     this.paramSlotsByName.clear()
     this.paramArgsByName.clear()
+    this.locals.clear()
+    this.allocas = []
+    this.lines = []
+    this.loopStack = []
+    this.hasReturn = false
+    this.terminated = false
+    this.tempCounter = 0
     this.currentFunctionName = mangledName
     this.arrayReturnDest = null
     // Force main to return i32 for proper process exit codes.
@@ -1672,6 +1739,12 @@ class FunctionBuilder {
       this.paramSlotsByName.set(p.name.lexeme, entry)
       this.paramArgsByName.set(p.name.lexeme, { type: llvmTy, repr: incoming })
     })
+    if (fn.name.lexeme === "main" && paramNames.length - paramOffset >= 2) {
+      const argcArg = paramNames[paramOffset + 0]
+      const argvArg = paramNames[paramOffset + 1]
+      this.lines.push(`  store i32 ${argcArg}, i32* @__puff_argc`)
+      this.lines.push(`  store i8** ${argvArg}, i8*** @__puff_argv`)
+    }
     if (this.currentFunctionName === "main" && this.fnSigs.has("__init_globals__")) {
       this.lines.push("  call void @__init_globals__()")
     }
@@ -1681,7 +1754,8 @@ class FunctionBuilder {
         this.emitStmt(stmt)
       }
     }
-    if (!this.hasReturn) {
+    const lastLine = this.lines.length > 0 ? this.lines[this.lines.length - 1].trim() : ""
+    if (!lastLine.startsWith("ret")) {
       if (retTy === "void") this.lines.push("  ret void")
       else {
         const zero = retTy === "float" || retTy === "double" ? "0.0" : "0"
@@ -1710,6 +1784,12 @@ export function emitLlvm(context: ast.Context): string {
   const globalsMap = new Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
   const globalsByName = new Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
   const structInfos = new Map<string, StructInfo>()
+  const overloadCounts = new Map<string, number>()
+
+  functions.forEach((fn) => {
+    const name = fn.name.lexeme
+    overloadCounts.set(name, (overloadCounts.get(name) ?? 0) + 1)
+  })
 
   const structs = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.STRUCT_STMT
@@ -1718,7 +1798,8 @@ export function emitLlvm(context: ast.Context): string {
   structs.forEach((s) => {
     const fields = s.members.map((m) => ({
       name: m.name.lexeme,
-      type: llvmTypeFromAst(m.type)
+      type: llvmTypeFromAst(m.type),
+      astType: m.type
     }))
     const info: StructInfo = { name: s.name.lexeme, fields }
     structInfos.set(s.name.lexeme, info)
@@ -1784,7 +1865,14 @@ export function emitLlvm(context: ast.Context): string {
       params = [`${elemTy}*` as LlvmType, ...params]
     }
     const key = `${fn.name.lexeme}/${fn.params.length}`
-    const mangled = fn.isImported ? fn.name.lexeme : (fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`)
+    const overloadCount = overloadCounts.get(fn.name.lexeme) ?? 1
+    const mangled = fn.isImported
+      ? fn.name.lexeme
+      : fn.name.lexeme === "main"
+        ? "main"
+        : (fn.isExported && overloadCount === 1)
+          ? fn.name.lexeme
+          : `${fn.name.lexeme}__${fn.params.length}`
     fnSigs.set(key, { ret, params, retAst: fn.returnType, mangled })
   })
   // Built-ins
@@ -1793,11 +1881,15 @@ export function emitLlvm(context: ast.Context): string {
   fnSigs.set("__free__/1", { ret: "void", params: ["i8*"], retAst: ast.VoidType, mangled: "__free__" })
   fnSigs.set("__exit__/1", { ret: "void", params: ["i32"], retAst: ast.VoidType, mangled: "exit" })
   fnSigs.set("__putchar__/1", { ret: "i32", params: ["i32"], retAst: ast.IntType, mangled: "putchar" })
-  fnSigs.set("__write__/3", { ret: "i64", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "write" })
-  fnSigs.set("__read__/3", { ret: "i64", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "read" })
+  fnSigs.set("__write__/3", { ret: "i32", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "write" })
+  fnSigs.set("__read__/3", { ret: "i32", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "read" })
   fnSigs.set("__open__/3", { ret: "i32", params: ["i8*", "i32", "i32"], retAst: ast.IntType, mangled: "open" })
   fnSigs.set("__close__/1", { ret: "i32", params: ["i32"], retAst: ast.IntType, mangled: "close" })
-  fnSigs.set("__write__/3", { ret: "i32", params: ["i32", "i8*", "i32"], retAst: ast.IntType, mangled: "write" })
+  fnSigs.set("__time__/1", { ret: "i32", params: ["i8*"], retAst: ast.IntType, mangled: "time" })
+  fnSigs.set("__getenv__/1", { ret: "i8*", params: ["i8*"], retAst: ast.ptrType(ast.ByteType), mangled: "getenv" })
+  fnSigs.set("__argc__/0", { ret: "i32", params: [], retAst: ast.IntType, mangled: "__argc__" })
+  fnSigs.set("__argv__/0", { ret: "i8**", params: [], retAst: ast.ptrType(ast.ptrType(ast.ByteType)), mangled: "__argv__" })
+  fnSigs.set("__argv_at__/1", { ret: "i8*", params: ["i32"], retAst: ast.ptrType(ast.ByteType), mangled: "__argv_at" })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
@@ -1830,7 +1922,8 @@ export function emitLlvm(context: ast.Context): string {
       return
     }
     const fnBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName, structInfos)
-    const mangled = fn.isImported ? fn.name.lexeme : (fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`)
+    const sig = fnSigs.get(`${fn.name.lexeme}/${fn.params.length}`)!
+    const mangled = sig.mangled
     module.addFunction(fnBuilder.buildFunction(fn, mangled, !!fn.isExported || fn.name.lexeme === "main"))
   })
   return module.build()
