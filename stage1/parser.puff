@@ -7,6 +7,22 @@ def safe_get(v VecInt, idx int) int {
   return vecint_get(v, idx);
 }
 
+// Parse a tiny expression: IDENT|NUMBER [op IDENT|NUMBER] with op in {+, -, *, /}.
+// Returns the next index on success, or -1 on failure.
+def parse_expr(tokens VecInt, i int) int {
+  var k = safe_get(tokens, i);
+  if (k != TOKEN_NUMBER && k != TOKEN_IDENTIFIER) { return -1; }
+  i = i + 1;
+  var op = safe_get(tokens, i);
+  if (op == TOKEN_PLUS || op == TOKEN_MINUS || op == TOKEN_STAR || op == TOKEN_SLASH) {
+    i = i + 1;
+    var rhs = safe_get(tokens, i);
+    if (rhs != TOKEN_NUMBER && rhs != TOKEN_IDENTIFIER) { return -1; }
+    i = i + 1;
+  }
+  return i;
+}
+
 def parse_simple(tokens VecInt) int {
   var i = 0;
   if (safe_get(tokens, i) != TOKEN_DEF) { return 0; }
@@ -28,32 +44,24 @@ def parse_simple(tokens VecInt) int {
   i = i + 1;
   if (safe_get(tokens, i) != TOKEN_LEFT_BRACE) { return 0; }
   i = i + 1;
-  // Optional single var decl: var ident = expr;
-  if (safe_get(tokens, i) == TOKEN_VAR) {
+  // Optional var decls: var ident = expr;
+  while (safe_get(tokens, i) == TOKEN_VAR) {
     i = i + 1;
     if (safe_get(tokens, i) != TOKEN_IDENTIFIER) { return 0; }
     i = i + 1;
     if (safe_get(tokens, i) != TOKEN_EQUAL) { return 0; }
     i = i + 1;
-    var initk = safe_get(tokens, i);
-    if (initk != TOKEN_NUMBER && initk != TOKEN_IDENTIFIER) { return 0; }
-    i = i + 1;
+    var next = parse_expr(tokens, i);
+    if (next == -1) { return 0; }
+    i = next;
     if (safe_get(tokens, i) != TOKEN_SEMICOLON) { return 0; }
     i = i + 1;
   }
   if (safe_get(tokens, i) != TOKEN_RETURN) { return 0; }
   i = i + 1;
-  var retk = safe_get(tokens, i);
-  if (retk != TOKEN_NUMBER && retk != TOKEN_IDENTIFIER) { return 0; }
-  i = i + 1;
-  // Optional single '+' or '-' or '*' or '/' expression: (ident|number) op (ident|number)
-  var op = safe_get(tokens, i);
-  if (op == TOKEN_PLUS || op == TOKEN_MINUS || op == TOKEN_STAR || op == TOKEN_SLASH) {
-    i = i + 1;
-    var rhs = safe_get(tokens, i);
-    if (rhs != TOKEN_NUMBER && rhs != TOKEN_IDENTIFIER) { return 0; }
-    i = i + 1;
-  }
+  var nextRet = parse_expr(tokens, i);
+  if (nextRet == -1) { return 0; }
+  i = nextRet;
   if (safe_get(tokens, i) != TOKEN_SEMICOLON) { return 0; }
   i = i + 1;
   if (safe_get(tokens, i) != TOKEN_RIGHT_BRACE) { return 0; }
