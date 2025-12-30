@@ -61,7 +61,7 @@ def scope_names_define(s ScopeNames, name String) ScopeNames {
   return ScopeNames{names, depths, s.depth};
 }
 
-// Resolve with duplicate-var detection and return presence.
+// Resolve with duplicate-var detection and return presence using depth scopes.
 // Returns 1 if ok, 0 on error.
 def resolve_with_scopes(src byte~, n int) int {
   var tokens = scan_tokens(src, n);
@@ -69,18 +69,20 @@ def resolve_with_scopes(src byte~, n int) int {
   var lastKind = token_kind_at(tokens, tokens.length - 1);
   if (lastKind != TOKEN_EOF) { return 0; }
   var hasReturn = 0;
-  var scope = scope_names_new();
+  var scope = scope_new_root();
   var i = 0;
   while (i < tokens.length) {
     var k = token_kind_at(tokens, i);
-    if (k == TOKEN_LEFT_BRACE) { scope = scope_names_enter(scope); i = i + 1; continue; }
-    if (k == TOKEN_RIGHT_BRACE) { scope = scope_names_exit(scope); i = i + 1; continue; }
+    if (k == TOKEN_LEFT_BRACE) { scope = scope_enter(scope); i = i + 1; continue; }
+    if (k == TOKEN_RIGHT_BRACE) { scope = scope_exit(scope); i = i + 1; continue; }
     if (k == TOKEN_VAR) {
       var nameTok = i + 1;
       if (nameTok >= tokens.length) { return 0; }
       var name = String{token_start_at(tokens, nameTok) + src, token_length_at(tokens, nameTok)};
-      if (scope_names_lookup_current(scope, name) == 1) { return 0; }
-      scope = scope_names_define(scope, name);
+      var dup = scope_lookup_index_current(scope, name);
+      if (dup != -1) { return 0; }
+      var res = scope_define_var(scope, name, -1);
+      scope = res.scope;
     }
     if (k == TOKEN_RETURN) { hasReturn = 1; }
     i = i + 1;
