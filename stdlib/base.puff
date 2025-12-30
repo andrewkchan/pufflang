@@ -6,6 +6,9 @@ struct PopByte { vec VecByte, value byte }
 struct VecInt { data int~, length int, cap int }
 struct PopInt { vec VecInt, value int }
 
+// Generic byte-backed vector for arbitrary element size.
+struct Vec { data byte~, length int, cap int, elemSize int }
+
 struct String { data byte~, length int }
 struct StringBuilder { buf VecByte }
 
@@ -94,6 +97,57 @@ def vecint_get(v VecInt, idx int) int {
   return (int~(base + off))~;
 }
 
+// --- Generic Vec helpers ---
+def vec_new(elemSize int, cap int) Vec {
+  var c = cap;
+  if (c < 1) { c = 1; }
+  var data = __malloc__(elemSize * c);
+  return Vec{data, 0, c, elemSize};
+}
+
+def vec_reserve(v Vec, need int) Vec {
+  if (need <= v.cap) { return v; }
+  var newCap = v.cap * 2;
+  if (newCap < need) { newCap = need; }
+  var newData = __malloc__(newCap * v.elemSize);
+  var i = 0;
+  while (i < v.length * v.elemSize) {
+    (newData + i)~ = (v.data + i)~;
+    i = i + 1;
+  }
+  __free__(v.data);
+  return Vec{newData, v.length, newCap, v.elemSize};
+}
+
+// Copy elemSize bytes from src into vector end; return updated vector.
+def vec_push(v Vec, src byte~) Vec {
+  var out = vec_reserve(v, v.length + 1);
+  var i = 0;
+  var base = out.data + (out.length * out.elemSize);
+  while (i < out.elemSize) {
+    (base + i)~ = (src + i)~;
+    i = i + 1;
+  }
+  out.length = out.length + 1;
+  return out;
+}
+
+// Return pointer to element index (no bounds checks).
+def vec_get_ptr(v Vec, idx int) byte~ {
+  return v.data + (idx * v.elemSize);
+}
+
+// Set element at idx by copying elemSize bytes from src.
+def vec_set(v Vec, idx int, src byte~) Vec {
+  var dest = vec_get_ptr(v, idx);
+  var i = 0;
+  while (i < v.elemSize) {
+    (dest + i)~ = (src + i)~;
+    i = i + 1;
+  }
+  return v;
+}
+
 // --- StringBuilder ---
 def sb_new() StringBuilder {
   return StringBuilder{vecbyte_new(16)};
@@ -115,6 +169,136 @@ def sb_append_bytes(sb StringBuilder, data byte~, n int) StringBuilder {
 }
 
 def sb_to_string(sb StringBuilder) String { return String{sb.buf.data, sb.buf.length}; }
+
+def sb_append_string(sb StringBuilder, s String) StringBuilder {
+  return sb_append_bytes(sb, s.data, s.length);
+}
+
+def sb_clear(sb StringBuilder) StringBuilder {
+  var out = sb;
+  out.buf.length = 0;
+  return out;
+}
+
+def sb_append_cstr(sb StringBuilder, s byte~) StringBuilder {
+  var n = cstr_len(s);
+  return sb_append_bytes(sb, s, n);
+}
+
+// --- String helpers ---
+// C-string length (walk until NUL).
+def cstr_len(s byte~) int {
+  var i = 0;
+  while ((s + i)~ != byte(0)) { i = i + 1; }
+  return i;
+}
+
+// Clone a C-string (up to NUL).
+def cstr_clone(s byte~) String {
+  var n = cstr_len(s);
+  return str_clone(s, n);
+}
+
+def str_eq(a byte~, alen int, b byte~, blen int) int {
+  if (alen != blen) { return 0; }
+  var i = 0;
+  while (i < alen) {
+    if ((a + i)~ != (b + i)~) { return 0; }
+    i = i + 1;
+  }
+  return 1;
+}
+
+def str_clone(src byte~, n int) String {
+  var data = __malloc__(n);
+  var i = 0;
+  while (i < n) {
+    (data + i)~ = (src + i)~;
+    i = i + 1;
+  }
+  return String{data, n};
+}
+
+def str_starts_with(a byte~, alen int, b byte~, blen int) int {
+  if (blen > alen) { return 0; }
+  var i = 0;
+  while (i < blen) {
+    if ((a + i)~ != (b + i)~) { return 0; }
+    i = i + 1;
+  }
+  return 1;
+}
+
+// Returns first index of needle in haystack, or -1.
+def str_index_of(hay byte~, hlen int, needle byte~, nlen int) int {
+  if (nlen == 0) { return 0; }
+  if (nlen > hlen) { return -1; }
+  var max = hlen - nlen;
+  var i = 0;
+  while (i <= max) {
+    var j = 0;
+    var match = 1;
+    while (j < nlen) {
+      if ((hay + i + j)~ != (needle + j)~) { match = 0; break; }
+      j = j + 1;
+    }
+    if (match == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+def str_contains(hay byte~, hlen int, needle byte~, nlen int) int {
+  var idx = str_index_of(hay, hlen, needle, nlen);
+  if (idx >= 0) { return 1; }
+  return 0;
+}
+
+// Slice without copying; clamps count to bounds.
+def str_slice(src byte~, slen int, start int, count int) String {
+  if (start < 0) { start = 0; }
+  if (start > slen) { start = slen; }
+  var maxCount = slen - start;
+  if (count < 0) { count = 0; }
+  if (count > maxCount) { count = maxCount; }
+  return String{src + start, count};
+}
+
+// Trim ASCII whitespace (space, tab, CR, LF) from both ends; zero-copy.
+def str_trim_ascii(ws byte~, n int) String {
+  var start = 0;
+  while (start < n) {
+    var c = (ws + start)~;
+    if (c != byte(32) && c != byte(9) && c != byte(10) && c != byte(13)) { break; }
+    start = start + 1;
+  }
+  var end = n;
+  while (end > start) {
+    var c2 = (ws + end - 1)~;
+    if (c2 != byte(32) && c2 != byte(9) && c2 != byte(10) && c2 != byte(13)) { break; }
+    end = end - 1;
+  }
+  return String{ws + start, end - start};
+}
+
+// --- argv/env/time wrappers ---
+def argv_count() int { return __argc__(); }
+
+def argv_at(idx int) String {
+  var p = __argv_at__(idx);
+  return cstr_clone(p);
+}
+
+def getenv_clone(key byte~) String {
+  var p = __getenv__(key);
+  return cstr_clone(p);
+}
+
+def time_seconds() int {
+  // time(NULL) equivalent; storage can be null but allocate scratch to satisfy type
+  var scratch = __malloc__(8);
+  return __time__(scratch);
+}
 
 // --- File helpers ---
 def write_file_all(path byte~, data byte~, length int) int {
@@ -253,4 +437,41 @@ def map_get(m Map, key int) int {
     if (idx == start) { return MAP_EMPTY; }
   }
   return MAP_EMPTY;
+}
+
+def map_has(m Map, key int) int {
+  var v = map_get(m, key);
+  if (v == MAP_EMPTY) { return 0; }
+  return 1;
+}
+
+def map_delete(m Map, key int) Map {
+  var mask = m.cap - 1;
+  var idx = map_hash(key, mask);
+  var start = idx;
+  while (true) {
+    var off = idx * 8;
+    var k = (int~(m.data + off))~;
+    if (k == MAP_EMPTY) { return m; }
+    if (k == key) {
+      (int~(m.data + off))~ = MAP_EMPTY;
+      (int~(m.data + off + 4))~ = 0;
+      var out = Map{m.data, m.cap, m.length - 1};
+      var next = (idx + 1) & mask;
+      while (true) {
+        var off2 = next * 8;
+        var k2 = (int~(m.data + off2))~;
+        if (k2 == MAP_EMPTY) { break; }
+        var v2 = (int~(m.data + off2 + 4))~;
+        (int~(m.data + off2))~ = MAP_EMPTY;
+        (int~(m.data + off2 + 4))~ = 0;
+        out = map_put(out, k2, v2);
+        next = (next + 1) & mask;
+      }
+      return out;
+    }
+    idx = (idx + 1) & mask;
+    if (idx == start) { return m; }
+  }
+  return m;
 }

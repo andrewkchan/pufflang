@@ -44,9 +44,10 @@ export function compileWithStdlib(source: string, workdir?: string): string {
   return compileToLl(`${prelude}\n${source}`, workdir)
 }
 
-export function buildWithClang(irPath: string, outPath?: string): string {
-  const output = outPath ?? path.join(path.dirname(irPath), "a.out")
-  const build = spawnSync("clang", ["-x", "ir", irPath, "-lm", "-o", output], { encoding: "utf8" })
+export function buildWithClang(irPath: string | string[], outPath?: string): string {
+  const paths = Array.isArray(irPath) ? irPath : [irPath]
+  const output = outPath ?? path.join(path.dirname(paths[0]), "a.out")
+  const build = spawnSync("clang", [...paths, "-lm", "-o", output], { encoding: "utf8" })
   if (build.status !== 0) {
     throw new Error(`clang failed (${build.status}): ${build.stderr || build.stdout}`)
   }

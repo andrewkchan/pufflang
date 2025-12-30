@@ -4,18 +4,16 @@ import { compileAndRunWithStdlib } from "../src/harness"
 
 const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "scanner.puff"), "utf8")
 
-const lines = (res: { stdout: string }) => res.stdout.trim().split("\n").map((s) => s.trim())
-
-describe("Stage1 scanner (Puffscript)", () => {
-  test("scans def/return/parens/braces/numbers", () => {
+describe("Stage1 scanner (Puffscript) comma token", () => {
+  test("emits comma between params", () => {
     const source = `
     ${scannerSrc}
     def main() {
-      var src = "def foo() { return 123; }";
-      var toks = scan_kinds(byte~(&src[0]), len(src));
+      var src = "def foo(a, b) { return a; }";
+      var toks = scan_tokens(byte~(&src[0]), len(src));
       var i = 0;
       while (i < toks.length) {
-        print vecint_get(toks, i);
+        print token_kind_at(toks, i);
         i = i + 1;
       }
     }
@@ -23,15 +21,18 @@ describe("Stage1 scanner (Puffscript)", () => {
     const res = compileAndRunWithStdlib(source)
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
-    const out = lines(res).map((x) => parseInt(x, 10))
+    const out = res.stdout.trim().split("\n").map((s) => parseInt(s, 10))
     expect(out).toEqual([
-      50, // DEF
-      0,  // IDENTIFIER
+      50, // def
+      0,  // foo
       7,  // (
+      0,  // a
+      13, // ,
+      0,  // b
       8,  // )
       9,  // {
-      61, // RETURN
-      5,  // NUMBER
+      61, // return
+      0,  // a
       17, // ;
       10, // }
       70  // EOF

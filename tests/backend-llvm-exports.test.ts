@@ -45,4 +45,26 @@ describe("LLVM backend exports and mangling", () => {
     const lines = run.stdout.trim().split("\n")
     expect(lines).toEqual(["3", "5"])
   })
+
+  test("non-exported function/global use internal linkage and mangled name", () => {
+    const source = `
+    def foo(x int) int { return x + 2; }
+    var g = 5;
+    def main() {
+      print foo(g);
+    }
+    `
+    const res = compile(source)
+    expect(res.errors).toEqual([])
+    const ir = res.program!
+    // function should be internal and mangled with arity suffix
+    expect(ir).toMatch(/define internal i32 @foo__1\(/)
+    expect(ir).not.toMatch(/define i32 @foo\(/)
+    // global should be internal
+    expect(ir).toMatch(/@g = internal global i32/)
+    const run = compileAndRun(source)
+    expect(run.status).toBe(0)
+    expect(run.stderr).toBe("")
+    expect(run.stdout.trim()).toBe("7")
+  })
 })
