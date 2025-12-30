@@ -1321,9 +1321,10 @@ class FunctionBuilder {
         break
       }
       case ast.TypeCategory.POINTER: {
-        const fmtPtr = this.module.gepStringPtr("%p\n")
-        const casted = this.cast(val, "i8*")
-        this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i8* ${casted.repr})`)
+        // Print pointers in deterministic lowercase hex with 0x prefix and fixed width.
+        const fmtPtr = this.module.gepStringPtr("0x%016llx\n")
+        const asI64 = this.cast(val, "i64")
+        this.emit(`call i32 (i8*, ...) @printf(i8* ${fmtPtr}, i64 ${asI64.repr})`)
         break
       }
       default:
@@ -1710,6 +1711,12 @@ export function emitLlvm(context: ast.Context): string {
   const globalsMap = new Map<number, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
   const globalsByName = new Map<string, { ptr: string; type: LlvmType; array?: ArrayInfo; ptrInfo?: PointerInfo; struct?: StructInfo }>()
   const structInfos = new Map<string, StructInfo>()
+  const overloadCounts = new Map<string, number>()
+
+  functions.forEach((fn) => {
+    const name = fn.name.lexeme
+    overloadCounts.set(name, (overloadCounts.get(name) ?? 0) + 1)
+  })
 
   const structs = context.topLevelStatements.filter(
     (s) => s.kind === ast.NodeKind.STRUCT_STMT
@@ -1784,7 +1791,14 @@ export function emitLlvm(context: ast.Context): string {
       params = [`${elemTy}*` as LlvmType, ...params]
     }
     const key = `${fn.name.lexeme}/${fn.params.length}`
-    const mangled = fn.isImported ? fn.name.lexeme : (fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`)
+    const overloadCount = overloadCounts.get(fn.name.lexeme) ?? 1
+    const mangled = fn.isImported
+      ? fn.name.lexeme
+      : fn.name.lexeme === "main"
+        ? "main"
+        : (fn.isExported && overloadCount === 1)
+          ? fn.name.lexeme
+          : `${fn.name.lexeme}__${fn.params.length}`
     fnSigs.set(key, { ret, params, retAst: fn.returnType, mangled })
   })
   // Built-ins
@@ -1793,11 +1807,10 @@ export function emitLlvm(context: ast.Context): string {
   fnSigs.set("__free__/1", { ret: "void", params: ["i8*"], retAst: ast.VoidType, mangled: "__free__" })
   fnSigs.set("__exit__/1", { ret: "void", params: ["i32"], retAst: ast.VoidType, mangled: "exit" })
   fnSigs.set("__putchar__/1", { ret: "i32", params: ["i32"], retAst: ast.IntType, mangled: "putchar" })
-  fnSigs.set("__write__/3", { ret: "i64", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "write" })
-  fnSigs.set("__read__/3", { ret: "i64", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "read" })
+  fnSigs.set("__write__/3", { ret: "i32", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "write" })
+  fnSigs.set("__read__/3", { ret: "i32", params: ["i32", "i8*", "i64"], retAst: ast.IntType, mangled: "read" })
   fnSigs.set("__open__/3", { ret: "i32", params: ["i8*", "i32", "i32"], retAst: ast.IntType, mangled: "open" })
   fnSigs.set("__close__/1", { ret: "i32", params: ["i32"], retAst: ast.IntType, mangled: "close" })
-  fnSigs.set("__write__/3", { ret: "i32", params: ["i32", "i8*", "i32"], retAst: ast.IntType, mangled: "write" })
   const mainFn = functions.find((fn) => fn.name.lexeme === "main")
   if (!mainFn) {
     throw new Error("Program must define a 'main' function.")
@@ -1830,7 +1843,8 @@ export function emitLlvm(context: ast.Context): string {
       return
     }
     const fnBuilder = new FunctionBuilder(module, fnSigs, globalsMap, globalsByName, structInfos)
-    const mangled = fn.isImported ? fn.name.lexeme : (fn.name.lexeme === "main" ? "main" : `${fn.name.lexeme}__${fn.params.length}`)
+    const sig = fnSigs.get(`${fn.name.lexeme}/${fn.params.length}`)!
+    const mangled = sig.mangled
     module.addFunction(fnBuilder.buildFunction(fn, mangled, !!fn.isExported || fn.name.lexeme === "main"))
   })
   return module.build()
