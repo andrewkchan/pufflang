@@ -154,12 +154,13 @@ def scan_kinds(src byte~, n int) VecInt {
   return out;
 }
 
-// Minimal keyword matcher for scan_tokens (def/return/int/var).
+// Minimal keyword matcher for scan_tokens (def/return/int/var/len).
 def match_keyword_tokens(src byte~, start int, length int) int {
   if (length == 3) {
     if ((src + start)~ == byte(100) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(102)) { return TOKEN_DEF; }
     if ((src + start)~ == byte(105) && (src + start + 1)~ == byte(110) && (src + start + 2)~ == byte(116)) { return TOKEN_INT; }
     if ((src + start)~ == byte(118) && (src + start + 1)~ == byte(97) && (src + start + 2)~ == byte(114)) { return TOKEN_VAR; }
+    if ((src + start)~ == byte(108) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(110)) { return TOKEN_LEN; }
   }
   if (length == 6) {
     if ((src + start)~ == byte(114) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(116) && (src + start + 3)~ == byte(117) && (src + start + 4)~ == byte(114) && (src + start + 5)~ == byte(110)) { return TOKEN_RETURN; }
@@ -192,3 +193,4 @@ def token_kind_at(tokens Vec, idx int) int {
 def token_length_at(tokens Vec, idx int) int {
   return 0;
 }
+
