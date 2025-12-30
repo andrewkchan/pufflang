@@ -226,3 +226,49 @@ def parse_meta_counts(src byte~, n int) ParserInfo {
   }
   return ParserInfo{params, vars, hasRet};
 }
+
+// Extract parameter names into VecStr.
+def parse_params_vec(src byte~, n int) VecStr {
+  var tokens = scan_tokens(src, n);
+  var idx = 0;
+  var out = vecstr_new(4);
+  if (ts_match(tokens, &idx, TOKEN_DEF) == 0) { return out; }
+  ts_match(tokens, &idx, TOKEN_IDENTIFIER);
+  ts_match(tokens, &idx, TOKEN_LEFT_PAREN);
+  while (idx < ts_len(tokens)) {
+    var k = ts_kind(tokens, idx);
+    if (k == TOKEN_RIGHT_PAREN) { break; }
+    if (k == TOKEN_LEFT_BRACE) { break; }
+    if (k == TOKEN_IDENTIFIER) {
+      var start = token_start_at(tokens, idx);
+      var lenTok = token_length_at(tokens, idx);
+      var s = String{src + start, lenTok};
+      out = vecstr_push(out, s);
+      idx = idx + 1;
+      if (ts_match(tokens, &idx, TOKEN_COMMA) == 1) { continue; }
+      else { continue; }
+    }
+    idx = idx + 1;
+  }
+  return out;
+}
+
+// Extract return expression substring (best-effort; trims whitespace).
+def parse_return_expr_str(src byte~, n int) String {
+  var tokens = scan_tokens(src, n);
+  var idx = 0;
+  // find "return"
+  var retTokIdx = 0;
+  var found = 0;
+  while (retTokIdx < ts_len(tokens)) {
+    if (ts_kind(tokens, retTokIdx) == TOKEN_RETURN) { found = 1; break; }
+    retTokIdx = retTokIdx + 1;
+  }
+  if (found == 0) { return String{src, 0}; }
+  var retStart = token_start_at(tokens, retTokIdx) + token_length_at(tokens, retTokIdx);
+  var semiTokIdx = retTokIdx;
+  while (semiTokIdx < ts_len(tokens) && ts_kind(tokens, semiTokIdx) != TOKEN_SEMICOLON) { semiTokIdx = semiTokIdx + 1; }
+  if (semiTokIdx >= ts_len(tokens)) { return String{src, 0}; }
+  var retEnd = token_start_at(tokens, semiTokIdx);
+  return trim_span(src, retStart, retEnd);
+}
