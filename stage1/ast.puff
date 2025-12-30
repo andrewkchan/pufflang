@@ -190,11 +190,6 @@ def scope_new_root() Scope {
   return scope_new(dummy, 0);
 }
 
-// Create a child scope referencing a parent scope (byte pointer to parent).
-def scope_child(parent byte~) Scope {
-  return scope_new(parent, 1);
-}
-
 // Lookup in current scope; returns index or -1.
 def scope_lookup_index_current(s Scope, name String) int {
   var i = s.names.length;
