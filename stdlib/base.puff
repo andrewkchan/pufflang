@@ -6,6 +6,9 @@ struct PopByte { vec VecByte, value byte }
 struct VecInt { data int~, length int, cap int }
 struct PopInt { vec VecInt, value int }
 
+// Generic byte-backed vector for arbitrary element size.
+struct Vec { data byte~, length int, cap int, elemSize int }
+
 struct String { data byte~, length int }
 struct StringBuilder { buf VecByte }
 
@@ -94,6 +97,57 @@ def vecint_get(v VecInt, idx int) int {
   return (int~(base + off))~;
 }
 
+// --- Generic Vec helpers ---
+def vec_new(elemSize int, cap int) Vec {
+  var c = cap;
+  if (c < 1) { c = 1; }
+  var data = __malloc__(elemSize * c);
+  return Vec{data, 0, c, elemSize};
+}
+
+def vec_reserve(v Vec, need int) Vec {
+  if (need <= v.cap) { return v; }
+  var newCap = v.cap * 2;
+  if (newCap < need) { newCap = need; }
+  var newData = __malloc__(newCap * v.elemSize);
+  var i = 0;
+  while (i < v.length * v.elemSize) {
+    (newData + i)~ = (v.data + i)~;
+    i = i + 1;
+  }
+  __free__(v.data);
+  return Vec{newData, v.length, newCap, v.elemSize};
+}
+
+// Copy elemSize bytes from src into vector end; return updated vector.
+def vec_push(v Vec, src byte~) Vec {
+  var out = vec_reserve(v, v.length + 1);
+  var i = 0;
+  var base = out.data + (out.length * out.elemSize);
+  while (i < out.elemSize) {
+    (base + i)~ = (src + i)~;
+    i = i + 1;
+  }
+  out.length = out.length + 1;
+  return out;
+}
+
+// Return pointer to element index (no bounds checks).
+def vec_get_ptr(v Vec, idx int) byte~ {
+  return v.data + (idx * v.elemSize);
+}
+
+// Set element at idx by copying elemSize bytes from src.
+def vec_set(v Vec, idx int, src byte~) Vec {
+  var dest = vec_get_ptr(v, idx);
+  var i = 0;
+  while (i < v.elemSize) {
+    (dest + i)~ = (src + i)~;
+    i = i + 1;
+  }
+  return v;
+}
+
 // --- StringBuilder ---
 def sb_new() StringBuilder {
   return StringBuilder{vecbyte_new(16)};
@@ -115,6 +169,41 @@ def sb_append_bytes(sb StringBuilder, data byte~, n int) StringBuilder {
 }
 
 def sb_to_string(sb StringBuilder) String { return String{sb.buf.data, sb.buf.length}; }
+
+def sb_append_string(sb StringBuilder, s String) StringBuilder {
+  return sb_append_bytes(sb, s.data, s.length);
+}
+
+// --- String helpers ---
+def str_eq(a byte~, alen int, b byte~, blen int) int {
+  if (alen != blen) { return 0; }
+  var i = 0;
+  while (i < alen) {
+    if ((a + i)~ != (b + i)~) { return 0; }
+    i = i + 1;
+  }
+  return 1;
+}
+
+def str_clone(src byte~, n int) String {
+  var data = __malloc__(n);
+  var i = 0;
+  while (i < n) {
+    (data + i)~ = (src + i)~;
+    i = i + 1;
+  }
+  return String{data, n};
+}
+
+def str_starts_with(a byte~, alen int, b byte~, blen int) int {
+  if (blen > alen) { return 0; }
+  var i = 0;
+  while (i < blen) {
+    if ((a + i)~ != (b + i)~) { return 0; }
+    i = i + 1;
+  }
+  return 1;
+}
 
 // --- File helpers ---
 def write_file_all(path byte~, data byte~, length int) int {
