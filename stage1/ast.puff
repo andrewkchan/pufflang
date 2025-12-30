@@ -276,6 +276,19 @@ def scope_define_function(s Scope, name String, arity int, returnType int, isExp
   return ScopeResult{s, 1};
 }
 
+// Define struct; duplicates in current scope are errors.
+def scope_define_struct(s Scope, name String, typeId int) ScopeResult {
+  var idx = scope_lookup_index_current(s, name);
+  if (idx != -1) { return ScopeResult{s, 1}; }
+  s.names = vecstr_push(s.names, str_clone(name.data, name.length));
+  s.kinds = vecint_push(s.kinds, SYMKIND_STRUCT);
+  s.arityA = vecint_push(s.arityA, -1);
+  s.arityB = vecint_push(s.arityB, -1);
+  s.typeIds = vecint_push(s.typeIds, typeId);
+  s.depths = vecint_push(s.depths, s.depth);
+  return ScopeResult{s, 0};
+}
+
 // Lookup symbol across depths; returns index or -1.
 def scope_lookup(s Scope, name String) int {
   return scope_lookup_index_any(s, name);
@@ -330,6 +343,15 @@ def scope_variable_type(s Scope, name String) int {
   if (idx == -1) { return -1; }
   var kind = vecint_get(s.kinds, idx);
   if (kind != SYMKIND_VAR) { return -1; }
+  return vecint_get(s.typeIds, idx);
+}
+
+// Return struct type id (or -1 if not found or not a struct).
+def scope_struct_type(s Scope, name String) int {
+  var idx = scope_lookup_index_any(s, name);
+  if (idx == -1) { return -1; }
+  var kind = vecint_get(s.kinds, idx);
+  if (kind != SYMKIND_STRUCT) { return -1; }
   return vecint_get(s.typeIds, idx);
 }
 
