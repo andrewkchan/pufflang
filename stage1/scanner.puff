@@ -1,4 +1,4 @@
-// Stage1 Puffscript scanner producing token kinds (aligned with Stage0 TokenType).
+// Stage1 Puffscript scanner producing tokens aligned with Stage0 TokenType.
 // TokenType values (see src/tokens.ts):
 // Literals
 var TOKEN_IDENTIFIER int = 0;
@@ -77,17 +77,26 @@ var TOKEN_WHILE int = 69;
 // EOF
 var TOKEN_EOF int = 70;
 
-// Token storage (currently store only kind as int for minimal footprint).
 struct Token { kind int, start int, length int, line int }
 
-def vec_token_new(cap int) Vec {
-  return vec_new(4, cap);
+def vec_token_new(cap int) Vec { return vec_new(16, cap); }
+
+// Write token fields manually to avoid struct-copy ambiguity.
+def push_token(v Vec, kind int, start int, length int, line int) Vec {
+  var out = vec_reserve(v, v.length + 1);
+  var ptr = vec_get_ptr(out, out.length);
+  (int~(ptr))~ = kind;
+  (int~(ptr + 4))~ = start;
+  (int~(ptr + 8))~ = length;
+  (int~(ptr + 12))~ = line;
+  out.length = out.length + 1;
+  return out;
 }
 
-def push_token_kind(v Vec, kind int) Vec {
-  var k = kind;
-  return vec_push(v, byte~(&k));
-}
+def token_kind_at(tokens Vec, idx int) int { return (int~(vec_get_ptr(tokens, idx)))~; }
+def token_start_at(tokens Vec, idx int) int { return (int~(vec_get_ptr(tokens, idx) + 4))~; }
+def token_length_at(tokens Vec, idx int) int { return (int~(vec_get_ptr(tokens, idx) + 8))~; }
+def token_line_at(tokens Vec, idx int) int { return (int~(vec_get_ptr(tokens, idx) + 12))~; }
 
 def is_alpha(b byte) int {
   if (b >= byte(65) && b <= byte(90)) { return 1; }   // A-Z
@@ -101,88 +110,228 @@ def is_digit(b byte) int {
   return 0;
 }
 
+def is_hex_digit(b byte) int {
+  if (is_digit(b) == 1) { return 1; }
+  if (b >= byte(65) && b <= byte(70)) { return 1; }   // A-F
+  if (b >= byte(97) && b <= byte(102)) { return 1; }  // a-f
+  return 0;
+}
+
 def is_alnum(b byte) int {
   if (is_alpha(b) == 1) { return 1; }
   if (is_digit(b) == 1) { return 1; }
   return 0;
 }
 
-def match_keyword(src byte~, start int, length int) int {
-  // Minimal keywords needed for current tests.
-  if (length == 3) {
-    if ((src + start)~ == byte(100) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(102)) { return TOKEN_DEF; }
-    if ((src + start)~ == byte(105) && (src + start + 1)~ == byte(110) && (src + start + 2)~ == byte(116)) { return TOKEN_INT; }
-    if ((src + start)~ == byte(118) && (src + start + 1)~ == byte(97) && (src + start + 2)~ == byte(114)) { return TOKEN_VAR; }
+def keyword_kind(src byte~, start int, length int) int {
+  // Match by length then characters to avoid allocations.
+  if (length == 2) {
+    // if -> IF
+    if ((src + start)~ == byte(105) && (src + start + 1)~ == byte(102)) { return TOKEN_IF; }
   }
-  if (length == 6) {
-    if ((src + start)~ == byte(114) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(116) && (src + start + 3)~ == byte(117) && (src + start + 4)~ == byte(114) && (src + start + 5)~ == byte(110)) { return TOKEN_RETURN; }
-  }
-  return -1;
-}
-
-// Simplified scanner adequate for current Stage1 tests (def/return/ident/number/parens/braces/semicolon).
-def scan_kinds(src byte~, n int) VecInt {
-  var i = 0;
-  var out = vecint_new(32);
-  while (i < n) {
-    var c = (src + i)~;
-    if (c == byte(32) || c == byte(10) || c == byte(9) || c == byte(13)) { i = i + 1; continue; }
-    if (is_alpha(c) == 1) {
-      var start = i;
-      while (i < n && is_alnum((src + i)~) == 1) { i = i + 1; }
-      var kw = match_keyword(src, start, i - start);
-      if (kw != -1) {
-        out = vecint_push(out, kw);
-      } else {
-        out = vecint_push(out, TOKEN_IDENTIFIER);
-      }
-      continue;
-    }
-    if (is_digit(c) == 1) {
-      while (i < n && is_digit((src + i)~) == 1) { i = i + 1; }
-      out = vecint_push(out, TOKEN_NUMBER);
-      continue;
-    }
-    if (c == byte(47)) { out = vecint_push(out, TOKEN_SLASH); i = i + 1; continue; }
-    if (c == byte(42)) { out = vecint_push(out, TOKEN_STAR); i = i + 1; continue; }
-    if (c == byte(45)) { out = vecint_push(out, TOKEN_MINUS); i = i + 1; continue; }
-    if (c == byte(43)) { out = vecint_push(out, TOKEN_PLUS); i = i + 1; continue; }
-    if (c == byte(61)) { out = vecint_push(out, TOKEN_EQUAL); i = i + 1; continue; }
-    if (c == byte(44)) { out = vecint_push(out, TOKEN_COMMA); i = i + 1; continue; }
-    if (c == byte(40)) { out = vecint_push(out, TOKEN_LEFT_PAREN); i = i + 1; continue; }
-    if (c == byte(41)) { out = vecint_push(out, TOKEN_RIGHT_PAREN); i = i + 1; continue; }
-    if (c == byte(123)) { out = vecint_push(out, TOKEN_LEFT_BRACE); i = i + 1; continue; }
-    if (c == byte(125)) { out = vecint_push(out, TOKEN_RIGHT_BRACE); i = i + 1; continue; }
-    if (c == byte(59)) { out = vecint_push(out, TOKEN_SEMICOLON); i = i + 1; continue; }
-    i = i + 1;
-  }
-  out = vecint_push(out, TOKEN_EOF);
-  return out;
-}
-
-// Minimal keyword matcher for scan_tokens (def/return/int/var/len).
-def match_keyword_tokens(src byte~, start int, length int) int {
   if (length == 3) {
     if ((src + start)~ == byte(100) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(102)) { return TOKEN_DEF; }
     if ((src + start)~ == byte(105) && (src + start + 1)~ == byte(110) && (src + start + 2)~ == byte(116)) { return TOKEN_INT; }
     if ((src + start)~ == byte(118) && (src + start + 1)~ == byte(97) && (src + start + 2)~ == byte(114)) { return TOKEN_VAR; }
     if ((src + start)~ == byte(108) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(110)) { return TOKEN_LEN; }
+    if ((src + start)~ == byte(102) && (src + start + 1)~ == byte(111) && (src + start + 2)~ == byte(114)) { return TOKEN_FOR; }
+  }
+  if (length == 4) {
+    if ((src + start)~ == byte(101) && (src + start + 1)~ == byte(108) && (src + start + 2)~ == byte(115) && (src + start + 3)~ == byte(101)) { return TOKEN_ELSE; }
+    if ((src + start)~ == byte(118) && (src + start + 1)~ == byte(111) && (src + start + 2)~ == byte(105) && (src + start + 3)~ == byte(100)) { return TOKEN_VOID; }
+    if ((src + start)~ == byte(116) && (src + start + 1)~ == byte(114) && (src + start + 2)~ == byte(117) && (src + start + 3)~ == byte(101)) { return TOKEN_TRUE; }
+    if ((src + start)~ == byte(98) && (src + start + 1)~ == byte(111) && (src + start + 2)~ == byte(111) && (src + start + 3)~ == byte(108)) { return TOKEN_BOOL; }
+    if ((src + start)~ == byte(98) && (src + start + 1)~ == byte(121) && (src + start + 2)~ == byte(116) && (src + start + 3)~ == byte(101)) { return TOKEN_BYTE; }
+  }
+  if (length == 5) {
+    if ((src + start)~ == byte(102) && (src + start + 1)~ == byte(97) && (src + start + 2)~ == byte(108) && (src + start + 3)~ == byte(115) && (src + start + 4)~ == byte(101)) { return TOKEN_FALSE; }
+    if ((src + start)~ == byte(119) && (src + start + 1)~ == byte(104) && (src + start + 2)~ == byte(105) && (src + start + 3)~ == byte(108) && (src + start + 4)~ == byte(101)) { return TOKEN_WHILE; }
+    if ((src + start)~ == byte(112) && (src + start + 1)~ == byte(114) && (src + start + 2)~ == byte(105) && (src + start + 3)~ == byte(110) && (src + start + 4)~ == byte(116)) { return TOKEN_PRINT; }
+    if ((src + start)~ == byte(102) && (src + start + 1)~ == byte(108) && (src + start + 2)~ == byte(111) && (src + start + 3)~ == byte(97) && (src + start + 4)~ == byte(116)) { return TOKEN_FLOAT; }
   }
   if (length == 6) {
     if ((src + start)~ == byte(114) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(116) && (src + start + 3)~ == byte(117) && (src + start + 4)~ == byte(114) && (src + start + 5)~ == byte(110)) { return TOKEN_RETURN; }
+    if ((src + start)~ == byte(105) && (src + start + 1)~ == byte(109) && (src + start + 2)~ == byte(112) && (src + start + 3)~ == byte(111) && (src + start + 4)~ == byte(114) && (src + start + 5)~ == byte(116)) { return TOKEN_IMPORT; }
+    if ((src + start)~ == byte(101) && (src + start + 1)~ == byte(120) && (src + start + 2)~ == byte(112) && (src + start + 3)~ == byte(111) && (src + start + 4)~ == byte(114) && (src + start + 5)~ == byte(116)) { return TOKEN_EXPORT; }
+    if ((src + start)~ == byte(115) && (src + start + 1)~ == byte(116) && (src + start + 2)~ == byte(114) && (src + start + 3)~ == byte(117) && (src + start + 4)~ == byte(99) && (src + start + 5)~ == byte(116)) { return TOKEN_STRUCT; }
+    if ((src + start)~ == byte(115) && (src + start + 1)~ == byte(119) && (src + start + 2)~ == byte(105) && (src + start + 3)~ == byte(116) && (src + start + 4)~ == byte(99) && (src + start + 5)~ == byte(104)) { return TOKEN_SWITCH; }
+    if ((src + start)~ == byte(100) && (src + start + 1)~ == byte(101) && (src + start + 2)~ == byte(102) && (src + start + 3)~ == byte(97) && (src + start + 4)~ == byte(117) && (src + start + 5)~ == byte(108) && (src + start + 6)~ == byte(116)) { return TOKEN_DEFAULT; }
+  }
+  if (length == 5) {
+    if ((src + start)~ == byte(98) && (src + start + 1)~ == byte(114) && (src + start + 2)~ == byte(101) && (src + start + 3)~ == byte(97) && (src + start + 4)~ == byte(107)) { return TOKEN_BREAK; }
+  }
+  if (length == 8) {
+    if ((src + start)~ == byte(99) && (src + start + 1)~ == byte(111) && (src + start + 2)~ == byte(110) && (src + start + 3)~ == byte(116) && (src + start + 4)~ == byte(105) && (src + start + 5)~ == byte(110) && (src + start + 6)~ == byte(117) && (src + start + 7)~ == byte(101)) { return TOKEN_CONTINUE; }
+  }
+  if (length == 4) {
+    if ((src + start)~ == byte(99) && (src + start + 1)~ == byte(97) && (src + start + 2)~ == byte(115) && (src + start + 3)~ == byte(101)) { return TOKEN_CASE; }
   }
   return -1;
 }
 
-// Simplified token scanner: leverage scan_kinds to avoid duplicate logic, and wrap into Token Vec.
-// start/length/line are stubbed (0/0/1) for now; enough for current use and avoids heavy IR.
 def scan_tokens(src byte~, n int) Vec {
-  var kinds = scan_kinds(src, n);
-  var out = vec_token_new(kinds.length + 1);
   var i = 0;
-  while (i < kinds.length) {
-    var k = vecint_get(kinds, i);
-    out = push_token_kind(out, k);
+  var line = 1;
+  var out = vec_token_new(64);
+  while (i < n) {
+    var c = (src + i)~;
+    // whitespace
+    if (c == byte(32) || c == byte(9) || c == byte(13)) { i = i + 1; continue; }
+    if (c == byte(10)) { line = line + 1; i = i + 1; continue; }
+    // comments //
+    if (c == byte(47) && i + 1 < n && (src + i + 1)~ == byte(47)) {
+      i = i + 2;
+      while (i < n && (src + i)~ != byte(10)) { i = i + 1; }
+      continue;
+    }
+    // multi-char tokens
+    if (i + 1 < n) {
+      var two = (int(c) << 8) | int((src + i + 1)~);
+      if (two == int(byte(60) << 8 | byte(60))) { // <<
+        out = push_token(out, TOKEN_SHIFT_LEFT, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(62) << 8 | byte(62))) { // >>
+        out = push_token(out, TOKEN_SHIFT_RIGHT, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(43) << 8 | byte(43))) { // ++
+        out = push_token(out, TOKEN_PLUS_PLUS, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(45) << 8 | byte(45))) { // --
+        out = push_token(out, TOKEN_MINUS_MINUS, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(33) << 8 | byte(61))) { // !=
+        out = push_token(out, TOKEN_BANG_EQUAL, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(61) << 8 | byte(61))) { // ==
+        out = push_token(out, TOKEN_EQUAL_EQUAL, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(62) << 8 | byte(61))) { // >=
+        out = push_token(out, TOKEN_GREATER_EQUAL, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(60) << 8 | byte(61))) { // <=
+        out = push_token(out, TOKEN_LESS_EQUAL, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(38) << 8 | byte(38))) { // &&
+        out = push_token(out, TOKEN_AMP_AMP, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(124) << 8 | byte(124))) { // ||
+        out = push_token(out, TOKEN_BAR_BAR, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(43) << 8 | byte(61))) { // +=
+        out = push_token(out, TOKEN_PLUS_EQUAL, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(45) << 8 | byte(61))) { // -=
+        out = push_token(out, TOKEN_MINUS_EQUAL, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(42) << 8 | byte(61))) { // *=
+        out = push_token(out, TOKEN_STAR_EQUAL, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(47) << 8 | byte(61))) { // /=
+        out = push_token(out, TOKEN_SLASH_EQUAL, i, 2, line); i = i + 2; continue;
+      }
+      if (two == int(byte(37) << 8 | byte(61))) { // %=
+        out = push_token(out, TOKEN_PERCENT_EQUAL, i, 2, line); i = i + 2; continue;
+      }
+    }
+    // single-char tokens / operators
+    if (c == byte(33)) { out = push_token(out, TOKEN_BANG, i, 1, line); i = i + 1; continue; }
+    if (c == byte(61)) { out = push_token(out, TOKEN_EQUAL, i, 1, line); i = i + 1; continue; }
+    if (c == byte(62)) { out = push_token(out, TOKEN_GREATER, i, 1, line); i = i + 1; continue; }
+    if (c == byte(60)) { out = push_token(out, TOKEN_LESS, i, 1, line); i = i + 1; continue; }
+    if (c == byte(38)) { out = push_token(out, TOKEN_AMP, i, 1, line); i = i + 1; continue; }
+    if (c == byte(124)) { out = push_token(out, TOKEN_BAR, i, 1, line); i = i + 1; continue; }
+    if (c == byte(94)) { out = push_token(out, TOKEN_CARET, i, 1, line); i = i + 1; continue; }
+    if (c == byte(45)) { out = push_token(out, TOKEN_MINUS, i, 1, line); i = i + 1; continue; }
+    if (c == byte(43)) { out = push_token(out, TOKEN_PLUS, i, 1, line); i = i + 1; continue; }
+    if (c == byte(47)) { out = push_token(out, TOKEN_SLASH, i, 1, line); i = i + 1; continue; }
+    if (c == byte(42)) { out = push_token(out, TOKEN_STAR, i, 1, line); i = i + 1; continue; }
+    if (c == byte(37)) { out = push_token(out, TOKEN_PERCENT, i, 1, line); i = i + 1; continue; }
+    if (c == byte(40)) { out = push_token(out, TOKEN_LEFT_PAREN, i, 1, line); i = i + 1; continue; }
+    if (c == byte(41)) { out = push_token(out, TOKEN_RIGHT_PAREN, i, 1, line); i = i + 1; continue; }
+    if (c == byte(123)) { out = push_token(out, TOKEN_LEFT_BRACE, i, 1, line); i = i + 1; continue; }
+    if (c == byte(125)) { out = push_token(out, TOKEN_RIGHT_BRACE, i, 1, line); i = i + 1; continue; }
+    if (c == byte(91)) { out = push_token(out, TOKEN_LEFT_BRACKET, i, 1, line); i = i + 1; continue; }
+    if (c == byte(93)) { out = push_token(out, TOKEN_RIGHT_BRACKET, i, 1, line); i = i + 1; continue; }
+    if (c == byte(44)) { out = push_token(out, TOKEN_COMMA, i, 1, line); i = i + 1; continue; }
+    if (c == byte(46)) { out = push_token(out, TOKEN_DOT, i, 1, line); i = i + 1; continue; }
+    if (c == byte(63)) { out = push_token(out, TOKEN_QUESTION, i, 1, line); i = i + 1; continue; }
+    if (c == byte(58)) { out = push_token(out, TOKEN_COLON, i, 1, line); i = i + 1; continue; }
+    if (c == byte(59)) { out = push_token(out, TOKEN_SEMICOLON, i, 1, line); i = i + 1; continue; }
+    if (c == byte(126)) { out = push_token(out, TOKEN_TILDE, i, 1, line); i = i + 1; continue; }
+
+    // identifiers / keywords
+    if (is_alpha(c) == 1) {
+      var start = i;
+      while (i < n && is_alnum((src + i)~) == 1) { i = i + 1; }
+      var identLen = i - start;
+      var kw = keyword_kind(src, start, identLen);
+      if (kw != -1) { out = push_token(out, kw, start, identLen, line); }
+      else { out = push_token(out, TOKEN_IDENTIFIER, start, identLen, line); }
+      continue;
+    }
+
+    // numbers: hex, decimal float, integer
+    if (is_digit(c) == 1) {
+      var startNum = i;
+      if (c == byte(48) && i + 1 < n && (src + i + 1)~ == byte(120)) { // 0x
+        i = i + 2;
+        while (i < n && is_hex_digit((src + i)~) == 1) { i = i + 1; }
+        out = push_token(out, TOKEN_NUMBER_HEX, startNum, i - startNum, line);
+        continue;
+      }
+      while (i < n && is_digit((src + i)~) == 1) { i = i + 1; }
+      var isDecimal = 0;
+      if (i < n && (src + i)~ == byte(46)) { // '.'
+        isDecimal = 1;
+        i = i + 1;
+        while (i < n && is_digit((src + i)~) == 1) { i = i + 1; }
+      }
+      var lenNum = i - startNum;
+      if (isDecimal == 1) { out = push_token(out, TOKEN_NUMBER_DECIMAL, startNum, lenNum, line); }
+      else { out = push_token(out, TOKEN_NUMBER, startNum, lenNum, line); }
+      continue;
+    }
+
+    // string literal "
+    if (c == byte(34)) {
+      var startStr = i;
+      i = i + 1;
+      while (i < n && (src + i)~ != byte(34)) {
+        if ((src + i)~ == byte(10)) { line = line + 1; }
+        i = i + 1;
+      }
+      if (i < n) { i = i + 1; }
+      out = push_token(out, TOKEN_STRING, startStr, i - startStr, line);
+      continue;
+    }
+
+    // single-quote char literal '
+    if (c == byte(39)) {
+      var startChr = i;
+      i = i + 1;
+      // consume until next '
+      while (i < n && (src + i)~ != byte(39)) {
+        if ((src + i)~ == byte(10)) { line = line + 1; }
+        i = i + 1;
+      }
+      if (i < n) { i = i + 1; }
+      out = push_token(out, TOKEN_SINGLE_QUOTE_STRING, startChr, i - startChr, line);
+      continue;
+    }
+
+    // unknown character: skip
+    i = i + 1;
+  }
+  out = push_token(out, TOKEN_EOF, i, 0, line);
+  return out;
+}
+
+def scan_kinds(src byte~, n int) VecInt {
+  var tokens = scan_tokens(src, n);
+  var out = vecint_new(tokens.length);
+  var i = 0;
+  while (i < tokens.length) {
+    out = vecint_push(out, token_kind_at(tokens, i));
     i = i + 1;
   }
   return out;
@@ -190,13 +339,4 @@ def scan_tokens(src byte~, n int) Vec {
 
 // Full scanner alias.
 def scan_tokens_full(src byte~, n int) Vec { return scan_tokens(src, n); }
-
-// Helpers for reading Token fields from the Vec returned by scan_tokens.
-def token_kind_at(tokens Vec, idx int) int {
-  return (int~(vec_get_ptr(tokens, idx)))~;
-}
-
-def token_length_at(tokens Vec, idx int) int {
-  return 0;
-}
 
