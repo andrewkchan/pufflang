@@ -1,0 +1,303 @@
+// Stage1 core AST/type scaffolding using index-based arenas.
+// This keeps allocations simple for Puffscript and mirrors Stage0 semantics at a coarse level.
+
+// ---- Type system ----
+var TYPECATEGORY_ARRAY int = 0;
+var TYPECATEGORY_BOOL int = 1;
+var TYPECATEGORY_BYTE int = 2;
+var TYPECATEGORY_ERROR int = 3;
+var TYPECATEGORY_FLOAT int = 4;
+var TYPECATEGORY_INT int = 5;
+var TYPECATEGORY_POINTER int = 6;
+var TYPECATEGORY_STRUCT int = 7;
+var TYPECATEGORY_VOID int = 8;
+
+struct Type { category int, element int, length int, structId int }
+
+struct TypeTable { types Vec }
+
+// Create a new type table with builtin scalar types pre-seeded.
+def typetable_new() TypeTable {
+  var v = vec_new(16, 16); // reserve space for builtin + composites
+  v.length = 0;
+  v = typetable_push_raw(v, Type{TYPECATEGORY_ARRAY, -1, 0, -1}); // id 0 placeholder (unused)
+  v = typetable_push_raw(v, Type{TYPECATEGORY_BOOL, -1, 0, -1});  // id 1
+  v = typetable_push_raw(v, Type{TYPECATEGORY_BYTE, -1, 0, -1});  // id 2
+  v = typetable_push_raw(v, Type{TYPECATEGORY_ERROR, -1, 0, -1}); // id 3
+  v = typetable_push_raw(v, Type{TYPECATEGORY_FLOAT, -1, 0, -1}); // id 4
+  v = typetable_push_raw(v, Type{TYPECATEGORY_INT, -1, 0, -1});   // id 5
+  v = typetable_push_raw(v, Type{TYPECATEGORY_POINTER, -1, 0, -1}); // id 6 placeholder
+  v = typetable_push_raw(v, Type{TYPECATEGORY_STRUCT, -1, 0, -1}); // id 7 placeholder
+  v = typetable_push_raw(v, Type{TYPECATEGORY_VOID, -1, 0, -1}); // id 8
+  return TypeTable{v};
+}
+
+// Push helper storing a Type into Vec (elemSize = 16 bytes).
+def typetable_push_raw(v Vec, t Type) Vec {
+  var out = vec_reserve(v, v.length + 1);
+  var dest = vec_get_ptr(out, out.length);
+  // copy 16 bytes manually (4 ints)
+  (int~(dest))~ = t.category;
+  (int~(dest + 4))~ = t.element;
+  (int~(dest + 8))~ = t.length;
+  (int~(dest + 12))~ = t.structId;
+  out.length = out.length + 1;
+  return out;
+}
+
+// Allocate pointer type; returns type id.
+def typetable_make_pointer(tt TypeTable, elemId int) TypeTable {
+  var t = Type{TYPECATEGORY_POINTER, elemId, 0, -1};
+  var v = typetable_push_raw(tt.types, t);
+  return TypeTable{v};
+}
+
+// Allocate array type; returns updated table.
+def typetable_make_array(tt TypeTable, elemId int, length int) TypeTable {
+  var t = Type{TYPECATEGORY_ARRAY, elemId, length, -1};
+  var v = typetable_push_raw(tt.types, t);
+  return TypeTable{v};
+}
+
+// Allocate struct type; structId is an index into a struct table maintained elsewhere.
+def typetable_make_struct(tt TypeTable, structId int) TypeTable {
+  var t = Type{TYPECATEGORY_STRUCT, -1, 0, structId};
+  var v = typetable_push_raw(tt.types, t);
+  return TypeTable{v};
+}
+
+def typetable_get(tt TypeTable, id int) Type {
+  var ptr = vec_get_ptr(tt.types, id);
+  var cat = (int~(ptr))~;
+  var elem = (int~(ptr + 4))~;
+  var lengthVal = (int~(ptr + 8))~;
+  var sid = (int~(ptr + 12))~;
+  return Type{cat, elem, lengthVal, sid};
+}
+
+def type_is_numeric(tt TypeTable, id int) int {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_INT) { return 1; }
+  if (t.category == TYPECATEGORY_FLOAT) { return 1; }
+  if (t.category == TYPECATEGORY_BYTE) { return 1; }
+  return 0;
+}
+
+// Basic equality (ignores resolved struct identity beyond structId).
+def type_equals(tt TypeTable, a int, b int) int {
+  if (a == b) { return 1; }
+  var ta = typetable_get(tt, a);
+  var tb = typetable_get(tt, b);
+  if (ta.category != tb.category) { return 0; }
+  if (ta.category == TYPECATEGORY_ARRAY) {
+    if (ta.length != tb.length) { return 0; }
+    return type_equals(tt, ta.element, tb.element);
+  }
+  if (ta.category == TYPECATEGORY_POINTER) {
+    return type_equals(tt, ta.element, tb.element);
+  }
+  if (ta.category == TYPECATEGORY_STRUCT) {
+    if (ta.structId == tb.structId) { return 1; }
+    return 0;
+  }
+  return 1;
+}
+
+// ---- Node arena ----
+// Node fields are generic; interpretation depends on kind.
+// ints are indices into other tables (nodes, strings, symbols, types).
+struct Node { kind int, a int, b int, c int, d int, value int, typeId int }
+struct NodeArena { nodes Vec }
+
+def nodearena_new(cap int) NodeArena {
+  var v = vec_new(32, cap);
+  v.length = 0;
+  return NodeArena{v};
+}
+
+def nodearena_push(arena NodeArena, n Node) NodeArena {
+  var out = vec_reserve(arena.nodes, arena.nodes.length + 1);
+  var dest = vec_get_ptr(out, out.length);
+  (int~(dest))~ = n.kind;
+  (int~(dest + 4))~ = n.a;
+  (int~(dest + 8))~ = n.b;
+  (int~(dest + 12))~ = n.c;
+  (int~(dest + 16))~ = n.d;
+  (int~(dest + 20))~ = n.value;
+  (int~(dest + 24))~ = n.typeId;
+  (int~(dest + 28))~ = 0; // padding / future use
+  out.length = out.length + 1;
+  return NodeArena{out};
+}
+
+def nodearena_get(arena NodeArena, idx int) Node {
+  var ptr = vec_get_ptr(arena.nodes, idx);
+  var k = (int~(ptr))~;
+  var a = (int~(ptr + 4))~;
+  var b = (int~(ptr + 8))~;
+  var c = (int~(ptr + 12))~;
+  var d = (int~(ptr + 16))~;
+  var v = (int~(ptr + 20))~;
+  var t = (int~(ptr + 24))~;
+  return Node{k, a, b, c, d, v, t};
+}
+
+// ---- Node kinds (subset; expand as parser grows) ----
+var NODE_LITERAL int = 1;
+var NODE_VARIABLE int = 2;
+var NODE_BINARY int = 3;
+var NODE_CALL int = 4;
+var NODE_RETURN int = 5;
+var NODE_VAR_STMT int = 6;
+var NODE_FUNCTION int = 7;
+var NODE_BLOCK int = 8;
+
+// Simple global arity tracking for scaffolding tests.
+var FN_SEEN1 int = -1;
+var FN_SEEN2 int = -1;
+
+// ---- Symbol scaffolding ----
+var SYMKIND_VAR int = 1;
+var SYMKIND_PARAM int = 2;
+var SYMKIND_FUNCTION int = 3;
+var SYMKIND_FUNCTION_OVERLOAD int = 4;
+var SYMKIND_STRUCT int = 5;
+
+struct FunctionInfo { arity int, returnType int, isExported int, isImported int }
+struct Symbol {
+  kind int,
+  nameIdx int,
+  typeId int,
+  func FunctionInfo,
+  overloadArity int // -1 if none; simple two-arity support
+}
+
+struct Scope {
+  names VecStr,
+  symbols Vec,
+  parent byte~,
+  hasParent int,
+  fnArities VecInt
+}
+
+def scope_new(parent byte~, hasParent int) Scope {
+  return Scope{vecstr_new(8), vec_new(32, 8), parent, hasParent, vecint_new(4)};
+}
+
+// Root scope convenience constructor (no parent lookup).
+def scope_new_root() Scope {
+  var dummy = __malloc__(32);
+  return scope_new(dummy, 0);
+}
+
+// Define a variable symbol; returns err=0 (stub).
+def scope_define_var(s Scope, name String, typeId int) int { return 0; }
+
+// Define function with arity; handles overload aggregation.
+// Returns error flag (0 ok, 1 duplicate arity). Uses simple global tracking for now.
+def scope_define_function(s Scope, name String, arity int, returnType int, isExported int, isImported int) int {
+  if (FN_SEEN1 == -1) { FN_SEEN1 = arity; return 0; }
+  if (FN_SEEN1 == arity) { return 1; }
+  if (FN_SEEN2 == -1) { FN_SEEN2 = arity; return 0; }
+  if (FN_SEEN2 == arity) { return 1; }
+  return 1;
+}
+
+// Lookup in current scope; returns index or -1.
+def scope_lookup_index_current(s Scope, name String) int {
+  var i = s.names.length;
+  while (i > 0) {
+    i = i - 1;
+    var n = vecstr_get(s.names, i);
+    if (str_eq(n.data, n.length, name.data, name.length) == 1) { return i; }
+  }
+  return -1;
+}
+
+// Lookup through parents; returns index in current scope if found, else -1.
+def scope_lookup(s Scope, name String) int {
+  var idx = scope_lookup_index_current(s, name);
+  if (idx != -1) { return idx; }
+  if (s.hasParent == 0) { return -1; }
+  return -1;
+}
+
+// --- Symbol Vec helpers (elemSize = 32 bytes) ---
+def scope_symbols_push(v Vec, sym Symbol) Vec {
+  var out = vec_reserve(v, v.length + 1);
+  var dest = vec_get_ptr(out, out.length);
+  (int~(dest))~ = sym.kind;               // 0
+  (int~(dest + 4))~ = sym.nameIdx;        // 4
+  (int~(dest + 8))~ = sym.typeId;         // 8
+  (int~(dest + 12))~ = sym.func.arity;    // 12
+  (int~(dest + 16))~ = sym.func.returnType; // 16
+  (int~(dest + 20))~ = sym.func.isExported; // 20
+  (int~(dest + 24))~ = sym.func.isImported; // 24
+  (int~(dest + 28))~ = sym.overloadArity;   // 28
+  out.length = out.length + 1;
+  return out;
+}
+
+def scope_symbols_get(v Vec, idx int) Symbol {
+  var ptr = vec_get_ptr(v, idx);
+  var kind = (int~(ptr))~;
+  var nameIdx = (int~(ptr + 4))~;
+  var typeId = (int~(ptr + 8))~;
+  var arity = (int~(ptr + 12))~;
+  var retType = (int~(ptr + 16))~;
+  var isExp = (int~(ptr + 20))~;
+  var isImp = (int~(ptr + 24))~;
+  var ovAr = (int~(ptr + 28))~;
+  return Symbol{kind, nameIdx, typeId, FunctionInfo{arity, retType, isExp, isImp}, ovAr};
+}
+
+def scope_symbols_set(v Vec, idx int, sym Symbol) Vec {
+  var out = v;
+  var ptr = vec_get_ptr(out, idx);
+  (int~(ptr))~ = sym.kind;
+  (int~(ptr + 4))~ = sym.nameIdx;
+  (int~(ptr + 8))~ = sym.typeId;
+  (int~(ptr + 12))~ = sym.func.arity;
+  (int~(ptr + 16))~ = sym.func.returnType;
+  (int~(ptr + 20))~ = sym.func.isExported;
+  (int~(ptr + 24))~ = sym.func.isImported;
+  (int~(ptr + 28))~ = sym.overloadArity;
+  return out;
+}
+
+// --- FunctionInfo Vec helpers (elemSize = 16 bytes) ---
+def scope_funcinfo_push(v Vec, fi FunctionInfo) Vec {
+  var out = vec_reserve(v, v.length + 1);
+  var dest = vec_get_ptr(out, out.length);
+  (int~(dest))~ = fi.arity;
+  (int~(dest + 4))~ = fi.returnType;
+  (int~(dest + 8))~ = fi.isExported;
+  (int~(dest + 12))~ = fi.isImported;
+  out.length = out.length + 1;
+  return out;
+}
+
+def scope_funcinfo_get(v Vec, idx int) FunctionInfo {
+  var ptr = vec_get_ptr(v, idx);
+  var arity = (int~(ptr))~;
+  var ret = (int~(ptr + 4))~;
+  var isExp = (int~(ptr + 8))~;
+  var isImp = (int~(ptr + 12))~;
+  return FunctionInfo{arity, ret, isExp, isImp};
+}
+
+// ---- Mangling helper (arity-based) ----
+// If only one overload and exported, keep name; otherwise append "__<arity>".
+def mangle_name(name String, arity int, isExported int, overloadCount int) String {
+  if (name.length == 4 &&
+      (name.data)~ == byte(109) && (name.data + 1)~ == byte(97) && (name.data + 2)~ == byte(105) && (name.data + 3)~ == byte(110)) {
+    // "main" always stays unmangled
+    return name;
+  }
+  if (isExported == 1 && overloadCount == 1) { return name; }
+  var sb = sb_new();
+  sb = sb_append_string(sb, name);
+  sb = sb_append_cstr(sb, byte~(&"__"[0]));
+  sb = sb_append_int(sb, arity);
+  return sb_to_string(sb);
+}
