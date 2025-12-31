@@ -311,3 +311,41 @@ def main() {
 `
   return compileAndRunWithStdlib(source)
 }
+
+/**
+ * Run Stage1 resolver (resolve_module_tokens) against a source string.
+ * Prints "1" on success, "0" on failure.
+ */
+export function runStage1ResolverModule(src: string): RunResult {
+  const normalized = src.trim().replace(/\r?\n/g, " ")
+  const programLiteral = JSON.stringify(normalized)
+  const source = `
+${loadStage1Ast()}
+${loadStage1Scanner()}
+${fs.readFileSync(path.join(__dirname, "..", "stage1", "resolver.puff"), "utf8")}
+
+def print_int(x int) {
+  if (x == 0) { __putchar__(48); return; }
+  var n = x;
+  var buf = vecbyte_new(16);
+  if (n < 0) { __putchar__(45); n = 0 - n; }
+  while (n > 0) {
+    buf = vecbyte_push(buf, byte(48 + (n % 10)));
+    n = n / 10;
+  }
+  var i = buf.length - 1;
+  while (i >= 0) {
+    __putchar__(int((buf.data + i)~));
+    i = i - 1;
+  }
+}
+
+def main() {
+  var src = ${programLiteral};
+  var ok = resolve_module_tokens(byte~(&src[0]), len(src));
+  print_int(ok);
+  __putchar__(10);
+}
+`
+  return compileAndRunWithStdlib(source)
+}
