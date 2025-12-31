@@ -1,5 +1,5 @@
 // Stage1 parser for broader language coverage (incremental, statement-first).
-// Expression parsing remains span-based for stability; AST integration will follow.
+// Integrates expression ASTs via parser_expr for all statement expressions.
 
 struct ParseCtx {
   tokens Vec,
@@ -17,8 +17,10 @@ def p_kind(p ParseCtx) int {
 }
 def p_advance(p ParseCtx) ParseCtx { return ParseCtx{p.tokens, p.src, p.idx + 1, p.err, p.arena}; }
 
-// Return a span from current token until a top-level terminator (semicolon/right brace/right paren).
-def p_parse_expr_until(p ParseCtx, terminator int, out ParseCtx~) Span {
+// Merge nodes from exprArena into target arena; return root adjusted index.
+// Parse expression from current position until a terminator (semicolon/right brace/right paren).
+// Returns merged expr root node index in module arena, or -1 on error; advances ctx.idx to terminator.
+def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
   var start = p.idx;
   var i = p.idx;
   while (i < p.tokens.length) {
@@ -27,9 +29,54 @@ def p_parse_expr_until(p ParseCtx, terminator int, out ParseCtx~) Span {
     i = i + 1;
   }
   var ctx = p;
+  var res = parse_expr_ast_slice(ctx.tokens, ctx.src, start, i);
+  var rootIdx = -1;
+  if (res.err == 1 || res.root == -1) {
+    ctx.err = 6000;
+  } else {
+    // merge nodes with node index offsets (token indices are already absolute via tokOffset)
+    var base = ctx.arena.nodes.length;
+    var ni = 0;
+    while (ni < res.arena.nodes.length) {
+      var n = nodearena_get(res.arena, ni);
+      var knd = n.kind;
+      // adjust node references
+      if (knd == NODE_GROUP || knd == NODE_DEREF || knd == NODE_LEN) {
+        if (n.a != -1) { n.a = n.a + base; }
+      } else if (knd == NODE_UNARY) {
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_UPDATE) {
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_BINARY || knd == NODE_LOGICAL) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_TERNARY) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+        if (n.c != -1) { n.c = n.c + base; }
+      } else if (knd == NODE_CALL) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_INDEX) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_DOT) {
+        if (n.a != -1) { n.a = n.a + base; }
+      } else if (knd == NODE_LIST) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_ASSIGN) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      }
+      ctx.arena = nodearena_push(ctx.arena, n);
+      ni = ni + 1;
+    }
+    rootIdx = res.root + base;
+  }
   ctx.idx = i;
   out~ = ctx;
-  return Span{start, i, 0};
+  return rootIdx;
 }
 
 def parse_block(p ParseCtx, out ParseCtx~) int {
@@ -60,28 +107,31 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     ctx = p_advance(ctx);
     if (p_kind(ctx) != TOKEN_EQUAL) { ctx.err = 202; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    var exprRoot = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx);
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 203; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_VAR_STMT, nameTok, span.start, span.end, 0, 0, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_VAR_STMT, nameTok, exprRoot, 0, 0, 0, -1});
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
   if (k == TOKEN_RETURN) {
     var ctx = p_advance(p);
-    var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    var exprRoot2 = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx);
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 204; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_RETURN, span.start, span.end, 0, 0, 0, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_RETURN, exprRoot2, 0, 0, 0, 0, -1});
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
   if (k == TOKEN_PRINT) {
     var ctx = p_advance(p);
-    var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    var exprRoot3 = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx);
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 205; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_PRINT, span.start, span.end, 0, 0, 0, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_PRINT, exprRoot3, 0, 0, 0, 0, -1});
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
@@ -89,7 +139,8 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     var ctx = p_advance(p);
     if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 301; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    var condSpan = p_parse_expr_until(ctx, TOKEN_RIGHT_PAREN, &ctx);
+    var condRoot = p_parse_expr_root(ctx, TOKEN_RIGHT_PAREN, &ctx);
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 302; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
     var thenIdx = -1;
@@ -107,7 +158,7 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
         elseIdx = parse_statement(ctx, &ctx);
       }
     }
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_IF, condSpan.start, condSpan.end, thenIdx, elseIdx, 0, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_IF, condRoot, thenIdx, elseIdx, 0, 0, -1});
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
@@ -115,7 +166,8 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     var ctx = p_advance(p);
     if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 401; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    var condSpan = p_parse_expr_until(ctx, TOKEN_RIGHT_PAREN, &ctx);
+    var condRoot2 = p_parse_expr_root(ctx, TOKEN_RIGHT_PAREN, &ctx);
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 402; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
     var bodyIdx = -1;
@@ -124,7 +176,7 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     } else {
       bodyIdx = parse_statement(ctx, &ctx);
     }
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_WHILE, condSpan.start, condSpan.end, bodyIdx, 0, 0, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_WHILE, condRoot2, bodyIdx, 0, 0, 0, -1});
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
@@ -132,22 +184,19 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     var ctx = p_advance(p);
     if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 701; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    var initSpan = Span{ctx.idx, ctx.idx, 0};
-    if (p_kind(ctx) != TOKEN_SEMICOLON) {
-      initSpan = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
-    }
+    var initRoot = -1;
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { initRoot = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx); }
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 702; out~ = ctx; return -1; }
     ctx = p_advance(ctx); // consume ';'
-    var condSpan = Span{ctx.idx, ctx.idx, 0};
-    if (p_kind(ctx) != TOKEN_SEMICOLON) {
-      condSpan = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
-    }
+    var condRoot3 = -1;
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { condRoot3 = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx); }
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 703; out~ = ctx; return -1; }
     ctx = p_advance(ctx); // consume ';'
-    var stepSpan = Span{ctx.idx, ctx.idx, 0};
-    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) {
-      stepSpan = p_parse_expr_until(ctx, TOKEN_RIGHT_PAREN, &ctx);
-    }
+    var stepRoot = -1;
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { stepRoot = p_parse_expr_root(ctx, TOKEN_RIGHT_PAREN, &ctx); }
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 704; out~ = ctx; return -1; }
     ctx = p_advance(ctx); // consume ')'
     var bodyIdx = -1;
@@ -156,31 +205,29 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     } else {
       bodyIdx = parse_statement(ctx, &ctx);
     }
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_FOR, initSpan.start, condSpan.start, stepSpan.start, bodyIdx, 0, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_FOR, initRoot, condRoot3, stepRoot, bodyIdx, 0, -1});
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
   if (k == TOKEN_BREAK) {
     var ctx = p_advance(p);
-    var span = Span{ctx.idx, ctx.idx, 0};
-    if (p_kind(ctx) != TOKEN_SEMICOLON) {
-      span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
-    }
+    var exprRoot4 = -1;
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { exprRoot4 = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx); }
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 801; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_BREAK, span.start, span.end, 0, 0, 0, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_BREAK, exprRoot4, 0, 0, 0, 0, -1});
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
   if (k == TOKEN_CONTINUE) {
     var ctx = p_advance(p);
-    var span = Span{ctx.idx, ctx.idx, 0};
-    if (p_kind(ctx) != TOKEN_SEMICOLON) {
-      span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
-    }
+    var exprRoot5 = -1;
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { exprRoot5 = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx); }
+    if (ctx.err != 0) { out~ = ctx; return -1; }
     if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 802; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_CONTINUE, span.start, span.end, 0, 0, 0, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_CONTINUE, exprRoot5, 0, 0, 0, 0, -1});
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
@@ -191,10 +238,11 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
       var ctx = p_advance(p); // at '='
       var nameTok = p.idx;
       ctx = p_advance(ctx); // past '='
-      var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+      var exprRoot6 = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx);
+      if (ctx.err != 0) { out~ = ctx; return -1; }
       if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 601; out~ = ctx; return -1; }
       ctx = p_advance(ctx);
-      ctx.arena = nodearena_push(ctx.arena, Node{NODE_ASSIGN, nameTok, span.start, span.end, 0, 0, -1});
+      ctx.arena = nodearena_push(ctx.arena, Node{NODE_ASSIGN, nameTok, exprRoot6, 0, 0, 0, -1});
       out~ = ctx;
       return ctx.arena.nodes.length - 1;
     }
@@ -204,15 +252,57 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
   }
   // fallback: expression statement
   var ctx = p;
-  var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+  var exprRoot7 = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx);
+  if (ctx.err != 0) { out~ = ctx; return -1; }
   if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 501; out~ = ctx; return -1; }
   ctx = p_advance(ctx);
-  ctx.arena = nodearena_push(ctx.arena, Node{NODE_EXPR_STMT, span.start, span.end, 0, 0, 0, -1});
+  ctx.arena = nodearena_push(ctx.arena, Node{NODE_EXPR_STMT, exprRoot7, 0, 0, 0, 0, -1});
   out~ = ctx;
   return ctx.arena.nodes.length - 1;
 }
 
 struct ParseModuleResult { arena NodeArena, root int, err int, tokens Vec, src byte~ }
+
+// Compare identifier tokens by lexeme equality (assumes both are identifiers).
+def tok_eq(tokens Vec, src byte~, a int, b int) int {
+  if (a == b) { return 1; }
+  var la = token_length_at(tokens, a);
+  var lb = token_length_at(tokens, b);
+  if (la != lb) { return 0; }
+  var sa = token_start_at(tokens, a);
+  var sb = token_start_at(tokens, b);
+  var i = 0;
+  while (i < la) {
+    if ((src + sa + i)~ != (src + sb + i)~) { return 0; }
+    i = i + 1;
+  }
+  return 1;
+}
+
+// Precheck for duplicate functions: reject duplicate names (overloads not yet supported)
+def precheck_fn_dups(tokens Vec, src byte~) int {
+  var names = vecint_new(8);
+  var i = 0;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == TOKEN_DEF) {
+      var nameTok = i + 1;
+      if (nameTok < tokens.length && token_kind_at(tokens, nameTok) == TOKEN_IDENTIFIER) {
+        var dup = 0;
+        var j = 0;
+        while (j < names.length) {
+          var prev = vecint_get(names, j);
+          if (tok_eq(tokens, src, prev, nameTok) == 1) { dup = 1; break; }
+          j = j + 1;
+        }
+        if (dup == 1) { return 0; }
+        names = vecint_push(names, nameTok);
+      }
+    }
+    i = i + 1;
+  }
+  return 1;
+}
 
 def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
   var ctx = ParseCtx{tokens, src, 0, 0, nodearena_new(128)};
@@ -237,10 +327,11 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
         vctx = p_advance(vctx);
         if (p_kind(vctx) != TOKEN_EQUAL) { ctx.err = 4011; break; }
         vctx = p_advance(vctx);
-        var vspan = p_parse_expr_until(vctx, TOKEN_SEMICOLON, &vctx);
+        var vroot = p_parse_expr_root(vctx, TOKEN_SEMICOLON, &vctx);
+        if (vctx.err != 0) { ctx = vctx; break; }
         if (p_kind(vctx) != TOKEN_SEMICOLON) { ctx.err = 4012; break; }
         vctx = p_advance(vctx);
-        vctx.arena = nodearena_push(vctx.arena, Node{NODE_VAR_STMT, nameTok, vspan.start, vspan.end, 0, 0, -1});
+        vctx.arena = nodearena_push(vctx.arena, Node{NODE_VAR_STMT, nameTok, vroot, 0, 0, 0, -1});
         ctx = vctx;
         continue;
       }
@@ -298,16 +389,18 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
     if (ctx.err != 0) { break; }
     ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, bodyIdx, paramsStart, nameTok, paramCount, isExport, 0});
   }
-  if (ctx.err != 0) { return ParseModuleResult{ctx.arena, -1, ctx.err, tokens, src}; }
+  if (ctx.err != 0) { return ParseModuleResult{ctx.arena, -1, ctx.err, ctx.tokens, src}; }
   var rootCount = ctx.arena.nodes.length - rootStart;
   ctx.arena = nodearena_push(ctx.arena, Node{NODE_BLOCK, rootStart, rootCount, 0, 0, 0, -1});
   var rootIdx = ctx.arena.nodes.length - 1;
-  return ParseModuleResult{ctx.arena, rootIdx, ctx.err, tokens, src};
+  return ParseModuleResult{ctx.arena, rootIdx, ctx.err, ctx.tokens, src};
 }
 
 // Convenience: parse directly from source.
 def parse_module_source(src byte~, n int) ParseModuleResult {
   var toks = scan_tokens(src, n);
+  var ok = precheck_fn_dups(toks, src);
+  if (ok == 0) { return ParseModuleResult{nodearena_new(0), -1, 9100, toks, src}; }
   return parse_module(toks, src, n);
 }
 
@@ -428,12 +521,16 @@ def module_summary(res ParseModuleResult) String {
       var name = tok_string(res.tokens, n.a, res.src);
       sb = sb_append_cstr(sb, byte~(&" name="[0]));
       sb = sb_append_string(sb, name);
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.b);
     }
-  if (n.kind == NODE_ASSIGN) {
-    var aname = tok_string(res.tokens, n.a, res.src);
-    sb = sb_append_cstr(sb, byte~(&" name="[0]));
-    sb = sb_append_string(sb, aname);
-  }
+    if (n.kind == NODE_ASSIGN) {
+      var aname = tok_string(res.tokens, n.a, res.src);
+      sb = sb_append_cstr(sb, byte~(&" name="[0]));
+      sb = sb_append_string(sb, aname);
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.b);
+    }
     if (n.kind == NODE_FUNCTION) {
       var fname = tok_string(res.tokens, n.c, res.src);
       sb = sb_append_cstr(sb, byte~(&" name="[0]));
@@ -449,19 +546,29 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_string(sb, pnames);
     }
     if (n.kind == NODE_IF) {
+      sb = sb_append_cstr(sb, byte~(&" cond="[0]));
+      sb = sb_append_int(sb, n.a);
       sb = sb_append_cstr(sb, byte~(&" then="[0]));
       sb = sb_append_int(sb, n.c);
       sb = sb_append_cstr(sb, byte~(&" else="[0]));
       sb = sb_append_int(sb, n.d);
     }
     if (n.kind == NODE_WHILE) {
+      sb = sb_append_cstr(sb, byte~(&" cond="[0]));
+      sb = sb_append_int(sb, n.a);
       sb = sb_append_cstr(sb, byte~(&" body="[0]));
       sb = sb_append_int(sb, n.c);
     }
-  if (n.kind == NODE_FOR) {
-    sb = sb_append_cstr(sb, byte~(&" body="[0]));
-    sb = sb_append_int(sb, n.d);
-  }
+    if (n.kind == NODE_FOR) {
+      sb = sb_append_cstr(sb, byte~(&" init="[0]));
+      sb = sb_append_int(sb, n.a);
+      sb = sb_append_cstr(sb, byte~(&" cond="[0]));
+      sb = sb_append_int(sb, n.b);
+      sb = sb_append_cstr(sb, byte~(&" step="[0]));
+      sb = sb_append_int(sb, n.c);
+      sb = sb_append_cstr(sb, byte~(&" body="[0]));
+      sb = sb_append_int(sb, n.d);
+    }
     if (n.kind == NODE_STRUCT_DECL) {
       sb = sb_append_cstr(sb, byte~(&" fields="[0]));
       sb = sb_append_int(sb, n.a);
@@ -480,11 +587,21 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_cstr(sb, byte~(&" count="[0]));
       sb = sb_append_int(sb, n.b);
     }
-  if (n.kind == NODE_RETURN || n.kind == NODE_EXPR_STMT || n.kind == NODE_PRINT || n.kind == NODE_VAR_STMT || n.kind == NODE_ASSIGN || n.kind == NODE_IF || n.kind == NODE_WHILE || n.kind == NODE_FOR || n.kind == NODE_BREAK || n.kind == NODE_CONTINUE) {
-      sb = sb_append_cstr(sb, byte~(&" span="[0]));
+    if (n.kind == NODE_RETURN) {
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
       sb = sb_append_int(sb, n.a);
-      sb = sb_append_byte(sb, byte(45)); // '-'
-      sb = sb_append_int(sb, n.b);
+    }
+    if (n.kind == NODE_EXPR_STMT) {
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.a);
+    }
+    if (n.kind == NODE_PRINT) {
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.a);
+    }
+    if (n.kind == NODE_BREAK || n.kind == NODE_CONTINUE) {
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.a);
     }
     sb = sb_append_byte(sb, byte(10));
     i = i + 1;
