@@ -7,6 +7,9 @@ def main(a, b) {
   var x = a + b;
   if (a) { print x; } else { print b; }
   while (b) { b = b - 1; }
+  for (i = 0; i < 3; i = i + 1) { print i; }
+  break;
+  continue;
   return x;
 }
 `
@@ -35,6 +38,15 @@ def main(a, b) {
 
     const hasWhile = lines.some((l) => l.includes("kind=WHILE") && l.includes("body="))
     expect(hasWhile).toBe(true)
+
+    const hasFor = lines.some((l) => l.includes("kind=FOR") && l.includes("body="))
+    expect(hasFor).toBe(true)
+
+    const hasBreak = lines.some((l) => l.includes("kind=BREAK"))
+    expect(hasBreak).toBe(true)
+
+    const hasContinue = lines.some((l) => l.includes("kind=CONTINUE"))
+    expect(hasContinue).toBe(true)
 
     const hasReturn = lines.some((l) => l.includes("kind=RETURN"))
     expect(hasReturn).toBe(true)

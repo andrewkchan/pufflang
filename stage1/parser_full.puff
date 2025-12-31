@@ -128,6 +128,62 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
+  if (k == TOKEN_FOR) {
+    var ctx = p_advance(p);
+    if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 701; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    var initSpan = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_SEMICOLON) {
+      initSpan = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 702; out~ = ctx; return -1; }
+    ctx = p_advance(ctx); // consume ';'
+    var condSpan = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_SEMICOLON) {
+      condSpan = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 703; out~ = ctx; return -1; }
+    ctx = p_advance(ctx); // consume ';'
+    var stepSpan = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) {
+      stepSpan = p_parse_expr_until(ctx, TOKEN_RIGHT_PAREN, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 704; out~ = ctx; return -1; }
+    ctx = p_advance(ctx); // consume ')'
+    var bodyIdx = -1;
+    if (p_kind(ctx) == TOKEN_LEFT_BRACE) {
+      bodyIdx = parse_block(ctx, &ctx);
+    } else {
+      bodyIdx = parse_statement(ctx, &ctx);
+    }
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_FOR, initSpan.start, condSpan.start, stepSpan.start, bodyIdx, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_BREAK) {
+    var ctx = p_advance(p);
+    var span = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_SEMICOLON) {
+      span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 801; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_BREAK, span.start, span.end, 0, 0, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_CONTINUE) {
+    var ctx = p_advance(p);
+    var span = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_SEMICOLON) {
+      span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 802; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_CONTINUE, span.start, span.end, 0, 0, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
   if (k == TOKEN_LEFT_BRACE) {
     return parse_block(p, out);
   }
@@ -294,13 +350,17 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_cstr(sb, byte~(&" body="[0]));
       sb = sb_append_int(sb, n.c);
     }
+  if (n.kind == NODE_FOR) {
+    sb = sb_append_cstr(sb, byte~(&" body="[0]));
+    sb = sb_append_int(sb, n.d);
+  }
     if (n.kind == NODE_BLOCK) {
       sb = sb_append_cstr(sb, byte~(&" start="[0]));
       sb = sb_append_int(sb, n.a);
       sb = sb_append_cstr(sb, byte~(&" count="[0]));
       sb = sb_append_int(sb, n.b);
     }
-    if (n.kind == NODE_RETURN || n.kind == NODE_EXPR_STMT || n.kind == NODE_PRINT || n.kind == NODE_VAR_STMT || n.kind == NODE_IF || n.kind == NODE_WHILE) {
+  if (n.kind == NODE_RETURN || n.kind == NODE_EXPR_STMT || n.kind == NODE_PRINT || n.kind == NODE_VAR_STMT || n.kind == NODE_IF || n.kind == NODE_WHILE || n.kind == NODE_FOR || n.kind == NODE_BREAK || n.kind == NODE_CONTINUE) {
       sb = sb_append_cstr(sb, byte~(&" span="[0]));
       sb = sb_append_int(sb, n.a);
       sb = sb_append_byte(sb, byte(45)); // '-'
