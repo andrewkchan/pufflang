@@ -56,10 +56,19 @@ export function buildWithClang(irPath: string | string[], outPath?: string): str
 
 export function runBinary(binPath: string, input?: string, env?: NodeJS.ProcessEnv, args?: string[]): RunResult {
   const res = spawnSync(binPath, args ?? [], { encoding: "utf8", input, env })
+  const signals = (os.constants as any).signals as Record<string, number> | undefined
+  const status =
+    res.status !== null && res.status !== undefined
+      ? res.status
+      : res.signal && signals && typeof signals[res.signal] === "number"
+        ? 128 + signals[res.signal]
+        : res.signal
+          ? 128
+          : 0
   return {
     stdout: res.stdout ?? "",
     stderr: res.stderr ?? "",
-    status: res.status ?? 0
+    status
   }
 }
 

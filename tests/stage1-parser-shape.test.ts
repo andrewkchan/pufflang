@@ -2,6 +2,7 @@ import fs from "fs"
 import path from "path"
 import { compileAndRunWithStdlib } from "../src/harness"
 
+const astSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "ast.puff"), "utf8")
 const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "scanner.puff"), "utf8")
 const parserSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "parser.puff"), "utf8")
 
@@ -10,6 +11,7 @@ const lines = (out: string) => out.trim().split("\n").map((s) => s.trim())
 describe("Stage1 parser function shape extraction", () => {
   test("captures name, params, vars, return expr", () => {
     const source = `
+    ${astSrc}
     ${scannerSrc}
     ${parserSrc}
     def main() {

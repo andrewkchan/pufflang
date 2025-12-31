@@ -28,8 +28,12 @@ describe("runtime helpers - env/time", () => {
     // console.error("PATH head", (process.env[envName] || "").slice(0, 20))
     const source = `
     def main() {
-      var key = "${envName}\\0";
-      var ptr = __getenv__(&key[0]);
+      var key = "${envName}";
+      var buf = __malloc__(len(key) + 1);
+      var i = 0;
+      while (i < len(key)) { (buf + i)~ = key[i]; i = i + 1; }
+      (buf + len(key))~ = byte(0);
+      var ptr = __getenv__(buf);
       // print pointer then first 5 chars to ensure match
       print ptr;
       print ptr~;

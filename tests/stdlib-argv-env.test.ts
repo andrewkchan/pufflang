@@ -26,8 +26,15 @@ describe("stdlib argv/env helpers", () => {
     const key = "PATH"
     const source = `
     def main() {
-      var key = "${key}\\0";
-      var v = getenv_clone(byte~(&key[0]));
+      var key = "${key}";
+      var buf = __malloc__(len(key) + 1);
+      var i = 0;
+      while (i < len(key)) {
+        (buf + i)~ = key[i];
+        i = i + 1;
+      }
+      (buf + len(key))~ = byte(0);
+      var v = getenv_clone(buf);
       // Even if env is missing, ensure wrapper does not crash.
       print v.length;
     }

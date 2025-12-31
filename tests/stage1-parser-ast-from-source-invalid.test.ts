@@ -6,22 +6,23 @@ const astSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "ast.puff"),
 const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "scanner.puff"), "utf8")
 const parserSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "parser.puff"), "utf8")
 
-describe("Stage1 parser call expression (Puffscript)", () => {
-  test("accepts return foo(a, b)", () => {
+describe("Stage1 parser AST from source helper (invalid)", () => {
+  test("returns root -1 and empty arena when source is malformed", () => {
     const source = `
     ${astSrc}
     ${scannerSrc}
     ${parserSrc}
     def main() {
-      var src = "def f(a, b) { return foo(a, b); }";
-      var toks = scan_kinds(byte~(&src[0]), len(src));
-      var ok = parse_simple(toks);
-      print ok;
+      var src = "def foo( { return 1; }"; // malformed
+      var parsed = parse_simple_ast_from_source(byte~(&src[0]), len(src));
+      print parsed.root;
+      print parsed.arena.nodes.length;
     }
     `
     const res = compileAndRunWithStdlib(source)
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
-    expect(res.stdout.trim()).toBe("1")
+    const lines = res.stdout.trim().split("\n")
+    expect(lines).toEqual(["-1", "0"])
   })
 })
