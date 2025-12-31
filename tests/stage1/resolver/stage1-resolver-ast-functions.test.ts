@@ -20,7 +20,7 @@ describe("Stage1 AST resolver function checks", () => {
     expect(res.stdout.trim()).toBe("0")
   })
 
-  it("rejects overloads (duplicate name different arity) for now", () => {
+  it("currently rejects overloads with different arity (not yet supported)", () => {
     const res = runStage1ResolverAst(`
       def foo(x) { return x; }
       def foo(x, y) { return x; }

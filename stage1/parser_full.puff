@@ -279,7 +279,7 @@ def tok_eq(tokens Vec, src byte~, a int, b int) int {
   return 1;
 }
 
-// Fast precheck for duplicate function names (rejects duplicates regardless of arity for stability).
+// Precheck for duplicate functions: reject duplicate names (overloads not yet supported)
 def precheck_fn_dups(tokens Vec, src byte~) int {
   var names = vecint_new(8);
   var i = 0;
