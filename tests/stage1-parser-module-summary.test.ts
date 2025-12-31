@@ -63,12 +63,14 @@ def bar() { return 0; }
     const lines = res.stdout.trim().split("\n")
     expect(lines[0]).toMatch(/root=\d+ count=\d+/)
 
+    const hasExportBlock = lines.some((l) => l.includes("export=1"))
     const hasFoo = lines.some(
       (l) => l.includes("kind=FUNCTION") && l.includes("name=foo") && l.includes("params=1") && l.includes("export=1")
     )
     const hasBar = lines.some(
       (l) => l.includes("kind=FUNCTION") && l.includes("name=bar") && l.includes("params=0") && l.includes("export=0")
     )
+    expect(hasExportBlock).toBe(true)
     expect(hasFoo).toBe(true)
     expect(hasBar).toBe(true)
   })
