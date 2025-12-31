@@ -402,3 +402,23 @@ def expr_tokens_string(src byte~, n int) String {
   }
   return sb_to_string(sb);
 }
+
+// Compute maximum parenthesis nesting depth of the sexpr for an expression.
+def expr_sexpr_depth(src byte~, n int) int {
+  var sexpr = parse_expr_to_sexpr(src, n);
+  if (sexpr.length == 0) { return 0; }
+  var i = 0;
+  var depth = 0;
+  var maxDepth = 0;
+  while (i < sexpr.length) {
+    var c = (sexpr.data + i)~;
+    if (c == byte(40)) { // '('
+      depth = depth + 1;
+      if (depth > maxDepth) { maxDepth = depth; }
+    } else if (c == byte(41)) { // ')'
+      if (depth > 0) { depth = depth - 1; }
+    }
+    i = i + 1;
+  }
+  return maxDepth;
+}
