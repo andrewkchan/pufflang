@@ -263,6 +263,47 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
 
 struct ParseModuleResult { arena NodeArena, root int, err int, tokens Vec, src byte~ }
 
+// Compare identifier tokens by lexeme equality (assumes both are identifiers).
+def tok_eq(tokens Vec, src byte~, a int, b int) int {
+  if (a == b) { return 1; }
+  var la = token_length_at(tokens, a);
+  var lb = token_length_at(tokens, b);
+  if (la != lb) { return 0; }
+  var sa = token_start_at(tokens, a);
+  var sb = token_start_at(tokens, b);
+  var i = 0;
+  while (i < la) {
+    if ((src + sa + i)~ != (src + sb + i)~) { return 0; }
+    i = i + 1;
+  }
+  return 1;
+}
+
+// Fast precheck for duplicate function names (rejects duplicates regardless of arity for stability).
+def precheck_fn_dups(tokens Vec, src byte~) int {
+  var names = vecint_new(8);
+  var i = 0;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == TOKEN_DEF) {
+      var nameTok = i + 1;
+      if (nameTok < tokens.length && token_kind_at(tokens, nameTok) == TOKEN_IDENTIFIER) {
+        var dup = 0;
+        var j = 0;
+        while (j < names.length) {
+          var prev = vecint_get(names, j);
+          if (tok_eq(tokens, src, prev, nameTok) == 1) { dup = 1; break; }
+          j = j + 1;
+        }
+        if (dup == 1) { return 0; }
+        names = vecint_push(names, nameTok);
+      }
+    }
+    i = i + 1;
+  }
+  return 1;
+}
+
 def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
   var ctx = ParseCtx{tokens, src, 0, 0, nodearena_new(128)};
   var rootStart = ctx.arena.nodes.length;
@@ -358,6 +399,8 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
 // Convenience: parse directly from source.
 def parse_module_source(src byte~, n int) ParseModuleResult {
   var toks = scan_tokens(src, n);
+  var ok = precheck_fn_dups(toks, src);
+  if (ok == 0) { return ParseModuleResult{nodearena_new(0), -1, 9100, toks, src}; }
   return parse_module(toks, src, n);
 }
 
