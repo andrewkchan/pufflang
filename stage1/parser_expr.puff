@@ -344,3 +344,10 @@ def parse_expr_ast_to_sexpr(src byte~, n int) String {
   sb = node_to_sexpr(ctx, res.root, sb);
   return sb_to_string(sb);
 }
+
+// Return 1 if expression parses successfully via AST path, else 0.
+def parse_expr_ast_ok(src byte~, n int) int {
+  var res = parse_expr_ast(src, n);
+  if (res.err == 1 || res.root == -1) { return 0; }
+  return 1;
+}
