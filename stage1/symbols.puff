@@ -1,0 +1,114 @@
+// Lightweight symbol table helpers for Stage1 (no parser integration).
+// Supports vars and function overloads keyed by arity, with depth tracking.
+
+var SYMKIND_VAR int = 1;
+var SYMKIND_FUNCTION int = 2;
+var SYMKIND_FUNCTION_OVERLOAD int = 3;
+
+struct SymTab {
+  names VecStr,
+  kinds VecInt,
+  arityA VecInt,
+  arityB VecInt,
+  depths VecInt,
+  depth int
+}
+
+struct SymTabResult { tab SymTab, err int }
+
+def symtab_new() SymTab {
+  return SymTab{vecstr_new(8), vecint_new(8), vecint_new(8), vecint_new(8), vecint_new(8), 0};
+}
+
+def symtab_enter(s SymTab) SymTab {
+  return SymTab{s.names, s.kinds, s.arityA, s.arityB, s.depths, s.depth + 1};
+}
+
+def symtab_exit(s SymTab) SymTab {
+  var target = s.depth;
+  var names = s.names;
+  var kinds = s.kinds;
+  var aA = s.arityA;
+  var aB = s.arityB;
+  var depths = s.depths;
+  while (names.length > 0) {
+    var d = vecint_get(depths, names.length - 1);
+    if (d != target) { break; }
+    names.length = names.length - 1;
+    kinds.length = kinds.length - 1;
+    aA.length = aA.length - 1;
+    aB.length = aB.length - 1;
+    depths.length = depths.length - 1;
+  }
+  return SymTab{names, kinds, aA, aB, depths, target - 1};
+}
+
+def symtab_lookup_index_current(s SymTab, name String) int {
+  var i = s.names.length;
+  while (i > 0) {
+    i = i - 1;
+    if (vecint_get(s.depths, i) != s.depth) { continue; }
+    var n = vecstr_get(s.names, i);
+    if (str_eq(n.data, n.length, name.data, name.length) == 1) { return i; }
+  }
+  return -1;
+}
+
+def symtab_lookup_index_any(s SymTab, name String) int {
+  var i = s.names.length;
+  while (i > 0) {
+    i = i - 1;
+    var n = vecstr_get(s.names, i);
+    if (str_eq(n.data, n.length, name.data, name.length) == 1) { return i; }
+  }
+  return -1;
+}
+
+def symtab_define_var(s SymTab, name String) SymTabResult {
+  var idx = symtab_lookup_index_current(s, name);
+  if (idx != -1) { return SymTabResult{s, 1}; }
+  s.names = vecstr_push(s.names, str_clone(name.data, name.length));
+  s.kinds = vecint_push(s.kinds, SYMKIND_VAR);
+  s.arityA = vecint_push(s.arityA, -1);
+  s.arityB = vecint_push(s.arityB, -1);
+  s.depths = vecint_push(s.depths, s.depth);
+  return SymTabResult{s, 0};
+}
+
+def symtab_define_function(s SymTab, name String, arity int) SymTabResult {
+  var idx = symtab_lookup_index_current(s, name);
+  if (idx == -1) {
+    s.names = vecstr_push(s.names, str_clone(name.data, name.length));
+    s.kinds = vecint_push(s.kinds, SYMKIND_FUNCTION);
+    s.arityA = vecint_push(s.arityA, arity);
+    s.arityB = vecint_push(s.arityB, -1);
+    s.depths = vecint_push(s.depths, s.depth);
+    return SymTabResult{s, 0};
+  }
+  var kind = vecint_get(s.kinds, idx);
+  if (kind != SYMKIND_FUNCTION && kind != SYMKIND_FUNCTION_OVERLOAD) { return SymTabResult{s, 1}; }
+  var a = vecint_get(s.arityA, idx);
+  var b = vecint_get(s.arityB, idx);
+  if (a == arity || b == arity) { return SymTabResult{s, 1}; }
+  if (b == -1) {
+    vecint_set(s.arityB, idx, arity);
+    vecint_set(s.kinds, idx, SYMKIND_FUNCTION_OVERLOAD);
+    return SymTabResult{s, 0};
+  }
+  return SymTabResult{s, 1};
+}
+
+def symtab_lookup_kind(s SymTab, name String) int {
+  var idx = symtab_lookup_index_any(s, name);
+  if (idx == -1) { return 0; }
+  return vecint_get(s.kinds, idx);
+}
+
+def symtab_overload_count(s SymTab, name String) int {
+  var idx = symtab_lookup_index_any(s, name);
+  if (idx == -1) { return 0; }
+  var kind = vecint_get(s.kinds, idx);
+  if (kind == SYMKIND_FUNCTION_OVERLOAD) { return 2; }
+  if (kind == SYMKIND_FUNCTION) { return 1; }
+  return 0;
+}
