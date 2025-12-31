@@ -229,6 +229,21 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
       ctx = p_advance(ctx);
     }
     if (p_kind(ctx) != TOKEN_DEF) {
+      // top-level var
+      if (p_kind(ctx) == TOKEN_VAR) {
+        var vctx = p_advance(ctx);
+        if (p_kind(vctx) != TOKEN_IDENTIFIER) { ctx.err = 4010; break; }
+        var nameTok = vctx.idx;
+        vctx = p_advance(vctx);
+        if (p_kind(vctx) != TOKEN_EQUAL) { ctx.err = 4011; break; }
+        vctx = p_advance(vctx);
+        var vspan = p_parse_expr_until(vctx, TOKEN_SEMICOLON, &vctx);
+        if (p_kind(vctx) != TOKEN_SEMICOLON) { ctx.err = 4012; break; }
+        vctx = p_advance(vctx);
+        vctx.arena = nodearena_push(vctx.arena, Node{NODE_VAR_STMT, nameTok, vspan.start, vspan.end, 0, 0, -1});
+        ctx = vctx;
+        continue;
+      }
       if (p_kind(ctx) == TOKEN_STRUCT) {
         ctx = p_advance(ctx);
         if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 3010; break; }

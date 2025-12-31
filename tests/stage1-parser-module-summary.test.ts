@@ -127,4 +127,16 @@ def main() { return 0; }
     expect(hasPoint).toBe(true)
     expect(hasEmpty).toBe(true)
   })
+
+  it("parses top-level var declarations", () => {
+    const program = `
+var g = 1 + 2;
+def main() { return g; }
+`
+    const res = runStage1ModuleSummary(program)
+    expect(res.status).toBe(0)
+    const lines = res.stdout.trim().split("\n")
+    const hasGlobal = lines.some((l) => l.includes("kind=VAR_STMT") && l.includes("name=g"))
+    expect(hasGlobal).toBe(true)
+  })
 })
