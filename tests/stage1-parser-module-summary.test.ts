@@ -112,4 +112,19 @@ def main() { return 0; }
     expect(hasExt1).toBe(true)
     expect(hasMain).toBe(true)
   })
+
+  it("parses struct declarations with field count", () => {
+    const program = `
+export struct Point { x; y; z; }
+struct Empty { }
+def main() { return 0; }
+`
+    const res = runStage1ModuleSummary(program)
+    expect(res.status).toBe(0)
+    const lines = res.stdout.trim().split("\n")
+    const hasPoint = lines.some((l) => l.includes("kind=STRUCT_DECL") && l.includes("name=Point") && l.includes("fields=3") && l.includes("export=1"))
+    const hasEmpty = lines.some((l) => l.includes("kind=STRUCT_DECL") && l.includes("name=Empty") && l.includes("fields=0") && l.includes("export=0"))
+    expect(hasPoint).toBe(true)
+    expect(hasEmpty).toBe(true)
+  })
 })

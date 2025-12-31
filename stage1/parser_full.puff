@@ -229,6 +229,23 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
       ctx = p_advance(ctx);
     }
     if (p_kind(ctx) != TOKEN_DEF) {
+      if (p_kind(ctx) == TOKEN_STRUCT) {
+        ctx = p_advance(ctx);
+        if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 3010; break; }
+        var nameTok = ctx.idx;
+        ctx = p_advance(ctx);
+        if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 3011; break; }
+        ctx = p_advance(ctx);
+        var fieldCount = 0;
+        while (p_kind(ctx) != TOKEN_RIGHT_BRACE && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
+          if (p_kind(ctx) == TOKEN_IDENTIFIER) { fieldCount = fieldCount + 1; }
+          ctx = p_advance(ctx);
+        }
+        if (p_kind(ctx) != TOKEN_RIGHT_BRACE) { ctx.err = 3012; break; }
+        ctx = p_advance(ctx);
+        ctx.arena = nodearena_push(ctx.arena, Node{NODE_STRUCT_DECL, fieldCount, isExport, nameTok, 0, 0, -1});
+        continue;
+      }
       ctx = p_advance(ctx);
       continue;
     }
@@ -307,6 +324,7 @@ def node_kind_name(k int) String {
   if (k == NODE_FOR) { return String{byte~(&"FOR"[0]), 3}; }
   if (k == NODE_BREAK) { return String{byte~(&"BREAK"[0]), 5}; }
   if (k == NODE_CONTINUE) { return String{byte~(&"CONTINUE"[0]), 8}; }
+  if (k == NODE_STRUCT_DECL) { return String{byte~(&"STRUCT_DECL"[0]), 11}; }
   return String{byte~(&"UNKNOWN"[0]), 7};
 }
 
@@ -409,6 +427,15 @@ def module_summary(res ParseModuleResult) String {
     sb = sb_append_cstr(sb, byte~(&" body="[0]));
     sb = sb_append_int(sb, n.d);
   }
+    if (n.kind == NODE_STRUCT_DECL) {
+      sb = sb_append_cstr(sb, byte~(&" fields="[0]));
+      sb = sb_append_int(sb, n.a);
+      var sname = tok_string(res.tokens, n.c, res.src);
+      sb = sb_append_cstr(sb, byte~(&" name="[0]));
+      sb = sb_append_string(sb, sname);
+      sb = sb_append_cstr(sb, byte~(&" export="[0]));
+      sb = sb_append_int(sb, n.b);
+    }
     if (n.kind == NODE_BLOCK) {
       sb = sb_append_cstr(sb, byte~(&" start="[0]));
       sb = sb_append_int(sb, n.a);
