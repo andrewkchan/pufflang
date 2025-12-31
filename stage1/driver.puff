@@ -1,30 +1,19 @@
-// Stage1 Puffscript driver stub: scan + parse + resolve + codegen.
-// Expect scanner.puff, parser.puff, resolver.puff, and codegen.puff concatenated ahead.
+// Stage1 Puffscript driver: scan + parse_full + resolve + codegen stub.
+// Expect scanner.puff, parser_expr.puff, parser_full.puff, resolver.puff, and codegen.puff concatenated ahead.
 
 def compile_simple(src byte~, n int) int {
-  var toks = scan_kinds(src, n);
-  var parsed = parse_simple(toks);
-  if (parsed == 0) { return 0; }
-  var resolved = resolve_simple(toks);
+  var pmr = parse_module_source(src, n);
+  if (pmr.err != 0) { return 0; }
+  var resolved = resolve_module_ast(src, n);
   if (resolved == 0) { return 0; }
-  var codegen = codegen_simple(resolved);
-  return codegen;
+  return codegen_simple(resolved);
 }
 
 // Variant that uses full tokens and depth-aware resolver.
 def compile_simple2(src byte~, n int) int {
-  var toksFull = scan_tokens_full(src, n);
-  // derive kinds for parser
-  var kinds = vecint_new(toksFull.length);
-  var i = 0;
-  while (i < toksFull.length) {
-    kinds = vecint_push(kinds, token_kind_at(toksFull, i));
-    i = i + 1;
-  }
-  var parsed = parse_simple(kinds);
-  if (parsed == 0) { return 0; }
-  var resolved = resolve_with_scope2(src, n);
+  var pmr = parse_module_source(src, n);
+  if (pmr.err != 0) { return 0; }
+  var resolved = resolve_module_ast(src, n);
   if (resolved == 0) { return 0; }
-  var codegen = codegen_simple(resolved);
-  return codegen;
+  return codegen_simple(resolved);
 }

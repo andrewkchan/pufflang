@@ -236,16 +236,6 @@ def range_contains(starts VecInt, ends VecInt, idx int) int {
 }
 
 // Collect ranges covered by a referenced block (inclusive of the block node index).
-struct RangePair { a VecInt, b VecInt }
-def add_block_range(starts VecInt, ends VecInt, arena NodeArena, blockIdx int) RangePair {
-  var blk = nodearena_get(arena, blockIdx);
-  var start = blk.a;
-  var end = blockIdx;
-  starts = vecint_push(starts, start);
-  ends = vecint_push(ends, end);
-  return RangePair{starts, ends};
-}
-
 // Resolve an expression tree; sets ctx.err on failure.
 def resolve_expr(ctx ResolveCtx, idx int) ResolveCtx {
   var r = ctx;
@@ -320,8 +310,8 @@ def resolve_expr(ctx ResolveCtx, idx int) ResolveCtx {
     return r;
   }
   if (k == NODE_ASSIGN) {
-    // Disambiguate statement-style assign vs expression assign
-    if (n.a < r.arena.nodes.length) {
+    // Statement assignments use token for lhs, expression assignments carry node refs and op token in c.
+    if (n.c != 0) {
       r = resolve_expr(r, n.a);
       if (r.err == 1) { return r; }
     } else {
@@ -374,7 +364,15 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int) ResolveCtx {
     r = resolve_expr(r, n.a);
     return r;
   }
-  if (k == NODE_PRINT || k == NODE_EXPR_STMT || k == NODE_BREAK || k == NODE_CONTINUE) {
+  if (k == NODE_PRINT || k == NODE_EXPR_STMT) {
+    r = resolve_expr(r, n.a);
+    return r;
+  }
+  if (k == NODE_BREAK) {
+    r = resolve_expr(r, n.a);
+    return r;
+  }
+  if (k == NODE_CONTINUE) {
     r = resolve_expr(r, n.a);
     return r;
   }
@@ -443,67 +441,12 @@ def resolve_block_nodes(ctx ResolveCtx, blockIdx int) ResolveCtx {
   var start = blk.a;
   var end = blk.a + blk.b;
 
-  // Collect ranges belonging to nested blocks/statements referenced in this block.
-  var childStarts = vecint_new(8);
-  var childEnds = vecint_new(8);
-  var i = start;
-  while (i < end) {
-    var n = nodearena_get(r.arena, i);
-    if (n.kind == NODE_IF) {
-      if (n.b != -1) {
-        var tn = nodearena_get(r.arena, n.b);
-        if (tn.kind == NODE_BLOCK) {
-          var pair1 = add_block_range(childStarts, childEnds, r.arena, n.b);
-          childStarts = pair1.a; childEnds = pair1.b;
-        } else {
-          childStarts = vecint_push(childStarts, n.b);
-          childEnds = vecint_push(childEnds, n.b);
-        }
-      }
-      if (n.c != -1) {
-        var en = nodearena_get(r.arena, n.c);
-        if (en.kind == NODE_BLOCK) {
-          var pair2 = add_block_range(childStarts, childEnds, r.arena, n.c);
-          childStarts = pair2.a; childEnds = pair2.b;
-        } else {
-          childStarts = vecint_push(childStarts, n.c);
-          childEnds = vecint_push(childEnds, n.c);
-        }
-      }
-    }
-    if (n.kind == NODE_WHILE) {
-      if (n.b != -1) {
-        var wn = nodearena_get(r.arena, n.b);
-        if (wn.kind == NODE_BLOCK) {
-          var pair3 = add_block_range(childStarts, childEnds, r.arena, n.b);
-          childStarts = pair3.a; childEnds = pair3.b;
-        } else {
-          childStarts = vecint_push(childStarts, n.b);
-          childEnds = vecint_push(childEnds, n.b);
-        }
-      }
-    }
-    if (n.kind == NODE_FOR) {
-      if (n.d != -1) {
-        var fn = nodearena_get(r.arena, n.d);
-        if (fn.kind == NODE_BLOCK) {
-          var pair4 = add_block_range(childStarts, childEnds, r.arena, n.d);
-          childStarts = pair4.a; childEnds = pair4.b;
-        } else {
-          childStarts = vecint_push(childStarts, n.d);
-          childEnds = vecint_push(childEnds, n.d);
-        }
-      }
-    }
-    i = i + 1;
-  }
-
   r.scope = scope_enter(r.scope);
-  i = start;
+  var i = start;
   while (i < end && r.err == 0) {
-    if (range_contains(childStarts, childEnds, i) == 1) { i = i + 1; continue; }
     var n2 = nodearena_get(r.arena, i);
-    if (is_statement_kind(n2.kind) == 1) {
+    // Skip nested block nodes here; they are traversed via their parent statements.
+    if (n2.kind != NODE_BLOCK && is_statement_kind(n2.kind) == 1) {
       r = resolve_statement(r, i);
     }
     i = i + 1;
@@ -587,7 +530,6 @@ def resolve_module_ast(src byte~, n int) int {
     }
     i = i + 1;
   }
-
   // Resolve global initializers (outside function bodies).
   var ctx = ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, types, 0, 0};
   i = 0;
@@ -605,7 +547,6 @@ def resolve_module_ast(src byte~, n int) int {
     i = i + 1;
   }
   if (ctx.err == 1) { return 0; }
-
   // Resolve functions.
   i = 0;
   while (i < pmr.arena.nodes.length && ctx.err == 0) {
