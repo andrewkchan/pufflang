@@ -1,0 +1,74 @@
+// Type rules helpers for Stage1 (operand/result typing for binary ops).
+// Depends on stage1/types.puff for TypeTable utilities.
+
+// Operator codes (small subset aligned to arithmetic/comparison use).
+var OP_ADD int = 1;
+var OP_SUB int = 2;
+var OP_MUL int = 3;
+var OP_DIV int = 4;
+var OP_MOD int = 5;
+
+var OP_EQ int = 10;
+var OP_NE int = 11;
+var OP_LT int = 12;
+var OP_LE int = 13;
+var OP_GT int = 14;
+var OP_GE int = 15;
+
+// Arithmetic result type inference.
+// Returns resulting type id, or -1 if the operand combination is invalid.
+def type_binary_arith_result(tt TypeTable, left int, right int, op int) int {
+  var catL = typetable_get(tt, left).category;
+  var catR = typetable_get(tt, right).category;
+
+  var isNumL = type_is_numeric(tt, left);
+  var isNumR = type_is_numeric(tt, right);
+
+  // numeric ops
+  if (isNumL == 1 && isNumR == 1) {
+    var res = type_lowest_common_numeric(tt, left, right);
+    if (op == OP_MOD) {
+      // disallow modulo on float
+      if (typetable_get(tt, res).category == TYPECATEGORY_FLOAT) { return -1; }
+    }
+    return res;
+  }
+
+  // pointer arithmetic (add/sub with integer)
+  if (catL == TYPECATEGORY_POINTER && isNumR == 1) {
+    if (op == OP_ADD || op == OP_SUB) { return left; }
+  }
+  if (catR == TYPECATEGORY_POINTER && isNumL == 1) {
+    if (op == OP_ADD) { return right; } // only addition commutes
+  }
+
+  // pointer difference -> int (only if same element)
+  if (catL == TYPECATEGORY_POINTER && catR == TYPECATEGORY_POINTER && op == OP_SUB) {
+    if (type_equals(tt, typetable_get(tt, left).element, typetable_get(tt, right).element) == 1) {
+      return 5; // int id
+    }
+  }
+
+  return -1;
+}
+
+// Comparison result: returns bool type id on success, -1 on invalid.
+def type_binary_compare_result(tt TypeTable, left int, right int, op int) int {
+  var catL = typetable_get(tt, left).category;
+  var catR = typetable_get(tt, right).category;
+  var boolId = 1;
+
+  // numeric comparisons (all ops)
+  if (type_is_numeric(tt, left) == 1 && type_is_numeric(tt, right) == 1) {
+    return boolId;
+  }
+  // pointer comparisons (eq/ne/rel)
+  if (catL == TYPECATEGORY_POINTER && catR == TYPECATEGORY_POINTER) {
+    return boolId;
+  }
+  // bool equality/inequality
+  if (catL == TYPECATEGORY_BOOL && catR == TYPECATEGORY_BOOL) {
+    return boolId;
+  }
+  return -1;
+}
