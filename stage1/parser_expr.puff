@@ -386,3 +386,19 @@ def expr_node_count(src byte~, n int) int {
   if (res.err == 1 || res.root == -1) { return 0; }
   return res.arena.nodes.length;
 }
+
+// Return space-separated lexemes (excluding EOF) for an expression.
+def expr_tokens_string(src byte~, n int) String {
+  var toks = scan_tokens(src, n);
+  var sb = sb_new();
+  var i = 0;
+  while (i < toks.length) {
+    var k = token_kind_at(toks, i);
+    if (k == TOKEN_EOF) { break; }
+    var lex = String{src + token_start_at(toks, i), token_length_at(toks, i)};
+    sb = sb_append_string(sb, lex);
+    if (i + 1 < toks.length) { sb = sb_append_byte(sb, byte(32)); }
+    i = i + 1;
+  }
+  return sb_to_string(sb);
+}
