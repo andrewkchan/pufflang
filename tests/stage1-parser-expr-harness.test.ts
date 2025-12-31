@@ -26,4 +26,18 @@ describe("Stage1 expression parser via harness", () => {
     const res = runStage1ExprSexpr("1 +", { allowError: false })
     expect(res.status).not.toBe(0)
   })
+
+  test("handles unary minus binding tighter than +", () => {
+    const res = runStage1ExprSexpr("-1 + 2")
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(res.stdout.trim()).toBe("(+ (- 1) 2)")
+  })
+
+  test("handles logical not", () => {
+    const res = runStage1ExprSexpr("!a || b")
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(res.stdout.trim()).toBe("(|| (! a) b)")
+  })
 })

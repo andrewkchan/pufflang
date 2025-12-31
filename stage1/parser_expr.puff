@@ -57,28 +57,40 @@ def make_ternary(cond StringBuilder, thenSb StringBuilder, elseSb StringBuilder)
 
 def parse_expression(ps ParseState, minPrec int, out ParseState~) StringBuilder {
   var ps2 = ps;
-  // parse atom
+  // parse atom/unary
   var k0 = ps_kind(ps2);
   var lhs = sb_new();
-  if (k0 == TOKEN_LEFT_PAREN) {
+  if (k0 == TOKEN_BANG || k0 == TOKEN_MINUS || k0 == TOKEN_PLUS || k0 == TOKEN_TILDE) {
     ps2 = ps_advance(ps2);
-    lhs = parse_expression(ps2, 1, &ps2);
-    if (ps2.err == 1) { out~ = ps2; return lhs; }
-    if (ps_kind(ps2) != TOKEN_RIGHT_PAREN) {
+    var inner = parse_expression(ps2, 9, &ps2);
+    if (ps2.err == 1) { out~ = ps2; return inner; }
+    lhs = sb_append_byte(lhs, byte(40));
+    var opLex = ps_lexeme(ParseState{ps.tokens, ps.src, ps.idx, ps.err}, ps.idx); // use original token text
+    lhs = sb_append_string(lhs, opLex);
+    lhs = sb_append_byte(lhs, byte(32));
+    lhs = sb_append_string(lhs, sb_to_string(inner));
+    lhs = sb_append_byte(lhs, byte(41));
+  } else {
+    if (k0 == TOKEN_LEFT_PAREN) {
+      ps2 = ps_advance(ps2);
+      lhs = parse_expression(ps2, 1, &ps2);
+      if (ps2.err == 1) { out~ = ps2; return lhs; }
+      if (ps_kind(ps2) != TOKEN_RIGHT_PAREN) {
+        ps2.err = 1;
+        out~ = ps2;
+        return lhs;
+      }
+      ps2 = ps_advance(ps2);
+    } else if (k0 == TOKEN_IDENTIFIER || k0 == TOKEN_NUMBER || k0 == TOKEN_NUMBER_DECIMAL || k0 == TOKEN_NUMBER_HEX ||
+               k0 == TOKEN_STRING || k0 == TOKEN_SINGLE_QUOTE_STRING || k0 == TOKEN_TRUE || k0 == TOKEN_FALSE) {
+      var lex = ps_lexeme(ps2, ps2.idx);
+      lhs = sb_append_string(lhs, lex);
+      ps2 = ps_advance(ps2);
+    } else {
       ps2.err = 1;
       out~ = ps2;
       return lhs;
     }
-    ps2 = ps_advance(ps2);
-  } else if (k0 == TOKEN_IDENTIFIER || k0 == TOKEN_NUMBER || k0 == TOKEN_NUMBER_DECIMAL || k0 == TOKEN_NUMBER_HEX ||
-             k0 == TOKEN_STRING || k0 == TOKEN_SINGLE_QUOTE_STRING || k0 == TOKEN_TRUE || k0 == TOKEN_FALSE) {
-    var lex = ps_lexeme(ps2, ps2.idx);
-    lhs = sb_append_string(lhs, lex);
-    ps2 = ps_advance(ps2);
-  } else {
-    ps2.err = 1;
-    out~ = ps2;
-    return lhs;
   }
 
   while (true) {
