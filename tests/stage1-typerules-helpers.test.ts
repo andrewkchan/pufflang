@@ -25,6 +25,7 @@ def main() {
   var idInt = 5;
   var ptrInt = tt.types.length; tt = typetable_make_pointer(tt, idInt);
   var ptrByte = tt.types.length; tt = typetable_make_pointer(tt, idByte);
+  var ptrFloat = tt.types.length; tt = typetable_make_pointer(tt, idFloat);
 
   // arithmetic
   print_int(type_binary_arith_result(tt, idByte, idInt, OP_ADD)); __putchar__(32); // 5
@@ -39,7 +40,15 @@ def main() {
   print_int(type_binary_compare_result(tt, idInt, idFloat, OP_LT)); __putchar__(32); // bool
   print_int(type_binary_compare_result(tt, ptrInt, ptrByte, OP_EQ)); __putchar__(32); // bool
   print_int(type_binary_compare_result(tt, idBool, idBool, OP_EQ)); __putchar__(32); // bool
-  print_int(type_binary_compare_result(tt, ptrInt, idInt, OP_EQ)); __putchar__(10); // -1
+  print_int(type_binary_compare_result(tt, ptrInt, idInt, OP_EQ)); __putchar__(32); // -1
+
+  // unary
+  print_int(type_unary_result(tt, idInt, UOP_NEG)); __putchar__(32); // int
+  print_int(type_unary_result(tt, idBool, UOP_NEG)); __putchar__(32); // -1
+  print_int(type_unary_result(tt, idInt, UOP_NOT)); __putchar__(32); // bool
+  print_int(type_unary_result(tt, idBool, UOP_NOT)); __putchar__(32); // bool
+  print_int(type_unary_result(tt, ptrFloat, UOP_DEREF)); __putchar__(32); // float
+  print_int(type_unary_result(tt, idInt, UOP_DEREF)); __putchar__(10); // -1
 }
 `
   return compileAndRunWithStdlib(source)
@@ -50,6 +59,6 @@ describe("Stage1 type rules helpers", () => {
     const res = runRules()
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
-    expect(res.stdout.trim()).toBe("5 4 9 9 -1 5 -1 1 1 1 -1")
+    expect(res.stdout.trim()).toBe("5 4 9 9 -1 5 -1 1 1 1 -1 5 -1 1 1 4 -1")
   })
 })

@@ -15,6 +15,10 @@ var OP_LE int = 13;
 var OP_GT int = 14;
 var OP_GE int = 15;
 
+var UOP_NEG int = 20;
+var UOP_NOT int = 21;
+var UOP_DEREF int = 22;
+
 // Arithmetic result type inference.
 // Returns resulting type id, or -1 if the operand combination is invalid.
 def type_binary_arith_result(tt TypeTable, left int, right int, op int) int {
@@ -69,6 +73,27 @@ def type_binary_compare_result(tt TypeTable, left int, right int, op int) int {
   // bool equality/inequality
   if (catL == TYPECATEGORY_BOOL && catR == TYPECATEGORY_BOOL) {
     return boolId;
+  }
+  return -1;
+}
+
+// Unary result typing. Returns resulting type id, or -1 on invalid.
+def type_unary_result(tt TypeTable, operand int, op int) int {
+  var t = typetable_get(tt, operand);
+  if (op == UOP_NEG) {
+    if (type_is_numeric(tt, operand) == 1) { return operand; }
+    return -1;
+  }
+  if (op == UOP_NOT) {
+    if (type_is_numeric(tt, operand) == 1) { return 1; } // bool
+    if (t.category == TYPECATEGORY_BOOL) { return 1; }
+    return -1;
+  }
+  if (op == UOP_DEREF) {
+    if (t.category == TYPECATEGORY_POINTER) {
+      return t.element;
+    }
+    return -1;
   }
   return -1;
 }
