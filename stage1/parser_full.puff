@@ -184,6 +184,21 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
+  // simple assignment: IDENTIFIER '=' expr ';'
+  if (k == TOKEN_IDENTIFIER && (p.idx + 1) < p.tokens.length) {
+    var nextKind = token_kind_at(p.tokens, p.idx + 1);
+    if (nextKind == TOKEN_EQUAL) {
+      var ctx = p_advance(p); // at '='
+      var nameTok = p.idx;
+      ctx = p_advance(ctx); // past '='
+      var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+      if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 601; out~ = ctx; return -1; }
+      ctx = p_advance(ctx);
+      ctx.arena = nodearena_push(ctx.arena, Node{NODE_ASSIGN, nameTok, span.start, span.end, 0, 0, -1});
+      out~ = ctx;
+      return ctx.arena.nodes.length - 1;
+    }
+  }
   if (k == TOKEN_LEFT_BRACE) {
     return parse_block(p, out);
   }
@@ -350,6 +365,11 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_cstr(sb, byte~(&" name="[0]));
       sb = sb_append_string(sb, name);
     }
+  if (n.kind == NODE_ASSIGN) {
+    var aname = tok_string(res.tokens, n.a, res.src);
+    sb = sb_append_cstr(sb, byte~(&" name="[0]));
+    sb = sb_append_string(sb, aname);
+  }
     if (n.kind == NODE_FUNCTION) {
       var fname = tok_string(res.tokens, n.c, res.src);
       sb = sb_append_cstr(sb, byte~(&" name="[0]));
@@ -382,7 +402,7 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_cstr(sb, byte~(&" count="[0]));
       sb = sb_append_int(sb, n.b);
     }
-  if (n.kind == NODE_RETURN || n.kind == NODE_EXPR_STMT || n.kind == NODE_PRINT || n.kind == NODE_VAR_STMT || n.kind == NODE_IF || n.kind == NODE_WHILE || n.kind == NODE_FOR || n.kind == NODE_BREAK || n.kind == NODE_CONTINUE) {
+  if (n.kind == NODE_RETURN || n.kind == NODE_EXPR_STMT || n.kind == NODE_PRINT || n.kind == NODE_VAR_STMT || n.kind == NODE_ASSIGN || n.kind == NODE_IF || n.kind == NODE_WHILE || n.kind == NODE_FOR || n.kind == NODE_BREAK || n.kind == NODE_CONTINUE) {
       sb = sb_append_cstr(sb, byte~(&" span="[0]));
       sb = sb_append_int(sb, n.a);
       sb = sb_append_byte(sb, byte(45)); // '-'
