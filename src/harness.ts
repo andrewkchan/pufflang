@@ -183,3 +183,46 @@ def main() {
 `
   return compileAndRunWithStdlib(source)
 }
+
+/**
+ * Convenience: run Stage1 expression diagnostics (tokens, operators, depth, nodes).
+ * Returns stdout as "tok op depth nodes" with spaces.
+ */
+export function runStage1ExprSummary(expr: string): RunResult {
+  const source = `
+${loadStage1Ast()}
+${loadStage1Scanner()}
+${loadStage1ParserExpr()}
+
+def print_int(x int) {
+  if (x == 0) { __putchar__(48); return; }
+  var n = x;
+  var buf = vecbyte_new(16);
+  if (n < 0) { __putchar__(45); n = 0 - n; }
+  while (n > 0) {
+    buf = vecbyte_push(buf, byte(48 + (n % 10)));
+    n = n / 10;
+  }
+  var i = buf.length - 1;
+  while (i >= 0) {
+    __putchar__(int((buf.data + i)~));
+    i = i - 1;
+  }
+}
+
+def main() {
+  var src = "${expr}";
+  var ptr = byte~(&src[0]);
+  var l = len(src);
+  var tok = expr_token_count(ptr, l);
+  var op = expr_operator_count(ptr, l);
+  var depth = expr_sexpr_depth(ptr, l);
+  var nodes = expr_node_count(ptr, l);
+  print_int(tok); __putchar__(32);
+  print_int(op); __putchar__(32);
+  print_int(depth); __putchar__(32);
+  print_int(nodes); __putchar__(10);
+}
+`
+  return compileAndRunWithStdlib(source)
+}
