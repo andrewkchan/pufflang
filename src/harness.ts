@@ -9,9 +9,11 @@ let cachedStdlibBase: string | null = null
 const stage1AstPath = path.join(__dirname, "..", "stage1", "ast.puff")
 const stage1ScannerPath = path.join(__dirname, "..", "stage1", "scanner.puff")
 const stage1ParserExprPath = path.join(__dirname, "..", "stage1", "parser_expr.puff")
+const stage1ParserFullPath = path.join(__dirname, "..", "stage1", "parser_full.puff")
 let cachedStage1Ast: string | null = null
 let cachedStage1Scanner: string | null = null
 let cachedStage1ParserExpr: string | null = null
+let cachedStage1ParserFull: string | null = null
 
 function loadStdlibBase(): string {
   if (cachedStdlibBase !== null) return cachedStdlibBase
@@ -35,6 +37,12 @@ function loadStage1ParserExpr(): string {
   if (cachedStage1ParserExpr !== null) return cachedStage1ParserExpr
   cachedStage1ParserExpr = fs.readFileSync(stage1ParserExprPath, "utf8")
   return cachedStage1ParserExpr
+}
+
+function loadStage1ParserFull(): string {
+  if (cachedStage1ParserFull !== null) return cachedStage1ParserFull
+  cachedStage1ParserFull = fs.readFileSync(stage1ParserFullPath, "utf8")
+  return cachedStage1ParserFull
 }
 
 export interface RunResult {
@@ -222,6 +230,52 @@ def main() {
   print_int(op); __putchar__(32);
   print_int(depth); __putchar__(32);
   print_int(nodes); __putchar__(10);
+}
+`
+  return compileAndRunWithStdlib(source)
+}
+
+/**
+ * Parse a full Puff module with the Stage1 parser_full and emit a textual summary.
+ */
+export function runStage1ModuleSummary(program: string): RunResult {
+  const normalized = program.trim().replace(/\r?\n/g, " ")
+  const programLiteral = JSON.stringify(normalized)
+  const source = `
+${loadStage1Ast()}
+${loadStage1Scanner()}
+${loadStage1ParserFull()}
+
+def print_int(x int) {
+  if (x == 0) { __putchar__(48); return; }
+  var n = x;
+  var buf = vecbyte_new(32);
+  if (n < 0) { __putchar__(45); n = 0 - n; }
+  while (n > 0) {
+    buf = vecbyte_push(buf, byte(48 + (n % 10)));
+    n = n / 10;
+  }
+  var i = buf.length - 1;
+  while (i >= 0) {
+    __putchar__(int((buf.data + i)~));
+    i = i - 1;
+  }
+}
+
+def print_str(s String) {
+  var i = 0;
+  while (i < s.length) {
+    __putchar__(int((s.data + i)~));
+    i = i + 1;
+  }
+  __putchar__(10);
+}
+
+def main() {
+  var src = ${programLiteral};
+  var res = parse_module_source(byte~(&src[0]), len(src));
+  var summary = module_summary(res);
+  print_str(summary);
 }
 `
   return compileAndRunWithStdlib(source)
