@@ -280,3 +280,34 @@ def main() {
 `
   return compileAndRunWithStdlib(source)
 }
+
+/**
+ * Count module-level constructs using parser_full: functions, imports, exports, structs.
+ * Outputs: "funcs=<n> imports=<n> exports=<n> structs=<n>"
+ */
+export function runStage1ModuleCounts(program: string): RunResult {
+  const normalized = program.trim().replace(/\r?\n/g, " ")
+  const programLiteral = JSON.stringify(normalized)
+  const source = `
+${loadStage1Ast()}
+${loadStage1Scanner()}
+${loadStage1ParserFull()}
+
+def print_str(s String) {
+  var i = 0;
+  while (i < s.length) {
+    __putchar__(int((s.data + i)~));
+    i = i + 1;
+  }
+  __putchar__(10);
+}
+
+def main() {
+  var src = ${programLiteral};
+  var res = parse_module_source(byte~(&src[0]), len(src));
+  var counts = module_counts(res);
+  print_str(counts);
+}
+`
+  return compileAndRunWithStdlib(source)
+}

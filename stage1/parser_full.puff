@@ -468,3 +468,44 @@ def module_summary(res ParseModuleResult) String {
   }
   return sb_to_string(sb);
 }
+
+// ---- Count helpers ----
+def count_nodes(arena NodeArena, kind int) int {
+  var i = 0;
+  var cnt = 0;
+  while (i < arena.nodes.length) {
+    var n = nodearena_get(arena, i);
+    if (n.kind == kind) { cnt = cnt + 1; }
+    i = i + 1;
+  }
+  return cnt;
+}
+
+def count_functions(arena NodeArena, importFlag int, exportFlag int) int {
+  var i = 0;
+  var cnt = 0;
+  while (i < arena.nodes.length) {
+    var n = nodearena_get(arena, i);
+    if (n.kind != NODE_FUNCTION) { i = i + 1; continue; }
+    if (importFlag != -1 && n.typeId != importFlag) { i = i + 1; continue; }
+    if (exportFlag != -1 && n.value != exportFlag) { i = i + 1; continue; }
+    cnt = cnt + 1;
+    i = i + 1;
+  }
+  return cnt;
+}
+
+// Returns "funcs=<n> imports=<n> exports=<n> structs=<n>"
+def module_counts(res ParseModuleResult) String {
+  if (res.err != 0) { return String{byte~(&"err"[0]), 3}; }
+  var funcs = count_functions(res.arena, -1, -1);
+  var imports = count_functions(res.arena, 1, -1);
+  var exports = count_functions(res.arena, -1, 1);
+  var structs = count_nodes(res.arena, NODE_STRUCT_DECL);
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"funcs="[0])); sb = sb_append_int(sb, funcs);
+  sb = sb_append_cstr(sb, byte~(&" imports="[0])); sb = sb_append_int(sb, imports);
+  sb = sb_append_cstr(sb, byte~(&" exports="[0])); sb = sb_append_int(sb, exports);
+  sb = sb_append_cstr(sb, byte~(&" structs="[0])); sb = sb_append_int(sb, structs);
+  return sb_to_string(sb);
+}
