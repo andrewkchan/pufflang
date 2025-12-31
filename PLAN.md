@@ -31,6 +31,19 @@ Deliver a self-hosted Puffscript toolchain: a solid Stage0 (TypeScript → LLVM 
   - Begin Stage1 codegen scaffolding (LLVM IR emitters mirroring Stage0) and CLI to compile .puff → .ll → binary.
 - Acceptance: Stage0 builds Stage1 binary that can compile sample programs; Stage1 passes a focused subset of Stage0 tests via harness/CLI.
 
+#### Helper modules now available for integration
+- `types.puff`: typetable + predicates, coercion/cast helpers.
+- `typeenv.puff`: manages TypeTable + struct size table; registers struct types.
+- `structlayout.puff`: struct field offsets/size using type_sizeof and structSizes.
+- `typerules.puff`: result typing for unary/binary (arith, bitwise, shift, logical, comparisons, pointer arithmetic/diff).
+- `literaltypes.puff`: literal token → type id (bool/int/float/byte/string array).
+- `exprtypes.puff`: expression AST type inference built on parser_expr + typerules + literaltypes + typeenv.
+
+#### Immediate next steps
+- Wire `exprtypes` into a Stage1 resolver pass to populate `Node.typeId` for literals/unary/binary/logical/ternary.
+- Add focused Stage1 tests that import only the needed helper modules to avoid duplicate TYPECATEGORY declarations (e.g., mini harness invoking `infer_expression_type` on numeric, pointer arithmetic, comparisons, and string literals).
+- Thread `TypeEnv` through parsing/resolving for string literal array allocation and struct size lookup.
+
 ### Phase 6 — Bootstrapping proof
 - Script Stage0 → Stage1 → Stage2; hash/compare IR or binaries; run selected suites under Stage1-produced compiler.
 - Acceptance: Bootstrap script passes locally; Stage1-built compiler passes agreed test subset; documented steps reproducible/CI-ready.
