@@ -173,3 +173,34 @@ def type_lowest_common_numeric(tt TypeTable, a int, b int) int {
   }
   return -1;
 }
+
+// Valid element types: anything except void. Error is treated as valid to
+// mirror Stage0's isValidElementType permissiveness for forward references.
+def type_is_valid_element_type(tt TypeTable, id int) int {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_VOID) { return 0; }
+  return 1;
+}
+
+// Compute sizeof for a type id using the provided structSizes table (indexed by
+// structId). Returns -1 if size is unknown (e.g., unresolved struct or error).
+def type_sizeof(tt TypeTable, id int, structSizes VecInt) int {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_ARRAY) {
+    var elemSize = type_sizeof(tt, t.element, structSizes);
+    if (elemSize < 0) { return -1; }
+    return elemSize * t.length;
+  }
+  if (t.category == TYPECATEGORY_STRUCT) {
+    if (t.structId < 0) { return -1; }
+    if (t.structId >= structSizes.length) { return -1; }
+    return vecint_get(structSizes, t.structId);
+  }
+  if (t.category == TYPECATEGORY_POINTER) { return 4; }
+  if (t.category == TYPECATEGORY_INT) { return 4; }
+  if (t.category == TYPECATEGORY_FLOAT) { return 4; }
+  if (t.category == TYPECATEGORY_BYTE) { return 1; }
+  if (t.category == TYPECATEGORY_BOOL) { return 1; }
+  if (t.category == TYPECATEGORY_VOID) { return 0; }
+  return -1;
+}

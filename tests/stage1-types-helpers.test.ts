@@ -179,4 +179,46 @@ def main() {
     expect(res.stderr).toBe("")
     expect(res.stdout.trim()).toBe("5 4 4 2 4")
   })
+
+  it("validates element types and sizeof", () => {
+    const source = `
+${typesSrc}
+
+def print_int(x int) {
+  if (x == 0) { __putchar__(48); return; }
+  var n = x; var buf = vecbyte_new(16); if (n < 0) { __putchar__(45); n = 0 - n; }
+  while (n > 0) { buf = vecbyte_push(buf, byte(48 + (n % 10))); n = n / 10; }
+  var i = buf.length - 1; while (i >= 0) { __putchar__(int((buf.data + i)~)); i = i - 1; }
+}
+
+def main() {
+  var tt = typetable_new();
+  var idInt = 5;
+  var idByte = 2;
+  var idVoid = 8;
+  var ptrInt = tt.types.length; tt = typetable_make_pointer(tt, idInt);
+  var arrByte4 = tt.types.length; tt = typetable_make_array(tt, idByte, 4);
+  var idStruct = tt.types.length;
+  tt = TypeTable{typetable_push_raw(tt.types, Type{TYPECATEGORY_STRUCT, -1, 0, 0})};
+
+  var structSizes = vecint_new(1);
+  structSizes = vecint_push(structSizes, 12);
+
+  print_int(type_is_valid_element_type(tt, idInt)); __putchar__(32);   // 1
+  print_int(type_is_valid_element_type(tt, idVoid)); __putchar__(32);  // 0
+  print_int(type_is_valid_element_type(tt, idStruct)); __putchar__(32);// 1
+
+  print_int(type_sizeof(tt, idInt, structSizes)); __putchar__(32);     // 4
+  print_int(type_sizeof(tt, ptrInt, structSizes)); __putchar__(32);    // 4
+  print_int(type_sizeof(tt, arrByte4, structSizes)); __putchar__(32);  // 4
+  print_int(type_sizeof(tt, idStruct, structSizes)); __putchar__(32);  // 12
+  print_int(type_sizeof(tt, idVoid, structSizes)); __putchar__(32);    // 0
+  print_int(type_sizeof(tt, 3, structSizes)); __putchar__(10);         // -1 (error type)
+}
+`
+    const res = compileAndRunWithStdlib(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(res.stdout.trim()).toBe("1 0 1 4 4 4 12 0 -1")
+  })
 })
