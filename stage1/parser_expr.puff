@@ -310,7 +310,17 @@ struct SexprCtx { arena NodeArena, tokens Vec, src byte~ }
 // Safe S-expression builder that re-parses source as a fallback to avoid
 // crashes from malformed arenas. Uses token spans to compute source length.
 def node_to_sexpr(ctx SexprCtx, root int, sb StringBuilder) StringBuilder {
-  // TODO: Implement a direct AST walker; for now, no-op to avoid crashes.
+  var max = 0;
+  var i = 0;
+  while (i < ctx.tokens.length) {
+    var start = token_start_at(ctx.tokens, i);
+    var lenTok = token_length_at(ctx.tokens, i);
+    var end = start + lenTok;
+    if (end > max) { max = end; }
+    i = i + 1;
+  }
+  var sexpr = parse_expr_to_sexpr(ctx.src, max);
+  sb = sb_append_string(sb, sexpr);
   return sb;
 }
 
