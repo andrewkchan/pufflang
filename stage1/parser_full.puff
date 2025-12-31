@@ -18,12 +18,6 @@ def p_kind(p ParseCtx) int {
 def p_advance(p ParseCtx) ParseCtx { return ParseCtx{p.tokens, p.src, p.idx + 1, p.err, p.arena}; }
 
 // Merge nodes from exprArena into target arena; return root adjusted index.
-// Merge expression arena into target. (Currently unused; expressions validated only.)
-struct MergeResult { arena NodeArena, root int }
-def merge_expr_arena(target NodeArena, expr NodeArena, root int) MergeResult {
-  return MergeResult{target, root};
-}
-
 // Parse expression from current position until a terminator (semicolon/right brace/right paren).
 // Returns merged expr root node index in module arena, or -1 on error; advances ctx.idx to terminator.
 def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
@@ -40,9 +34,73 @@ def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
   if (res.err == 1 || res.root == -1) {
     ctx.err = 6000;
   } else {
-    var merged = merge_expr_arena(ctx.arena, res.arena, res.root);
-    ctx.arena = merged.arena;
-    rootIdx = merged.root;
+    // 1) append tokens (excluding EOF) and remember base
+    var tokBase = ctx.tokens.length;
+    var ti = 0;
+    while (ti < res.tokens.length) {
+      var tk = token_kind_at(res.tokens, ti);
+      if (tk == TOKEN_EOF) { ti = ti + 1; continue; }
+      var tStart = token_start_at(res.tokens, ti);
+      var tLen = token_length_at(res.tokens, ti);
+      var tLine = token_line_at(res.tokens, ti);
+      ctx.tokens = push_token(ctx.tokens, tk, tStart, tLen, tLine);
+      ti = ti + 1;
+    }
+    // 2) merge nodes with token and node offsets
+    var base = ctx.arena.nodes.length;
+    var ni = 0;
+    while (ni < res.arena.nodes.length) {
+      var n = nodearena_get(res.arena, ni);
+      var knd = n.kind;
+      // adjust node references
+      if (knd == NODE_GROUP || knd == NODE_DEREF || knd == NODE_LEN) {
+        if (n.a != -1) { n.a = n.a + base; }
+      } else if (knd == NODE_UNARY) {
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_UPDATE) {
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_BINARY || knd == NODE_LOGICAL) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_TERNARY) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+        if (n.c != -1) { n.c = n.c + base; }
+      } else if (knd == NODE_CALL) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_INDEX) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_DOT) {
+        if (n.a != -1) { n.a = n.a + base; }
+      } else if (knd == NODE_LIST) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_ASSIGN) {
+        if (n.a != -1) { n.a = n.a + base; }
+        if (n.b != -1) { n.b = n.b + base; }
+      }
+      // adjust token references
+      if (knd == NODE_LITERAL || knd == NODE_VARIABLE) {
+        n.a = n.a + tokBase;
+      } else if (knd == NODE_UNARY || knd == NODE_UPDATE) {
+        n.a = n.a + tokBase;
+      } else if (knd == NODE_BINARY || knd == NODE_LOGICAL) {
+        n.c = n.c + tokBase;
+      } else if (knd == NODE_INDEX) {
+        n.c = n.c + tokBase;
+      } else if (knd == NODE_DEREF) {
+        n.b = n.b + tokBase;
+      } else if (knd == NODE_DOT) {
+        n.b = n.b + tokBase;
+      } else if (knd == NODE_ASSIGN) {
+        n.c = n.c + tokBase;
+      }
+      ctx.arena = nodearena_push(ctx.arena, n);
+      ni = ni + 1;
+    }
+    rootIdx = res.root + base;
   }
   ctx.idx = i;
   out~ = ctx;
