@@ -51,4 +51,25 @@ def main(a, b) {
     const hasReturn = lines.some((l) => l.includes("kind=RETURN"))
     expect(hasReturn).toBe(true)
   })
+
+  it("parses multiple functions and tracks export flags", () => {
+    const program = `
+export def foo(a) { return a; }
+def bar() { return 0; }
+`
+
+    const res = runStage1ModuleSummary(program)
+    expect(res.status).toBe(0)
+    const lines = res.stdout.trim().split("\n")
+    expect(lines[0]).toMatch(/root=\d+ count=\d+/)
+
+    const hasFoo = lines.some(
+      (l) => l.includes("kind=FUNCTION") && l.includes("name=foo") && l.includes("params=1") && l.includes("export=1")
+    )
+    const hasBar = lines.some(
+      (l) => l.includes("kind=FUNCTION") && l.includes("name=bar") && l.includes("params=0") && l.includes("export=0")
+    )
+    expect(hasFoo).toBe(true)
+    expect(hasBar).toBe(true)
+  })
 })
