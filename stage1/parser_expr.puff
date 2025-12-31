@@ -357,3 +357,25 @@ def expr_token_count(src byte~, n int) int {
   var toks = scan_tokens(src, n);
   return toks.length;
 }
+
+// Count operator-like tokens (non-literal/identifier) in an expression.
+def expr_operator_count(src byte~, n int) int {
+  var toks = scan_tokens(src, n);
+  var i = 0;
+  var cnt = 0;
+  while (i < toks.length) {
+    var k = token_kind_at(toks, i);
+    if (k == TOKEN_EOF) { break; }
+    // Skip identifiers, literals, brackets/parens/commas/semicolons/colon
+    if (k == TOKEN_IDENTIFIER || k == TOKEN_NUMBER || k == TOKEN_NUMBER_DECIMAL || k == TOKEN_NUMBER_HEX ||
+        k == TOKEN_STRING || k == TOKEN_SINGLE_QUOTE_STRING || k == TOKEN_LEFT_PAREN || k == TOKEN_RIGHT_PAREN ||
+        k == TOKEN_LEFT_BRACKET || k == TOKEN_RIGHT_BRACKET || k == TOKEN_LEFT_BRACE || k == TOKEN_RIGHT_BRACE ||
+        k == TOKEN_COMMA || k == TOKEN_SEMICOLON || k == TOKEN_COLON) {
+      // not an operator
+    } else {
+      cnt = cnt + 1;
+    }
+    i = i + 1;
+  }
+  return cnt;
+}
