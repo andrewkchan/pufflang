@@ -6,11 +6,35 @@ import { compile } from "./index"
 
 const stdlibBasePath = path.join(__dirname, "..", "stdlib", "base.puff")
 let cachedStdlibBase: string | null = null
+const stage1AstPath = path.join(__dirname, "..", "stage1", "ast.puff")
+const stage1ScannerPath = path.join(__dirname, "..", "stage1", "scanner.puff")
+const stage1ParserExprPath = path.join(__dirname, "..", "stage1", "parser_expr.puff")
+let cachedStage1Ast: string | null = null
+let cachedStage1Scanner: string | null = null
+let cachedStage1ParserExpr: string | null = null
 
 function loadStdlibBase(): string {
   if (cachedStdlibBase !== null) return cachedStdlibBase
   cachedStdlibBase = fs.readFileSync(stdlibBasePath, "utf8")
   return cachedStdlibBase
+}
+
+function loadStage1Ast(): string {
+  if (cachedStage1Ast !== null) return cachedStage1Ast
+  cachedStage1Ast = fs.readFileSync(stage1AstPath, "utf8")
+  return cachedStage1Ast
+}
+
+function loadStage1Scanner(): string {
+  if (cachedStage1Scanner !== null) return cachedStage1Scanner
+  cachedStage1Scanner = fs.readFileSync(stage1ScannerPath, "utf8")
+  return cachedStage1Scanner
+}
+
+function loadStage1ParserExpr(): string {
+  if (cachedStage1ParserExpr !== null) return cachedStage1ParserExpr
+  cachedStage1ParserExpr = fs.readFileSync(stage1ParserExprPath, "utf8")
+  return cachedStage1ParserExpr
 }
 
 export interface RunResult {
@@ -82,6 +106,35 @@ export function compileAndRunWithStdlib(source: string, input?: string, env?: No
   const irPath = compileWithStdlib(source)
   const binPath = buildWithClang(irPath)
   return runBinary(binPath, input, env, args)
+}
+
+/**
+ * Convenience: run the Stage1 Puff expression parser to produce an S-expression.
+ * This uses the Stage0 compiler to compile Puff Stage1 sources plus stdlib.
+ */
+export function runStage1ExprSexpr(expr: string, opts?: { allowError?: boolean }): RunResult {
+  const allowError = opts?.allowError ?? false
+  const source = `
+${loadStage1Ast()}
+${loadStage1Scanner()}
+${loadStage1ParserExpr()}
+def print_str(s String) {
+  var i = 0;
+  while (i < s.length) {
+    __putchar__(int((s.data + i)~));
+    i = i + 1;
+  }
+  __putchar__(10);
+}
+def main() {
+  var src = "${expr}";
+  var ok = parse_expr_ok(byte~(&src[0]), len(src));
+  if (ok == 0 && ${allowError ? 0 : 1} == 1) { __exit__(2); }
+  var sexpr = parse_expr_to_sexpr(byte~(&src[0]), len(src));
+  print_str(sexpr);
+}
+`
+  return compileAndRunWithStdlib(source)
 }
 
 export function runRawIR(ir: string): RunResult {

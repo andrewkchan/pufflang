@@ -4,11 +4,11 @@
 - Phase 1: Completed. Harness (`npm test`/compile-and-run via clang -x ir) in place; original spec mirrored.
 - Phase 2: Stage0 frontend + LLVM IR backend implemented; all original and ported suites now pass.
 - Phase 3 (ongoing/major):
-  - Language/features: bitwise ops, ++/--, ternary, switch, function overloading (arity, defaults), default args, UTF-8 strings, pointer differencing, import/export parsing, internal linkage for non-exported symbols.
+  - Language/features: bitwise ops, ++/--, unary ops, ternary, switch, function overloading (arity, defaults), default args, UTF-8 strings, pointer differencing, import/export parsing, internal linkage for non-exported symbols.
   - Runtime/I/O: libc-backed builtins (__malloc__/__free__/__exit__/__putchar__/__write__/__read__/__open__/__close__/__sqrt__) with stdin/stdout/file round-trip tests; harness can feed stdin.
   - Stdlib growth: generic Vec/VecInt/VecByte, String helpers (eq/starts_with/clone/index_of/contains/slice/trim), StringBuilder helpers (clear/append cstr/int/hex), argv/env/time wrappers, Map<int,int>, MapStr (string->int), VecStr, String interner utilities, file helpers; new regression suites cover these.
-  - Stage1 progress: full scanner parity (all tokens, spans/lines); parser helpers for S-expr printing, meta counts, param/return extraction, function shape extraction; scope stack utilities; resolver enhanced with duplicate-var detection and return presence checks. Added focused Stage1 tests for scanner, parser helpers, scopes, resolver paths, a helper `parse_simple_ast_from_source`, and broad invalid-input guard coverage (missing parens/braces/semicolons/def/EOF, bad return token, trailing tokens, empty source).
-- Remaining (Phases 3 tail/4–6): export codegen polish, pointer hex printing already covered in Stage0 runtime, fuller Stage1 parser/AST + resolver parity, Stage1 codegen/CLI, bootstrap pipeline (Stage0 → Stage1 → Stage2).
+  - Stage1 progress: expression parser now covers precedence, logical/bitwise/shift, unary, and ++/-- with harness helpers (`runStage1ExprSexpr`) and dedicated tests. Scanner parity and parser helper suites remain green. Added a non-runtime scaffold `parser_full.puff` to begin full Stage1 parsing work without touching the stable minimal parser; smoke test ensures it compiles.
+- Remaining (Phases 3 tail/4–6): integrate parser_full with parser_expr for real expression spans, extend Stage1 parser/AST + resolver parity, export codegen polish, Stage1 codegen/CLI, bootstrap pipeline (Stage0 → Stage1 → Stage2).
 
 ## Language extensions and semantics notes
 - Overloading & defaults: Functions overload by arity/types; arity is mangled (`foo__2`); default args supported. Exports with a single overload keep the unmangled name; overloads stay mangled but are `external`.
@@ -36,7 +36,7 @@
 - Scanner tokens: Added support for commas, `=`, arithmetic ops (+, -, *, /) to enable richer Stage1 parsing paths.
 
 ## How to run tests
-- Full suite: `npm test` (currently 100 suites / 190 tests)
+- Full suite: `npm test` (currently 103 suites / 205 tests)
 
 ## Notes
 - Builtin names are double-underscore prefixed and map to libc where relevant.
