@@ -124,3 +124,89 @@ def resolve_with_scope2(src byte~, n int) int {
   if (hasReturn == 0) { return 0; }
   return 1;
 }
+
+// ------------------------------------------------------------
+// Incremental resolver scaffolding (non-breaking for existing tests)
+// ------------------------------------------------------------
+
+// Generic ok/fail helpers for future extension.
+def resolve_ok() int { return 1; }
+def resolve_fail() int { return 0; }
+
+// Block resolver using Scope helpers; returns updated scope and index after closing brace.
+struct ResolveBlockResult { scope Scope, idx int, ok int, hasRet int }
+
+def resolve_block(scope Scope, tokens Vec, src byte~, startIdx int) ResolveBlockResult {
+  var s = scope_enter(scope);
+  var i = startIdx + 1; // assume '{' at startIdx
+  var hasRet = 0;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == TOKEN_LEFT_BRACE) {
+      var inner = resolve_block(s, tokens, src, i);
+      if (inner.ok == 0) { return ResolveBlockResult{s, i, 0, hasRet}; }
+      s = inner.scope;
+      if (inner.hasRet == 1) { hasRet = 1; }
+      i = inner.idx;
+      continue;
+    }
+    if (k == TOKEN_RIGHT_BRACE) {
+      s = scope_exit(s);
+      return ResolveBlockResult{s, i + 1, 1, hasRet};
+    }
+    if (k == TOKEN_VAR) {
+      var nameTok = i + 1;
+      if (nameTok >= tokens.length) { return ResolveBlockResult{s, i, 0, hasRet}; }
+      var name = String{src + token_start_at(tokens, nameTok), token_length_at(tokens, nameTok)};
+      var dup = scope_lookup_index_current(s, name);
+      if (dup != -1) { return ResolveBlockResult{s, i, 0, hasRet}; }
+      var res = scope_define_var(s, name, -1);
+      s = res.scope;
+      i = i + 2;
+      continue;
+    }
+    if (k == TOKEN_RETURN) { hasRet = 1; }
+    i = i + 1;
+  }
+  return ResolveBlockResult{s, i, 0, hasRet};
+}
+
+// High-level resolver that:
+// - requires trailing EOF
+// - checks duplicate vars per scope
+// - ensures at least one return somewhere
+def resolve_module_tokens(src byte~, n int) int {
+  var tokens = scan_tokens(src, n);
+  if (tokens.length == 0) { return 0; }
+  var lastKind = token_kind_at(tokens, tokens.length - 1);
+  if (lastKind != TOKEN_EOF) { return 0; }
+  var scope = scope_new_root();
+  var hasRet = 0;
+  var i = 0;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == TOKEN_LEFT_BRACE) {
+      var blk = resolve_block(scope, tokens, src, i);
+      if (blk.ok == 0) { return 0; }
+      scope = blk.scope;
+      if (blk.hasRet == 1) { hasRet = 1; }
+      i = blk.idx;
+      continue;
+    }
+    if (k == TOKEN_VAR) {
+      var nameTok = i + 1;
+      if (nameTok >= tokens.length) { return 0; }
+      var name = String{src + token_start_at(tokens, nameTok), token_length_at(tokens, nameTok)};
+      var dup = scope_lookup_index_current(scope, name);
+      if (dup != -1) { return 0; }
+      var res = scope_define_var(scope, name, -1);
+      scope = res.scope;
+      i = i + 2;
+      continue;
+    }
+    if (k == TOKEN_RETURN) { hasRet = 1; }
+    i = i + 1;
+  }
+  if (hasRet == 0) { return 0; }
+  return 1;
+}

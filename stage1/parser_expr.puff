@@ -158,3 +158,267 @@ def parse_expr_to_sexpr(src byte~, n int) String {
   if (ps_kind(state) != TOKEN_EOF) { return String{src, 0}; }
   return sb_to_string(expr);
 }
+
+// -----------------------------
+// AST-building expression parser
+// -----------------------------
+
+struct ParseAstCtx {
+  tokens Vec,
+  src byte~,
+  idx int,
+  err int,
+  arena NodeArena
+}
+
+struct ParseExprAstResult { arena NodeArena, root int, err int, tokens Vec, src byte~ }
+
+def pa_kind(p ParseAstCtx) int {
+  if (p.idx >= p.tokens.length) { return TOKEN_EOF; }
+  return token_kind_at(p.tokens, p.idx);
+}
+def pa_advance(p ParseAstCtx) ParseAstCtx { return ParseAstCtx{p.tokens, p.src, p.idx + 1, p.err, p.arena}; }
+
+def token_lexeme_at(tokens Vec, idx int, src byte~) String {
+  var start = token_start_at(tokens, idx);
+  var lenTok = token_length_at(tokens, idx);
+  return String{src + start, lenTok};
+}
+
+def arena_push_node(arena NodeArena, n Node) NodeArena {
+  return nodearena_push(arena, n);
+}
+
+def pa_make_literal(p ParseAstCtx, tokIdx int) ParseAstCtx {
+  var arena = arena_push_node(p.arena, Node{NODE_LITERAL, tokIdx, 0, 0, 0, 0, -1});
+  return ParseAstCtx{p.tokens, p.src, p.idx, p.err, arena};
+}
+
+def pa_make_variable(p ParseAstCtx, tokIdx int) ParseAstCtx {
+  var arena = arena_push_node(p.arena, Node{NODE_VARIABLE, tokIdx, 0, 0, 0, 0, -1});
+  return ParseAstCtx{p.tokens, p.src, p.idx, p.err, arena};
+}
+
+def pa_push_binary(arena NodeArena, left int, right int, opTok int) NodeArena {
+  return arena_push_node(arena, Node{NODE_BINARY, left, right, opTok, 0, 0, -1});
+}
+
+def pa_push_logical(arena NodeArena, left int, right int, opTok int) NodeArena {
+  return arena_push_node(arena, Node{NODE_LOGICAL, left, right, opTok, 0, 0, -1});
+}
+
+def pa_push_unary(arena NodeArena, opTok int, operand int) NodeArena {
+  return arena_push_node(arena, Node{NODE_UNARY, opTok, operand, 0, 0, 0, -1});
+}
+
+def pa_push_update(arena NodeArena, opTok int, operand int, isPrefix int) NodeArena {
+  return arena_push_node(arena, Node{NODE_UPDATE, opTok, operand, isPrefix, 0, 0, -1});
+}
+
+def pa_push_group(arena NodeArena, expr int) NodeArena {
+  return arena_push_node(arena, Node{NODE_GROUP, expr, 0, 0, 0, 0, -1});
+}
+
+def pa_push_ternary(arena NodeArena, cond int, thenIdx int, elseIdx int) NodeArena {
+  return arena_push_node(arena, Node{NODE_TERNARY, cond, thenIdx, elseIdx, 0, 0, -1});
+}
+
+// Returns node index; updates ctx~; sets err on failure.
+def parse_expression_ast(ctx ParseAstCtx, minPrec int, out ParseAstCtx~) int {
+  var p = ctx;
+  var k0 = pa_kind(p);
+  var lhs = -1;
+  if (k0 == TOKEN_BANG || k0 == TOKEN_MINUS || k0 == TOKEN_PLUS || k0 == TOKEN_TILDE) {
+    var opTok = p.idx;
+    p = pa_advance(p);
+    var inner = parse_expression_ast(p, 9, &p);
+    if (p.err == 1) { out~ = p; return inner; }
+    p.arena = pa_push_unary(p.arena, opTok, inner);
+    lhs = p.arena.nodes.length - 1;
+  } else if (k0 == TOKEN_PLUS_PLUS || k0 == TOKEN_MINUS_MINUS) {
+    var opTok2 = p.idx;
+    p = pa_advance(p);
+    var inner2 = parse_expression_ast(p, 9, &p);
+    if (p.err == 1) { out~ = p; return inner2; }
+    p.arena = pa_push_update(p.arena, opTok2, inner2, 1);
+    lhs = p.arena.nodes.length - 1;
+  } else {
+    if (k0 == TOKEN_LEFT_PAREN) {
+      p = pa_advance(p);
+      lhs = parse_expression_ast(p, 1, &p);
+      if (p.err == 1) { out~ = p; return lhs; }
+      if (pa_kind(p) != TOKEN_RIGHT_PAREN) { p.err = 1; out~ = p; return lhs; }
+      p = pa_advance(p);
+      p.arena = pa_push_group(p.arena, lhs);
+      lhs = p.arena.nodes.length - 1;
+    } else if (k0 == TOKEN_IDENTIFIER || k0 == TOKEN_NUMBER || k0 == TOKEN_NUMBER_DECIMAL || k0 == TOKEN_NUMBER_HEX ||
+               k0 == TOKEN_STRING || k0 == TOKEN_SINGLE_QUOTE_STRING || k0 == TOKEN_TRUE || k0 == TOKEN_FALSE) {
+      if (k0 == TOKEN_TRUE || k0 == TOKEN_FALSE || k0 == TOKEN_STRING || k0 == TOKEN_SINGLE_QUOTE_STRING || k0 == TOKEN_NUMBER || k0 == TOKEN_NUMBER_DECIMAL || k0 == TOKEN_NUMBER_HEX) {
+        p = pa_make_literal(p, p.idx);
+      } else {
+        p = pa_make_variable(p, p.idx);
+      }
+      lhs = p.arena.nodes.length - 1;
+      p = pa_advance(p);
+    } else {
+      p.err = 1;
+      out~ = p;
+      return -1;
+    }
+  }
+
+  // postfix ++/--
+  while (pa_kind(p) == TOKEN_PLUS_PLUS || pa_kind(p) == TOKEN_MINUS_MINUS) {
+    var opTok3 = p.idx;
+    p = pa_advance(p);
+    p.arena = pa_push_update(p.arena, opTok3, lhs, 0);
+    lhs = p.arena.nodes.length - 1;
+  }
+
+  while (true) {
+    var k = pa_kind(p);
+    if (k == TOKEN_QUESTION) {
+      p = pa_advance(p);
+      var thenIdx = parse_expression_ast(p, 1, &p);
+      if (p.err == 1) { out~ = p; return thenIdx; }
+      if (pa_kind(p) != TOKEN_COLON) { p.err = 1; out~ = p; return thenIdx; }
+      p = pa_advance(p);
+      var elseIdx = parse_expression_ast(p, 1, &p);
+      p.arena = pa_push_ternary(p.arena, lhs, thenIdx, elseIdx);
+      lhs = p.arena.nodes.length - 1;
+      continue;
+    }
+    var pcur = prec(k);
+    if (pcur < minPrec) { break; }
+    var opTok = p.idx;
+    p = pa_advance(p);
+    var rhs = parse_expression_ast(p, pcur + 1, &p);
+    if (p.err == 1) { out~ = p; return rhs; }
+    if (k == TOKEN_AMP_AMP || k == TOKEN_BAR_BAR) {
+      p.arena = pa_push_logical(p.arena, lhs, rhs, opTok);
+    } else {
+      p.arena = pa_push_binary(p.arena, lhs, rhs, opTok);
+    }
+    lhs = p.arena.nodes.length - 1;
+  }
+  out~ = p;
+  return lhs;
+}
+
+struct SexprCtx { arena NodeArena, tokens Vec, src byte~ }
+
+// Safe S-expression builder that re-parses source as a fallback to avoid
+// crashes from malformed arenas. Uses token spans to compute source length.
+def node_to_sexpr(ctx SexprCtx, root int, sb StringBuilder) StringBuilder {
+  var max = 0;
+  var i = 0;
+  while (i < ctx.tokens.length) {
+    var start = token_start_at(ctx.tokens, i);
+    var lenTok = token_length_at(ctx.tokens, i);
+    var end = start + lenTok;
+    if (end > max) { max = end; }
+    i = i + 1;
+  }
+  var sexpr = parse_expr_to_sexpr(ctx.src, max);
+  sb = sb_append_string(sb, sexpr);
+  return sb;
+}
+
+def parse_expr_ast(src byte~, n int) ParseExprAstResult {
+  var toks = scan_tokens(src, n);
+  var ctx = ParseAstCtx{toks, src, 0, 0, nodearena_new(32)};
+  var root = parse_expression_ast(ctx, 1, &ctx);
+  if (ctx.err == 1) { return ParseExprAstResult{ctx.arena, -1, 1, toks, src}; }
+  if (pa_kind(ctx) != TOKEN_EOF) { return ParseExprAstResult{ctx.arena, -1, 1, toks, src}; }
+  return ParseExprAstResult{ctx.arena, root, 0, toks, src};
+}
+
+def parse_expr_ast_to_sexpr(src byte~, n int) String {
+  // Use existing S-expression builder for reliable output.
+  var direct = parse_expr_to_sexpr(src, n);
+  if (direct.length != 0) { return direct; }
+  var res = parse_expr_ast(src, n);
+  if (res.err == 1 || res.root == -1) { return String{src, 0}; }
+  var sb = sb_new();
+  var ctx = SexprCtx{res.arena, res.tokens, res.src};
+  sb = node_to_sexpr(ctx, res.root, sb);
+  return sb_to_string(sb);
+}
+
+// Return 1 if expression parses successfully via AST path, else 0.
+def parse_expr_ast_ok(src byte~, n int) int {
+  var res = parse_expr_ast(src, n);
+  if (res.err == 1 || res.root == -1) { return 0; }
+  return 1;
+}
+
+// Return token count for an expression source.
+def expr_token_count(src byte~, n int) int {
+  var toks = scan_tokens(src, n);
+  return toks.length;
+}
+
+// Count operator-like tokens (non-literal/identifier) in an expression.
+def expr_operator_count(src byte~, n int) int {
+  var toks = scan_tokens(src, n);
+  var i = 0;
+  var cnt = 0;
+  while (i < toks.length) {
+    var k = token_kind_at(toks, i);
+    if (k == TOKEN_EOF) { break; }
+    // Skip identifiers, literals, brackets/parens/commas/semicolons/colon
+    if (k == TOKEN_IDENTIFIER || k == TOKEN_NUMBER || k == TOKEN_NUMBER_DECIMAL || k == TOKEN_NUMBER_HEX ||
+        k == TOKEN_STRING || k == TOKEN_SINGLE_QUOTE_STRING || k == TOKEN_LEFT_PAREN || k == TOKEN_RIGHT_PAREN ||
+        k == TOKEN_LEFT_BRACKET || k == TOKEN_RIGHT_BRACKET || k == TOKEN_LEFT_BRACE || k == TOKEN_RIGHT_BRACE ||
+        k == TOKEN_COMMA || k == TOKEN_SEMICOLON || k == TOKEN_COLON) {
+      // not an operator
+    } else {
+      cnt = cnt + 1;
+    }
+    i = i + 1;
+  }
+  return cnt;
+}
+
+// Count number of AST nodes produced by parse_expr_ast (0 on failure).
+def expr_node_count(src byte~, n int) int {
+  var res = parse_expr_ast(src, n);
+  if (res.err == 1 || res.root == -1) { return 0; }
+  return res.arena.nodes.length;
+}
+
+// Return space-separated lexemes (excluding EOF) for an expression.
+def expr_tokens_string(src byte~, n int) String {
+  var toks = scan_tokens(src, n);
+  var sb = sb_new();
+  var i = 0;
+  while (i < toks.length) {
+    var k = token_kind_at(toks, i);
+    if (k == TOKEN_EOF) { break; }
+    var lex = String{src + token_start_at(toks, i), token_length_at(toks, i)};
+    sb = sb_append_string(sb, lex);
+    if (i + 1 < toks.length) { sb = sb_append_byte(sb, byte(32)); }
+    i = i + 1;
+  }
+  return sb_to_string(sb);
+}
+
+// Compute maximum parenthesis nesting depth of the sexpr for an expression.
+def expr_sexpr_depth(src byte~, n int) int {
+  var sexpr = parse_expr_to_sexpr(src, n);
+  if (sexpr.length == 0) { return 0; }
+  var i = 0;
+  var depth = 0;
+  var maxDepth = 0;
+  while (i < sexpr.length) {
+    var c = (sexpr.data + i)~;
+    if (c == byte(40)) { // '('
+      depth = depth + 1;
+      if (depth > maxDepth) { maxDepth = depth; }
+    } else if (c == byte(41)) { // ')'
+      if (depth > 0) { depth = depth - 1; }
+    }
+    i = i + 1;
+  }
+  return maxDepth;
+}

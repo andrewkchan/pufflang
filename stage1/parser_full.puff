@@ -1,9 +1,5 @@
-// Stage1 parser scaffold for full language coverage (work-in-progress).
-// Not wired into tests yet; kept separate from the minimal parser to avoid regressions.
-// Goals for future iterations:
-//  - Parse statements (var/expr/if/while/for/return/print/block) with expression parser from parser_expr.puff
-//  - Produce NodeArena with spans into token stream for later resolver/codegen
-//  - Support import/export/default args/overloading as grammar grows
+// Stage1 parser for broader language coverage (incremental, statement-first).
+// Expression parsing remains span-based for stability; AST integration will follow.
 
 struct ParseCtx {
   tokens Vec,
@@ -13,107 +9,528 @@ struct ParseCtx {
   arena NodeArena
 }
 
-def p_kind(p ParseCtx) int { return token_kind_at(p.tokens, p.idx); }
-def p_advance(p ParseCtx) ParseCtx { return ParseCtx{p.tokens, p.src, p.idx + 1, p.err, p.arena}; }
-
-// Placeholder: expression parsing should defer to parser_expr.puff once integrated.
-// Integrate expression parser for real spans and S-expr capture.
-// We don't build expression AST here yet; store the S-expr as a StringBuilder->
-// String node by encoding in Node fields a/b as offsets into a temp string table (future work).
-// For now, return the token span to keep resolver/codegen unblocked.
 struct Span { start int, end int, err int }
 
-def p_parse_expr_span(p ParseCtx) Span {
+def p_kind(p ParseCtx) int {
+  if (p.idx >= p.tokens.length) { return TOKEN_EOF; }
+  return token_kind_at(p.tokens, p.idx);
+}
+def p_advance(p ParseCtx) ParseCtx { return ParseCtx{p.tokens, p.src, p.idx + 1, p.err, p.arena}; }
+
+// Return a span from current token until a top-level terminator (semicolon/right brace/right paren).
+def p_parse_expr_until(p ParseCtx, terminator int, out ParseCtx~) Span {
   var start = p.idx;
-  while (p_kind(p) != TOKEN_SEMICOLON && p_kind(p) != TOKEN_RIGHT_BRACE && p_kind(p) != TOKEN_EOF) {
-    p = p_advance(p);
+  var i = p.idx;
+  while (i < p.tokens.length) {
+    var k = token_kind_at(p.tokens, i);
+    if (k == terminator || k == TOKEN_RIGHT_BRACE || k == TOKEN_EOF) { break; }
+    i = i + 1;
   }
-  return Span{start, p.idx, 0};
+  var ctx = p;
+  ctx.idx = i;
+  out~ = ctx;
+  return Span{start, i, 0};
+}
+
+def parse_block(p ParseCtx, out ParseCtx~) int {
+  var ctx = p;
+  if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 901; out~ = ctx; return -1; }
+  ctx = p_advance(ctx); // consume '{'
+  var blockStart = ctx.arena.nodes.length;
+  while (p_kind(ctx) != TOKEN_RIGHT_BRACE && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
+    parse_statement(ctx, &ctx);
+    if (ctx.err != 0) { break; }
+  }
+  if (ctx.err != 0) { out~ = ctx; return -1; }
+  if (p_kind(ctx) != TOKEN_RIGHT_BRACE) { ctx.err = 902; out~ = ctx; return -1; }
+  ctx = p_advance(ctx); // consume '}'
+  var blockCount = ctx.arena.nodes.length - blockStart;
+  ctx.arena = nodearena_push(ctx.arena, Node{NODE_BLOCK, blockStart, blockCount, 0, 0, 0, -1});
+  var blkIdx = ctx.arena.nodes.length - 1;
+  out~ = ctx;
+  return blkIdx;
 }
 
 def parse_statement(p ParseCtx, out ParseCtx~) int {
   var k = p_kind(p);
   if (k == TOKEN_VAR) {
-    var p2 = p_advance(p);
-    if (p_kind(p2) != TOKEN_IDENTIFIER) { p2.err = 1; out~ = p2; return -1; }
-    var nameTok = p2.idx;
-    p2 = p_advance(p2);
-    if (p_kind(p2) != TOKEN_EQUAL) { p2.err = 1; out~ = p2; return -1; }
-    p2 = p_advance(p2);
-    var span = p_parse_expr_span(p2);
-    p2.idx = span.end;
-    if (p_kind(p2) != TOKEN_SEMICOLON) { p2.err = 1; out~ = p2; return -1; }
-    p2 = p_advance(p2);
-    p2.arena = nodearena_push(p2.arena, Node{NODE_VAR_STMT, nameTok, span.start, span.end, 0, 0, -1});
-    out~ = p2;
-    return p2.arena.nodes.length - 1;
-  }
-  if (k == TOKEN_RETURN) {
-    var p2 = p_advance(p);
-    var span = p_parse_expr_span(p2);
-    p2.idx = span.end;
-    if (p_kind(p2) != TOKEN_SEMICOLON) { p2.err = 1; out~ = p2; return -1; }
-    p2 = p_advance(p2);
-    p2.arena = nodearena_push(p2.arena, Node{NODE_RETURN, span.start, span.end, 0, 0, 0, -1});
-    out~ = p2;
-    return p2.arena.nodes.length - 1;
-  }
-  if (k == TOKEN_PRINT) {
-    var p2 = p_advance(p);
-    var span = p_parse_expr_span(p2);
-    p2.idx = span.end;
-    if (p_kind(p2) != TOKEN_SEMICOLON) { p2.err = 1; out~ = p2; return -1; }
-    p2 = p_advance(p2);
-    p2.arena = nodearena_push(p2.arena, Node{NODE_PRINT, span.start, span.end, 0, 0, 0, -1});
-    out~ = p2;
-    return p2.arena.nodes.length - 1;
-  }
-  // fallback: expression statement
-  var p3 = p;
-  var span = p_parse_expr_span(p3);
-  p3.idx = span.end;
-  if (p_kind(p3) != TOKEN_SEMICOLON) { p3.err = 1; out~ = p3; return -1; }
-  p3 = p_advance(p3);
-  p3.arena = nodearena_push(p3.arena, Node{NODE_EXPR_STMT, span.start, span.end, 0, 0, 0, -1});
-  out~ = p3;
-  return p3.arena.nodes.length - 1;
-}
-
-struct ParseModuleResult { arena NodeArena, root int, err int }
-
-def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
-  var ctx = ParseCtx{tokens, src, 0, 0, nodearena_new(64)};
-  var fnStart = ctx.arena.nodes.length;
-  while (p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
-    // Only allow def for now; skip others.
-    if (p_kind(ctx) != TOKEN_DEF) { ctx.err = 1; break; }
-    ctx = p_advance(ctx);
-    if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 1; break; }
+    var ctx = p_advance(p);
+    if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 201; out~ = ctx; return -1; }
     var nameTok = ctx.idx;
     ctx = p_advance(ctx);
-    if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 1; break; }
-    // Skip params
-    while (p_kind(ctx) != TOKEN_RIGHT_PAREN && p_kind(ctx) != TOKEN_EOF) { ctx = p_advance(ctx); }
-    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 1; break; }
+    if (p_kind(ctx) != TOKEN_EQUAL) { ctx.err = 202; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 1; break; }
+    var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 203; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
-    var blockStart = ctx.arena.nodes.length;
-    while (p_kind(ctx) != TOKEN_RIGHT_BRACE && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
-      var stmtIdx = parse_statement(ctx, &ctx);
-      if (ctx.err == 1) { break; }
-    }
-    if (ctx.err == 1) { break; }
-    if (p_kind(ctx) != TOKEN_RIGHT_BRACE) { ctx.err = 1; break; }
-    ctx = p_advance(ctx);
-    var blockCount = ctx.arena.nodes.length - blockStart;
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_BLOCK, blockStart, blockCount, 0, 0, 0, -1});
-    var blkIdx = ctx.arena.nodes.length - 1;
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, blkIdx, 0, nameTok, 0, 0, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_VAR_STMT, nameTok, span.start, span.end, 0, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
   }
-  if (ctx.err == 1) { return ParseModuleResult{ctx.arena, -1, 1}; }
-  var rootCount = ctx.arena.nodes.length - fnStart;
-  ctx.arena = nodearena_push(ctx.arena, Node{NODE_BLOCK, fnStart, rootCount, 0, 0, 0, -1});
+  if (k == TOKEN_RETURN) {
+    var ctx = p_advance(p);
+    var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 204; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_RETURN, span.start, span.end, 0, 0, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_PRINT) {
+    var ctx = p_advance(p);
+    var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 205; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_PRINT, span.start, span.end, 0, 0, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_IF) {
+    var ctx = p_advance(p);
+    if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 301; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    var condSpan = p_parse_expr_until(ctx, TOKEN_RIGHT_PAREN, &ctx);
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 302; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    var thenIdx = -1;
+    if (p_kind(ctx) == TOKEN_LEFT_BRACE) {
+      thenIdx = parse_block(ctx, &ctx);
+    } else {
+      thenIdx = parse_statement(ctx, &ctx);
+    }
+    var elseIdx = -1;
+    if (ctx.err == 0 && p_kind(ctx) == TOKEN_ELSE) {
+      ctx = p_advance(ctx);
+      if (p_kind(ctx) == TOKEN_LEFT_BRACE) {
+        elseIdx = parse_block(ctx, &ctx);
+      } else {
+        elseIdx = parse_statement(ctx, &ctx);
+      }
+    }
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_IF, condSpan.start, condSpan.end, thenIdx, elseIdx, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_WHILE) {
+    var ctx = p_advance(p);
+    if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 401; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    var condSpan = p_parse_expr_until(ctx, TOKEN_RIGHT_PAREN, &ctx);
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 402; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    var bodyIdx = -1;
+    if (p_kind(ctx) == TOKEN_LEFT_BRACE) {
+      bodyIdx = parse_block(ctx, &ctx);
+    } else {
+      bodyIdx = parse_statement(ctx, &ctx);
+    }
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_WHILE, condSpan.start, condSpan.end, bodyIdx, 0, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_FOR) {
+    var ctx = p_advance(p);
+    if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 701; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    var initSpan = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_SEMICOLON) {
+      initSpan = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 702; out~ = ctx; return -1; }
+    ctx = p_advance(ctx); // consume ';'
+    var condSpan = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_SEMICOLON) {
+      condSpan = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 703; out~ = ctx; return -1; }
+    ctx = p_advance(ctx); // consume ';'
+    var stepSpan = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) {
+      stepSpan = p_parse_expr_until(ctx, TOKEN_RIGHT_PAREN, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 704; out~ = ctx; return -1; }
+    ctx = p_advance(ctx); // consume ')'
+    var bodyIdx = -1;
+    if (p_kind(ctx) == TOKEN_LEFT_BRACE) {
+      bodyIdx = parse_block(ctx, &ctx);
+    } else {
+      bodyIdx = parse_statement(ctx, &ctx);
+    }
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_FOR, initSpan.start, condSpan.start, stepSpan.start, bodyIdx, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_BREAK) {
+    var ctx = p_advance(p);
+    var span = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_SEMICOLON) {
+      span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 801; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_BREAK, span.start, span.end, 0, 0, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_CONTINUE) {
+    var ctx = p_advance(p);
+    var span = Span{ctx.idx, ctx.idx, 0};
+    if (p_kind(ctx) != TOKEN_SEMICOLON) {
+      span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+    }
+    if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 802; out~ = ctx; return -1; }
+    ctx = p_advance(ctx);
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_CONTINUE, span.start, span.end, 0, 0, 0, -1});
+    out~ = ctx;
+    return ctx.arena.nodes.length - 1;
+  }
+  // simple assignment: IDENTIFIER '=' expr ';'
+  if (k == TOKEN_IDENTIFIER && (p.idx + 1) < p.tokens.length) {
+    var nextKind = token_kind_at(p.tokens, p.idx + 1);
+    if (nextKind == TOKEN_EQUAL) {
+      var ctx = p_advance(p); // at '='
+      var nameTok = p.idx;
+      ctx = p_advance(ctx); // past '='
+      var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+      if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 601; out~ = ctx; return -1; }
+      ctx = p_advance(ctx);
+      ctx.arena = nodearena_push(ctx.arena, Node{NODE_ASSIGN, nameTok, span.start, span.end, 0, 0, -1});
+      out~ = ctx;
+      return ctx.arena.nodes.length - 1;
+    }
+  }
+  if (k == TOKEN_LEFT_BRACE) {
+    return parse_block(p, out);
+  }
+  // fallback: expression statement
+  var ctx = p;
+  var span = p_parse_expr_until(ctx, TOKEN_SEMICOLON, &ctx);
+  if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 501; out~ = ctx; return -1; }
+  ctx = p_advance(ctx);
+  ctx.arena = nodearena_push(ctx.arena, Node{NODE_EXPR_STMT, span.start, span.end, 0, 0, 0, -1});
+  out~ = ctx;
+  return ctx.arena.nodes.length - 1;
+}
+
+struct ParseModuleResult { arena NodeArena, root int, err int, tokens Vec, src byte~ }
+
+def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
+  var ctx = ParseCtx{tokens, src, 0, 0, nodearena_new(128)};
+  var rootStart = ctx.arena.nodes.length;
+  while (p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
+    var isExport = 0;
+    if (p_kind(ctx) == TOKEN_EXPORT) {
+      isExport = 1;
+      ctx = p_advance(ctx);
+    }
+    var isImport = 0;
+    if (p_kind(ctx) == TOKEN_IMPORT) {
+      isImport = 1;
+      ctx = p_advance(ctx);
+    }
+    if (p_kind(ctx) != TOKEN_DEF) {
+      // top-level var
+      if (p_kind(ctx) == TOKEN_VAR) {
+        var vctx = p_advance(ctx);
+        if (p_kind(vctx) != TOKEN_IDENTIFIER) { ctx.err = 4010; break; }
+        var nameTok = vctx.idx;
+        vctx = p_advance(vctx);
+        if (p_kind(vctx) != TOKEN_EQUAL) { ctx.err = 4011; break; }
+        vctx = p_advance(vctx);
+        var vspan = p_parse_expr_until(vctx, TOKEN_SEMICOLON, &vctx);
+        if (p_kind(vctx) != TOKEN_SEMICOLON) { ctx.err = 4012; break; }
+        vctx = p_advance(vctx);
+        vctx.arena = nodearena_push(vctx.arena, Node{NODE_VAR_STMT, nameTok, vspan.start, vspan.end, 0, 0, -1});
+        ctx = vctx;
+        continue;
+      }
+      if (p_kind(ctx) == TOKEN_STRUCT) {
+        ctx = p_advance(ctx);
+        if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 3010; break; }
+        var nameTok = ctx.idx;
+        ctx = p_advance(ctx);
+        if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 3011; break; }
+        ctx = p_advance(ctx);
+        var fieldCount = 0;
+        var fieldStart = ctx.idx;
+        while (p_kind(ctx) != TOKEN_RIGHT_BRACE && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
+          if (p_kind(ctx) == TOKEN_IDENTIFIER) { fieldCount = fieldCount + 1; }
+          ctx = p_advance(ctx);
+        }
+        if (p_kind(ctx) != TOKEN_RIGHT_BRACE) { ctx.err = 3012; break; }
+        ctx = p_advance(ctx);
+        ctx.arena = nodearena_push(ctx.arena, Node{NODE_STRUCT_DECL, fieldCount, isExport, nameTok, fieldStart, 0, -1});
+        continue;
+      }
+      ctx = p_advance(ctx);
+      continue;
+    }
+    ctx = p_advance(ctx);
+    if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 102; break; }
+    var nameTok = ctx.idx;
+    ctx = p_advance(ctx);
+    if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 103; break; }
+    ctx = p_advance(ctx);
+    var paramsStart = -1;
+    var paramCount = 0;
+    while (p_kind(ctx) != TOKEN_RIGHT_PAREN && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
+      if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 104; break; }
+      if (paramsStart == -1) { paramsStart = ctx.idx; }
+      paramCount = paramCount + 1;
+      ctx = p_advance(ctx);
+      if (p_kind(ctx) == TOKEN_COMMA) {
+        ctx = p_advance(ctx);
+        continue;
+      }
+      if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 105; break; }
+    }
+    if (ctx.err != 0) { break; }
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 105; break; }
+    ctx = p_advance(ctx);
+    if (isImport == 1) {
+      if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 107; break; }
+      ctx = p_advance(ctx);
+      ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, -1, paramsStart, nameTok, paramCount, isExport, 1});
+      continue;
+    }
+    if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 106; break; }
+    var bodyIdx = parse_block(ctx, &ctx);
+    if (ctx.err != 0) { break; }
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, bodyIdx, paramsStart, nameTok, paramCount, isExport, 0});
+  }
+  if (ctx.err != 0) { return ParseModuleResult{ctx.arena, -1, ctx.err, tokens, src}; }
+  var rootCount = ctx.arena.nodes.length - rootStart;
+  ctx.arena = nodearena_push(ctx.arena, Node{NODE_BLOCK, rootStart, rootCount, 0, 0, 0, -1});
   var rootIdx = ctx.arena.nodes.length - 1;
-  return ParseModuleResult{ctx.arena, rootIdx, 0};
+  return ParseModuleResult{ctx.arena, rootIdx, ctx.err, tokens, src};
+}
+
+// Convenience: parse directly from source.
+def parse_module_source(src byte~, n int) ParseModuleResult {
+  var toks = scan_tokens(src, n);
+  return parse_module(toks, src, n);
+}
+
+// ----- Debug/summary helpers -----
+def node_kind_name(k int) String {
+  if (k == NODE_LITERAL) { return String{byte~(&"LITERAL"[0]), 7}; }
+  if (k == NODE_VARIABLE) { return String{byte~(&"VARIABLE"[0]), 8}; }
+  if (k == NODE_BINARY) { return String{byte~(&"BINARY"[0]), 6}; }
+  if (k == NODE_CALL) { return String{byte~(&"CALL"[0]), 4}; }
+  if (k == NODE_RETURN) { return String{byte~(&"RETURN"[0]), 6}; }
+  if (k == NODE_VAR_STMT) { return String{byte~(&"VAR_STMT"[0]), 8}; }
+  if (k == NODE_FUNCTION) { return String{byte~(&"FUNCTION"[0]), 8}; }
+  if (k == NODE_BLOCK) { return String{byte~(&"BLOCK"[0]), 5}; }
+  if (k == NODE_ASSIGN) { return String{byte~(&"ASSIGN"[0]), 6}; }
+  if (k == NODE_GROUP) { return String{byte~(&"GROUP"[0]), 5}; }
+  if (k == NODE_UNARY) { return String{byte~(&"UNARY"[0]), 5}; }
+  if (k == NODE_UPDATE) { return String{byte~(&"UPDATE"[0]), 6}; }
+  if (k == NODE_LOGICAL) { return String{byte~(&"LOGICAL"[0]), 7}; }
+  if (k == NODE_TERNARY) { return String{byte~(&"TERNARY"[0]), 7}; }
+  if (k == NODE_INDEX) { return String{byte~(&"INDEX"[0]), 5}; }
+  if (k == NODE_DEREF) { return String{byte~(&"DEREF"[0]), 5}; }
+  if (k == NODE_DOT) { return String{byte~(&"DOT"[0]), 3}; }
+  if (k == NODE_LEN) { return String{byte~(&"LEN"[0]), 3}; }
+  if (k == NODE_LIST) { return String{byte~(&"LIST"[0]), 4}; }
+  if (k == NODE_CAST) { return String{byte~(&"CAST"[0]), 4}; }
+  if (k == NODE_PRINT) { return String{byte~(&"PRINT"[0]), 5}; }
+  if (k == NODE_EXPR_STMT) { return String{byte~(&"EXPR_STMT"[0]), 9}; }
+  if (k == NODE_IF) { return String{byte~(&"IF"[0]), 2}; }
+  if (k == NODE_WHILE) { return String{byte~(&"WHILE"[0]), 5}; }
+  if (k == NODE_FOR) { return String{byte~(&"FOR"[0]), 3}; }
+  if (k == NODE_BREAK) { return String{byte~(&"BREAK"[0]), 5}; }
+  if (k == NODE_CONTINUE) { return String{byte~(&"CONTINUE"[0]), 8}; }
+  if (k == NODE_STRUCT_DECL) { return String{byte~(&"STRUCT_DECL"[0]), 11}; }
+  return String{byte~(&"UNKNOWN"[0]), 7};
+}
+
+def tok_string(tokens Vec, idx int, src byte~) String {
+  if (idx < 0 || idx >= tokens.length) { return String{src, 0}; }
+  var st = token_start_at(tokens, idx);
+  var ln = token_length_at(tokens, idx);
+  return String{src + st, ln};
+}
+
+// Collect parameter identifier names starting at startIdx until right paren.
+def param_names_string(tokens Vec, src byte~, startIdx int) String {
+  if (startIdx == -1) { return String{src, 0}; }
+  var sb = sb_new();
+  var i = startIdx;
+  var first = 1;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == TOKEN_RIGHT_PAREN) { break; }
+    if (k == TOKEN_IDENTIFIER) {
+      if (first == 0) { sb = sb_append_byte(sb, byte(44)); } // ','
+      sb = sb_append_string(sb, tok_string(tokens, i, src));
+      first = 0;
+    }
+    i = i + 1;
+  }
+  return sb_to_string(sb);
+}
+
+// Collect struct field identifier names starting at startIdx until right brace.
+def field_names_string(tokens Vec, src byte~, startIdx int) String {
+  if (startIdx == -1) { return String{src, 0}; }
+  var sb = sb_new();
+  var i = startIdx;
+  var first = 1;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == TOKEN_RIGHT_BRACE) { break; }
+    if (k == TOKEN_IDENTIFIER) {
+      if (first == 0) { sb = sb_append_byte(sb, byte(44)); } // ','
+      sb = sb_append_string(sb, tok_string(tokens, i, src));
+      first = 0;
+    }
+    i = i + 1;
+  }
+  return sb_to_string(sb);
+}
+
+def module_summary(res ParseModuleResult) String {
+  if (res.err != 0) {
+    var sbErr = sb_new();
+    sbErr = sb_append_cstr(sbErr, byte~(&"err"[0]));
+    sbErr = sb_append_cstr(sbErr, byte~(&" code="[0]));
+    sbErr = sb_append_int(sbErr, res.err);
+    sbErr = sb_append_cstr(sbErr, byte~(&" tokens="[0]));
+    sbErr = sb_append_int(sbErr, res.tokens.length);
+    if (res.tokens.length > 0) {
+      sbErr = sb_append_cstr(sbErr, byte~(&" first="[0]));
+      sbErr = sb_append_int(sbErr, token_kind_at(res.tokens, 0));
+    }
+    return sb_to_string(sbErr);
+  }
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"root="[0]));
+  sb = sb_append_int(sb, res.root);
+  sb = sb_append_cstr(sb, byte~(&" count="[0]));
+  sb = sb_append_int(sb, res.arena.nodes.length);
+  sb = sb_append_byte(sb, byte(10));
+  var i = 0;
+  while (i < res.arena.nodes.length) {
+    var n = nodearena_get(res.arena, i);
+    sb = sb_append_cstr(sb, byte~(&"idx="[0]));
+    sb = sb_append_int(sb, i);
+    sb = sb_append_cstr(sb, byte~(&" kind="[0]));
+    sb = sb_append_string(sb, node_kind_name(n.kind));
+    sb = sb_append_cstr(sb, byte~(&" a="[0]));
+    sb = sb_append_int(sb, n.a);
+    sb = sb_append_cstr(sb, byte~(&" b="[0]));
+    sb = sb_append_int(sb, n.b);
+    sb = sb_append_cstr(sb, byte~(&" c="[0]));
+    sb = sb_append_int(sb, n.c);
+    sb = sb_append_cstr(sb, byte~(&" d="[0]));
+    sb = sb_append_int(sb, n.d);
+    if (n.kind == NODE_VAR_STMT) {
+      var name = tok_string(res.tokens, n.a, res.src);
+      sb = sb_append_cstr(sb, byte~(&" name="[0]));
+      sb = sb_append_string(sb, name);
+    }
+  if (n.kind == NODE_ASSIGN) {
+    var aname = tok_string(res.tokens, n.a, res.src);
+    sb = sb_append_cstr(sb, byte~(&" name="[0]));
+    sb = sb_append_string(sb, aname);
+  }
+    if (n.kind == NODE_FUNCTION) {
+      var fname = tok_string(res.tokens, n.c, res.src);
+      sb = sb_append_cstr(sb, byte~(&" name="[0]));
+      sb = sb_append_string(sb, fname);
+      sb = sb_append_cstr(sb, byte~(&" params="[0]));
+      sb = sb_append_int(sb, n.d);
+      sb = sb_append_cstr(sb, byte~(&" export="[0]));
+      sb = sb_append_int(sb, n.value);
+      sb = sb_append_cstr(sb, byte~(&" import="[0]));
+      sb = sb_append_int(sb, n.typeId);
+      var pnames = param_names_string(res.tokens, res.src, n.b);
+      sb = sb_append_cstr(sb, byte~(&" names="[0]));
+      sb = sb_append_string(sb, pnames);
+    }
+    if (n.kind == NODE_IF) {
+      sb = sb_append_cstr(sb, byte~(&" then="[0]));
+      sb = sb_append_int(sb, n.c);
+      sb = sb_append_cstr(sb, byte~(&" else="[0]));
+      sb = sb_append_int(sb, n.d);
+    }
+    if (n.kind == NODE_WHILE) {
+      sb = sb_append_cstr(sb, byte~(&" body="[0]));
+      sb = sb_append_int(sb, n.c);
+    }
+  if (n.kind == NODE_FOR) {
+    sb = sb_append_cstr(sb, byte~(&" body="[0]));
+    sb = sb_append_int(sb, n.d);
+  }
+    if (n.kind == NODE_STRUCT_DECL) {
+      sb = sb_append_cstr(sb, byte~(&" fields="[0]));
+      sb = sb_append_int(sb, n.a);
+      var sname = tok_string(res.tokens, n.c, res.src);
+      sb = sb_append_cstr(sb, byte~(&" name="[0]));
+      sb = sb_append_string(sb, sname);
+      sb = sb_append_cstr(sb, byte~(&" export="[0]));
+      sb = sb_append_int(sb, n.b);
+      var fnames = field_names_string(res.tokens, res.src, n.d);
+      sb = sb_append_cstr(sb, byte~(&" names="[0]));
+      sb = sb_append_string(sb, fnames);
+    }
+    if (n.kind == NODE_BLOCK) {
+      sb = sb_append_cstr(sb, byte~(&" start="[0]));
+      sb = sb_append_int(sb, n.a);
+      sb = sb_append_cstr(sb, byte~(&" count="[0]));
+      sb = sb_append_int(sb, n.b);
+    }
+  if (n.kind == NODE_RETURN || n.kind == NODE_EXPR_STMT || n.kind == NODE_PRINT || n.kind == NODE_VAR_STMT || n.kind == NODE_ASSIGN || n.kind == NODE_IF || n.kind == NODE_WHILE || n.kind == NODE_FOR || n.kind == NODE_BREAK || n.kind == NODE_CONTINUE) {
+      sb = sb_append_cstr(sb, byte~(&" span="[0]));
+      sb = sb_append_int(sb, n.a);
+      sb = sb_append_byte(sb, byte(45)); // '-'
+      sb = sb_append_int(sb, n.b);
+    }
+    sb = sb_append_byte(sb, byte(10));
+    i = i + 1;
+  }
+  return sb_to_string(sb);
+}
+
+// ---- Count helpers ----
+def count_nodes(arena NodeArena, kind int) int {
+  var i = 0;
+  var cnt = 0;
+  while (i < arena.nodes.length) {
+    var n = nodearena_get(arena, i);
+    if (n.kind == kind) { cnt = cnt + 1; }
+    i = i + 1;
+  }
+  return cnt;
+}
+
+def count_functions(arena NodeArena, importFlag int, exportFlag int) int {
+  var i = 0;
+  var cnt = 0;
+  while (i < arena.nodes.length) {
+    var n = nodearena_get(arena, i);
+    if (n.kind != NODE_FUNCTION) { i = i + 1; continue; }
+    if (importFlag != -1 && n.typeId != importFlag) { i = i + 1; continue; }
+    if (exportFlag != -1 && n.value != exportFlag) { i = i + 1; continue; }
+    cnt = cnt + 1;
+    i = i + 1;
+  }
+  return cnt;
+}
+
+// Returns "funcs=<n> imports=<n> exports=<n> structs=<n> vars=<n>"
+def module_counts(res ParseModuleResult) String {
+  if (res.err != 0) { return String{byte~(&"err"[0]), 3}; }
+  var funcs = count_functions(res.arena, -1, -1);
+  var imports = count_functions(res.arena, 1, -1);
+  var exports = count_functions(res.arena, -1, 1);
+  var structs = count_nodes(res.arena, NODE_STRUCT_DECL);
+  var vars = count_nodes(res.arena, NODE_VAR_STMT);
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"funcs="[0])); sb = sb_append_int(sb, funcs);
+  sb = sb_append_cstr(sb, byte~(&" imports="[0])); sb = sb_append_int(sb, imports);
+  sb = sb_append_cstr(sb, byte~(&" exports="[0])); sb = sb_append_int(sb, exports);
+  sb = sb_append_cstr(sb, byte~(&" structs="[0])); sb = sb_append_int(sb, structs);
+  sb = sb_append_cstr(sb, byte~(&" vars="[0])); sb = sb_append_int(sb, vars);
+  return sb_to_string(sb);
 }

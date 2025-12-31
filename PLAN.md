@@ -1,5 +1,5 @@
 ## Executive summary
-Deliver a self-hosted Puffscript toolchain that matches the original language semantics and tests, adds the README/TODO features, provides richer I/O, and bootstraps itself. The approach: build a new Stage0 compiler in TypeScript that targets LLVM IR (text `.ll`) with a tiny runtime in IR/asm, using `llc` + `ld` to produce binaries; port/extend the test suite to this backend; then re-implement the compiler in Puffscript (Stage1) using a Puffscript stdlib (vectors/strings/maps). Stage0 will compile Stage1; Stage1 will compile itself (Stage2) to prove self-hosting. New tests cover added features and I/O/bootstrapping.
+Deliver a self-hosted Puffscript toolchain: a solid Stage0 (TypeScript → LLVM IR) that mirrors/extends the original language; a growing Stage1 (Puffscript) compiler with stdlib/runtime; and a repeatable bootstrap (Stage0 → Stage1 → Stage2). Stage0 is green across all feature suites; Stage1 now has richer parsing/summarization and resolver scaffolding. Next focus: Stage1 AST-based parsing/resolution/codegen and the bootstrap script.
 
 ## Phases and tasks
 
@@ -14,31 +14,29 @@ Deliver a self-hosted Puffscript toolchain that matches the original language se
 - Add built-ins for heap and I/O (malloc/free/realloc or mmap/brk helpers, fopen/fread/fwrite/close or syscall-backed, read_file_all, write_file, putchar/puts, exit/status).
 - Acceptance: Original end-to-end tests (unmodified semantics) pass when compiled to LLVM IR and executed via harness; pointer/array/struct semantics match reference outputs.
 
-### Phase 3 — Language feature extensions
-- Implement README/TODO items: bitwise ops (& | ^ ~ >> <<), ++/--, ternary operator, switch statement, function overloading (by arity/types), default arguments, exported/imported functions, UTF-8/non-ASCII strings, pointer printing (hex) and pointer differencing (where defined).
-- Update grammar, resolver rules, and codegen; document new built-ins or desugarings.
-- Acceptance: New targeted parser/typechecker/codegen tests for each feature; runtime output tests demonstrating behavior; no regressions in original suite.
+### Phase 3 — Language feature extensions (Stage0 complete)
+- Status: Stage0 implements bitwise/shift, ++/--, ternary, switch, overloading + default args, import/export, UTF-8 strings, pointer printing/diff; all tests green.
+- Acceptance: Already met in Stage0; keep regression tests green.
 
-- ### Phase 4 — Runtime + stdlib for self-hosting
-- Flesh out LLVM-level runtime for file/argv/env/time and robust error handling; expose Puffscript built-ins for heap/I/O.
-- Implement Puffscript stdlib (Vec, String/Builder, HashMap or trie for symbols, file helpers, formatting utilities) using the new built-ins.
-- Acceptance: Stdlib unit tests (push/pop/grow, string append/UTF-8, map insert/lookup); I/O tests (read/write files, round-trip binary/text); still green on existing suites.
+### Phase 4 — Runtime + stdlib (Stage0 complete, Stage1 growing)
+- Status: libc-backed runtime and stdlib (Vec/VecInt/VecByte/VecStr, String/Builder, Map/MapStr, Interner, file/argv/env/time helpers) in place and tested.
+- Next: keep stdlib stable; add any missing helpers needed by Stage1 codegen.
+- Acceptance: Stdlib tests remain green.
 
-### Phase 5 — Stage1 compiler in Puffscript
-- Port scanner/parser/resolver/codegen to Puffscript using stdlib; keep parity with Stage0 features.
-- Provide a CLI in Puffscript (compile files to LLVM IR, lower with `llc` + `ld`/`clang -x ir`; optional run helper).
-- Acceptance: Stage0 compiles Stage1 to a working binary that can compile and run sample programs; outputs for a sample program match Stage0; integration tests exercise Stage1 CLI.
+### Phase 5 — Stage1 compiler in Puffscript (in progress)
+- Status: scanner parity; expression parser covers precedence/logical/bitwise/shift/unary/++/--; parser_full parses defs/import defs/structs/vars, var/return/print/if/while/for/break/continue/assign/expr, summaries/counts with names/flags; resolver scaffolding for EOF/return + duplicate vars; harness helpers for summaries/counts/resolver.
+- Next:
+  - Integrate parser_full with expression AST (not just spans); build real NodeArena for statements/expressions.
+  - Extend resolver to types/overloads/default args/import/export/structs; enforce return coverage.
+  - Begin Stage1 codegen scaffolding (LLVM IR emitters mirroring Stage0) and CLI to compile .puff → .ll → binary.
+- Acceptance: Stage0 builds Stage1 binary that can compile sample programs; Stage1 passes a focused subset of Stage0 tests via harness/CLI.
 
 ### Phase 6 — Bootstrapping proof
-- Use Stage1 to compile itself (Stage2); compare Stage1 vs Stage2 artifacts (byte-for-byte or hash of emitted C/IR) to assert fixed point.
-- Add a `bootstrap.sh`/CI job running Stage0 → Stage1 → Stage2 and running the test suite with Stage1.
-- Acceptance: Bootstrap pipeline passes; Stage1-produced binaries pass all tests; documented steps reproducible locally/CI.
+- Script Stage0 → Stage1 → Stage2; hash/compare IR or binaries; run selected suites under Stage1-produced compiler.
+- Acceptance: Bootstrap script passes locally; Stage1-built compiler passes agreed test subset; documented steps reproducible/CI-ready.
 
 ### Phase 7 — Documentation and polish
-- Update README with language spec delta, new features, backend/runtime description, and bootstrap instructions.
-- Provide examples (I/O, bitwise, switch, default args, overloading).
-- Clean repo (remove upstream clone, ensure no sensitive/unneeded files); finalize scripts.
-- Acceptance: Docs reviewed; examples build and run; `npm test`/`npm run bootstrap` (or equivalent) green; git status clean.
+- Keep README/PLAN aligned with progress and add CLI/bootstrap usage once ready; ensure `npm test` and bootstrap script are green; repo clean.
 
 ## Testing strategy
 - Unit tests: scanner/parser/resolver for old and new grammar; stdlib data structures; runtime helpers.

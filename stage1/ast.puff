@@ -171,6 +171,7 @@ var NODE_WHILE int = 24;
 var NODE_FOR int = 25; // lowered to while but keep node kind for clarity
 var NODE_BREAK int = 26;
 var NODE_CONTINUE int = 27;
+var NODE_STRUCT_DECL int = 28;
 // List initializer kinds
 var LIST_INIT_LIST int = 1;
 var LIST_INIT_REPEAT int = 2;
