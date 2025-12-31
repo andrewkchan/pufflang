@@ -379,3 +379,10 @@ def expr_operator_count(src byte~, n int) int {
   }
   return cnt;
 }
+
+// Count number of AST nodes produced by parse_expr_ast (0 on failure).
+def expr_node_count(src byte~, n int) int {
+  var res = parse_expr_ast(src, n);
+  if (res.err == 1 || res.root == -1) { return 0; }
+  return res.arena.nodes.length;
+}
