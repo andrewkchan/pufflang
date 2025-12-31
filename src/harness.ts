@@ -244,6 +244,7 @@ export function runStage1ModuleSummary(program: string): RunResult {
   const source = `
 ${loadStage1Ast()}
 ${loadStage1Scanner()}
+${loadStage1ParserExpr()}
 ${loadStage1ParserFull()}
 
 def print_int(x int) {
@@ -291,6 +292,7 @@ export function runStage1ModuleCounts(program: string): RunResult {
   const source = `
 ${loadStage1Ast()}
 ${loadStage1Scanner()}
+${loadStage1ParserExpr()}
 ${loadStage1ParserFull()}
 
 def print_str(s String) {
