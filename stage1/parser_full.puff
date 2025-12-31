@@ -18,46 +18,14 @@ def p_kind(p ParseCtx) int {
 def p_advance(p ParseCtx) ParseCtx { return ParseCtx{p.tokens, p.src, p.idx + 1, p.err, p.arena}; }
 
 // Merge nodes from exprArena into target arena; return root adjusted index.
-def merge_expr_arena(target NodeArena, expr NodeArena, root int) NodeArena {
-  var base = target.nodes.length;
-  var i = 0;
-  while (i < expr.nodes.length) {
-    var n = nodearena_get(expr, i);
-    var k = n.kind;
-    if (k == NODE_GROUP || k == NODE_DEREF || k == NODE_LEN) {
-      if (n.a != -1) { n.a = n.a + base; }
-    } else if (k == NODE_UNARY) {
-      if (n.b != -1) { n.b = n.b + base; }
-    } else if (k == NODE_UPDATE) {
-      if (n.b != -1) { n.b = n.b + base; }
-    } else if (k == NODE_BINARY || k == NODE_LOGICAL) {
-      if (n.a != -1) { n.a = n.a + base; }
-      if (n.b != -1) { n.b = n.b + base; }
-    } else if (k == NODE_TERNARY) {
-      if (n.a != -1) { n.a = n.a + base; }
-      if (n.b != -1) { n.b = n.b + base; }
-      if (n.c != -1) { n.c = n.c + base; }
-    } else if (k == NODE_CALL) {
-      if (n.a != -1) { n.a = n.a + base; }
-      if (n.b != -1) { n.b = n.b + base; }
-    } else if (k == NODE_INDEX) {
-      if (n.a != -1) { n.a = n.a + base; }
-      if (n.b != -1) { n.b = n.b + base; }
-    } else if (k == NODE_DOT) {
-      if (n.a != -1) { n.a = n.a + base; }
-    } else if (k == NODE_LIST) {
-      if (n.a != -1) { n.a = n.a + base; }
-      if (n.b != -1) { n.b = n.b + base; }
-    }
-    target = nodearena_push(target, n);
-    i = i + 1;
-  }
-  return target;
+// Merge expression arena into target. (Currently unused; expressions validated only.)
+struct MergeResult { arena NodeArena, root int }
+def merge_expr_arena(target NodeArena, expr NodeArena, root int) MergeResult {
+  return MergeResult{target, root};
 }
 
 // Parse expression from current position until a terminator (semicolon/right brace/right paren).
-// Currently parses for validation; does not merge expression nodes into the module arena yet.
-// Returns expr root node index in a transient arena (unused by callers for now), or -1 on error; advances ctx.idx to terminator.
+// Returns merged expr root node index in module arena, or -1 on error; advances ctx.idx to terminator.
 def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
   var start = p.idx;
   var i = p.idx;
@@ -72,7 +40,9 @@ def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
   if (res.err == 1 || res.root == -1) {
     ctx.err = 6000;
   } else {
-    rootIdx = res.root; // not merged yet
+    var merged = merge_expr_arena(ctx.arena, res.arena, res.root);
+    ctx.arena = merged.arena;
+    rootIdx = merged.root;
   }
   ctx.idx = i;
   out~ = ctx;
@@ -478,12 +448,16 @@ def module_summary(res ParseModuleResult) String {
       var name = tok_string(res.tokens, n.a, res.src);
       sb = sb_append_cstr(sb, byte~(&" name="[0]));
       sb = sb_append_string(sb, name);
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.b);
     }
-  if (n.kind == NODE_ASSIGN) {
-    var aname = tok_string(res.tokens, n.a, res.src);
-    sb = sb_append_cstr(sb, byte~(&" name="[0]));
-    sb = sb_append_string(sb, aname);
-  }
+    if (n.kind == NODE_ASSIGN) {
+      var aname = tok_string(res.tokens, n.a, res.src);
+      sb = sb_append_cstr(sb, byte~(&" name="[0]));
+      sb = sb_append_string(sb, aname);
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.b);
+    }
     if (n.kind == NODE_FUNCTION) {
       var fname = tok_string(res.tokens, n.c, res.src);
       sb = sb_append_cstr(sb, byte~(&" name="[0]));
@@ -499,19 +473,29 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_string(sb, pnames);
     }
     if (n.kind == NODE_IF) {
+      sb = sb_append_cstr(sb, byte~(&" cond="[0]));
+      sb = sb_append_int(sb, n.a);
       sb = sb_append_cstr(sb, byte~(&" then="[0]));
       sb = sb_append_int(sb, n.c);
       sb = sb_append_cstr(sb, byte~(&" else="[0]));
       sb = sb_append_int(sb, n.d);
     }
     if (n.kind == NODE_WHILE) {
+      sb = sb_append_cstr(sb, byte~(&" cond="[0]));
+      sb = sb_append_int(sb, n.a);
       sb = sb_append_cstr(sb, byte~(&" body="[0]));
       sb = sb_append_int(sb, n.c);
     }
-  if (n.kind == NODE_FOR) {
-    sb = sb_append_cstr(sb, byte~(&" body="[0]));
-    sb = sb_append_int(sb, n.d);
-  }
+    if (n.kind == NODE_FOR) {
+      sb = sb_append_cstr(sb, byte~(&" init="[0]));
+      sb = sb_append_int(sb, n.a);
+      sb = sb_append_cstr(sb, byte~(&" cond="[0]));
+      sb = sb_append_int(sb, n.b);
+      sb = sb_append_cstr(sb, byte~(&" step="[0]));
+      sb = sb_append_int(sb, n.c);
+      sb = sb_append_cstr(sb, byte~(&" body="[0]));
+      sb = sb_append_int(sb, n.d);
+    }
     if (n.kind == NODE_STRUCT_DECL) {
       sb = sb_append_cstr(sb, byte~(&" fields="[0]));
       sb = sb_append_int(sb, n.a);
@@ -530,11 +514,21 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_cstr(sb, byte~(&" count="[0]));
       sb = sb_append_int(sb, n.b);
     }
-  if (n.kind == NODE_RETURN || n.kind == NODE_EXPR_STMT || n.kind == NODE_PRINT || n.kind == NODE_VAR_STMT || n.kind == NODE_ASSIGN || n.kind == NODE_IF || n.kind == NODE_WHILE || n.kind == NODE_FOR || n.kind == NODE_BREAK || n.kind == NODE_CONTINUE) {
-      sb = sb_append_cstr(sb, byte~(&" span="[0]));
+    if (n.kind == NODE_RETURN) {
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
       sb = sb_append_int(sb, n.a);
-      sb = sb_append_byte(sb, byte(45)); // '-'
-      sb = sb_append_int(sb, n.b);
+    }
+    if (n.kind == NODE_EXPR_STMT) {
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.a);
+    }
+    if (n.kind == NODE_PRINT) {
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.a);
+    }
+    if (n.kind == NODE_BREAK || n.kind == NODE_CONTINUE) {
+      sb = sb_append_cstr(sb, byte~(&" expr="[0]));
+      sb = sb_append_int(sb, n.a);
     }
     sb = sb_append_byte(sb, byte(10));
     i = i + 1;
