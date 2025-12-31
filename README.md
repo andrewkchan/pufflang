@@ -7,8 +7,8 @@
   - Language/features: bitwise ops, ++/--, unary ops, ternary, switch, function overloading (arity, defaults), default args, UTF-8 strings, pointer differencing, import/export parsing, internal linkage for non-exported symbols.
   - Runtime/I/O: libc-backed builtins (__malloc__/__free__/__exit__/__putchar__/__write__/__read__/__open__/__close__/__sqrt__) with stdin/stdout/file round-trip tests; harness can feed stdin.
   - Stdlib growth: generic Vec/VecInt/VecByte, String helpers (eq/starts_with/clone/index_of/contains/slice/trim), StringBuilder helpers (clear/append cstr/int/hex), argv/env/time wrappers, Map<int,int>, MapStr (string->int), VecStr, String interner utilities, file helpers; new regression suites cover these.
-  - Stage1 progress: expression parser covers precedence/logical/bitwise/shift/unary/++/-- with harness helpers (`runStage1ExprSexpr`). Scanner parity and parser helper suites are green. `parser_full.puff` now parses top-level defs/import defs/structs/vars, statements (var/return/print/if/while/for/break/continue/assign/expr), and emits module summaries with names, exports/imports, field/param names, plus module count helpers; tests cover summaries and counts. Minimal parser remains untouched for stability.
-- Remaining (Phases 3 tail/4–6): integrate parser_full with parser_expr for real expression spans/AST, extend Stage1 resolver parity (types/overloads/defaults), codegen polish and CLI, bootstrap pipeline (Stage0 → Stage1 → Stage2).
+  - Stage1 progress: expression ASTs are merged into `parser_full` arenas; scanner/parsers suites stay green. Added AST-based resolver (`resolve_module_ast`) with scope/arity checks, undefined-variable detection, loop depth validation, and duplicate-function guarding (overloads currently rejected for stability). New resolver tests cover loops, arity mismatches, undefined functions, and duplicate functions. Stage1 driver now routes through parse_full + AST resolver. Minimal parser remains untouched for stability.
+- Remaining (Phases 3 tail/4–6): enable true overload support + types/defaults/import/export resolution in Stage1, implement Stage1 LLVM codegen + CLI, and wire the bootstrap pipeline (Stage0 → Stage1 → Stage2).
 
 ## Language extensions and semantics notes
 - Overloading & defaults: Functions overload by arity/types; arity is mangled (`foo__2`); default args supported. Exports with a single overload keep the unmangled name; overloads stay mangled but are `external`.
@@ -36,7 +36,7 @@
 - Scanner tokens: Added support for commas, `=`, arithmetic ops (+, -, *, /) to enable richer Stage1 parsing paths.
 
 ## How to run tests
-- Full suite: `npm test` (currently 115 suites / 223 tests)
+- Full suite: `npm test` (currently 122 suites / 241 tests)
 
 ## Notes
 - Builtin names are double-underscore prefixed and map to libc where relevant.
