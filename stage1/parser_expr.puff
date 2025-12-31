@@ -1,0 +1,123 @@
+// Minimal expression parser (precedence climbing) that emits an S-expression.
+// Supports identifiers, numeric/string literals, parentheses, binary ops
+// (+, -, *, /, %, <<, >>, &, ^, |, &&, ||) and ternary (?:).
+
+struct ParseState {
+  tokens Vec,
+  src byte~,
+  idx int,
+  err int
+}
+
+def ps_kind(ps ParseState) int { return token_kind_at(ps.tokens, ps.idx); }
+def ps_advance(ps ParseState) ParseState { return ParseState{ps.tokens, ps.src, ps.idx + 1, ps.err}; }
+
+def ps_lexeme(ps ParseState, tokIdx int) String {
+  var start = token_start_at(ps.tokens, tokIdx);
+  var ln = token_length_at(ps.tokens, tokIdx);
+  return String{ps.src + start, ln};
+}
+
+def prec(kind int) int {
+  if (kind == TOKEN_BAR_BAR) { return 1; }
+  if (kind == TOKEN_AMP_AMP) { return 2; }
+  if (kind == TOKEN_BAR) { return 3; }
+  if (kind == TOKEN_CARET) { return 4; }
+  if (kind == TOKEN_AMP) { return 5; }
+  if (kind == TOKEN_SHIFT_LEFT || kind == TOKEN_SHIFT_RIGHT) { return 6; }
+  if (kind == TOKEN_PLUS || kind == TOKEN_MINUS) { return 7; }
+  if (kind == TOKEN_STAR || kind == TOKEN_SLASH || kind == TOKEN_PERCENT) { return 8; }
+  return -1;
+}
+
+def make_binary(op String, left StringBuilder, right StringBuilder) StringBuilder {
+  var out = sb_new();
+  out = sb_append_byte(out, byte(40)); // (
+  out = sb_append_string(out, op);
+  out = sb_append_byte(out, byte(32));
+  out = sb_append_string(out, sb_to_string(left));
+  out = sb_append_byte(out, byte(32));
+  out = sb_append_string(out, sb_to_string(right));
+  out = sb_append_byte(out, byte(41));
+  return out;
+}
+
+def make_ternary(cond StringBuilder, thenSb StringBuilder, elseSb StringBuilder) StringBuilder {
+  var out = sb_new();
+  out = sb_append_byte(out, byte(40));
+  out = sb_append_bytes(out, byte~(&"?: "[0]), 3);
+  out = sb_append_string(out, sb_to_string(cond));
+  out = sb_append_byte(out, byte(32));
+  out = sb_append_string(out, sb_to_string(thenSb));
+  out = sb_append_byte(out, byte(32));
+  out = sb_append_string(out, sb_to_string(elseSb));
+  out = sb_append_byte(out, byte(41));
+  return out;
+}
+
+def parse_expression(ps ParseState, minPrec int, out ParseState~) StringBuilder {
+  var ps2 = ps;
+  // parse atom
+  var k0 = ps_kind(ps2);
+  var lhs = sb_new();
+  if (k0 == TOKEN_LEFT_PAREN) {
+    ps2 = ps_advance(ps2);
+    lhs = parse_expression(ps2, 1, &ps2);
+    if (ps2.err == 1) { out~ = ps2; return lhs; }
+    if (ps_kind(ps2) != TOKEN_RIGHT_PAREN) {
+      ps2.err = 1;
+      out~ = ps2;
+      return lhs;
+    }
+    ps2 = ps_advance(ps2);
+  } else if (k0 == TOKEN_IDENTIFIER || k0 == TOKEN_NUMBER || k0 == TOKEN_NUMBER_DECIMAL || k0 == TOKEN_NUMBER_HEX ||
+             k0 == TOKEN_STRING || k0 == TOKEN_SINGLE_QUOTE_STRING || k0 == TOKEN_TRUE || k0 == TOKEN_FALSE) {
+    var lex = ps_lexeme(ps2, ps2.idx);
+    lhs = sb_append_string(lhs, lex);
+    ps2 = ps_advance(ps2);
+  } else {
+    ps2.err = 1;
+    out~ = ps2;
+    return lhs;
+  }
+
+  while (true) {
+    var k = ps_kind(ps2);
+    if (k == TOKEN_QUESTION) {
+      ps2 = ps_advance(ps2);
+      var thenSb = parse_expression(ps2, 1, &ps2);
+      if (ps2.err == 1) { out~ = ps2; return thenSb; }
+      if (ps_kind(ps2) != TOKEN_COLON) { ps2.err = 1; out~ = ps2; return thenSb; }
+      ps2 = ps_advance(ps2);
+      var elseSb = parse_expression(ps2, 1, &ps2);
+      lhs = make_ternary(lhs, thenSb, elseSb);
+      continue;
+    }
+    var p = prec(k);
+    if (p < minPrec) { break; }
+    var opLex = ps_lexeme(ps2, ps2.idx);
+    ps2 = ps_advance(ps2);
+    var rhs = parse_expression(ps2, p + 1, &ps2);
+    lhs = make_binary(opLex, lhs, rhs);
+  }
+  out~ = ps2;
+  return lhs;
+}
+
+def parse_expr_ok(src byte~, n int) int {
+  var toks = scan_tokens(src, n);
+  var state = ParseState{toks, src, 0, 0};
+  var expr = parse_expression(state, 1, &state);
+  if (state.err == 1) { return 0; }
+  if (ps_kind(state) != TOKEN_EOF) { return 0; }
+  return 1;
+}
+
+def parse_expr_to_sexpr(src byte~, n int) String {
+  var toks = scan_tokens(src, n);
+  var state = ParseState{toks, src, 0, 0};
+  var expr = parse_expression(state, 1, &state);
+  if (state.err == 1) { return String{src, 0}; }
+  if (ps_kind(state) != TOKEN_EOF) { return String{src, 0}; }
+  return sb_to_string(expr);
+}

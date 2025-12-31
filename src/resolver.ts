@@ -648,24 +648,36 @@ export function resolve(context: ast.Context, reportError: ReportError) {
             scopes = oldScopes
             functionStack = oldFunctionStack
           } else if (symbolDecl && walkedSet.has(symbolDecl)) {
-            // assert: struct definitions should never lead to constructor calls (struct defs never contain expressions).
-            console.assert(symbolDecl.kind !== ast.NodeKind.STRUCT_STMT)
-            // Detect cyclic variable declarations (declarations using this variable expr in initializer).
-            // Note `symbolDecl` may not be the cylic variable in the following case:
-            // V1 -----> F1 -----> V2
-            //            ^        |
-            //            +--------+
-            // If we start at `V1`, we will detect a cycle at `F1`. To find
-            // the cyclic variable declaration, backtrack in `visitedStack`
-            // and return any variable symbol between the top and `symbolDecl`.
+            const isFunctionDecl = fnSymbol !== null && symbolDecl === fnSymbol.node
+            let inFunctionStack = false
+            for (let i = 0; i < functionStack.length; i++) {
+              if (functionStack[i] === symbolDecl) {
+                inFunctionStack = true
+                break
+              }
+            }
             let cyclicVar: ast.VarStmt | null = null
-            if (symbolDecl.kind === ast.NodeKind.VAR_STMT) {
-              cyclicVar = symbolDecl
+            if (isFunctionDecl && inFunctionStack) {
+              cyclicVar = null
             } else {
-              for (let i = walked.length - 1; walked[i] !== symbolDecl; i--) {
-                if (walked[i].kind === ast.NodeKind.VAR_STMT) {
-                  cyclicVar = walked[i] as ast.VarStmt
-                  break
+              // assert: struct definitions should never lead to constructor calls (struct defs never contain expressions).
+              console.assert(symbolDecl.kind !== ast.NodeKind.STRUCT_STMT)
+              // Detect cyclic variable declarations (declarations using this variable expr in initializer).
+              // Note `symbolDecl` may not be the cylic variable in the following case:
+              // V1 -----> F1 -----> V2
+              //            ^        |
+              //            +--------+
+              // If we start at `V1`, we will detect a cycle at `F1`. To find
+              // the cyclic variable declaration, backtrack in `visitedStack`
+              // and return any variable symbol between the top and `symbolDecl`.
+              if (symbolDecl.kind === ast.NodeKind.VAR_STMT) {
+                cyclicVar = symbolDecl
+              } else {
+                for (let i = walked.length - 1; walked[i] !== symbolDecl; i--) {
+                  if (walked[i].kind === ast.NodeKind.VAR_STMT) {
+                    cyclicVar = walked[i] as ast.VarStmt
+                    break
+                  }
                 }
               }
             }
