@@ -42,6 +42,21 @@ def main() {
   print_int(type_binary_compare_result(tt, idBool, idBool, OP_EQ)); __putchar__(32); // bool
   print_int(type_binary_compare_result(tt, ptrInt, idInt, OP_EQ)); __putchar__(32); // -1
 
+  // bitwise
+  print_int(type_binary_bitwise_result(tt, idInt, idByte, OP_BIT_AND)); __putchar__(32); // 5
+  print_int(type_binary_bitwise_result(tt, idByte, idByte, OP_BIT_OR)); __putchar__(32); // 2
+  print_int(type_binary_bitwise_result(tt, idFloat, idInt, OP_BIT_XOR)); __putchar__(32); // -1
+
+  // shifts
+  print_int(type_binary_shift_result(tt, idInt, idByte, OP_SHL)); __putchar__(32); // 5
+  print_int(type_binary_shift_result(tt, idByte, idByte, OP_SHR)); __putchar__(32); // 2
+  print_int(type_binary_shift_result(tt, idFloat, idByte, OP_SHR)); __putchar__(32); // -1
+
+  // logical
+  print_int(type_binary_logical_result(tt, idInt, idBool, OP_ANDAND)); __putchar__(32); // 1
+  print_int(type_binary_logical_result(tt, ptrInt, idBool, OP_ANDAND)); __putchar__(32); // -1
+  print_int(type_binary_logical_result(tt, idBool, idBool, OP_OROR)); __putchar__(32); // 1
+
   // unary
   print_int(type_unary_result(tt, idInt, UOP_NEG)); __putchar__(32); // int
   print_int(type_unary_result(tt, idBool, UOP_NEG)); __putchar__(32); // -1
@@ -59,6 +74,6 @@ describe("Stage1 type rules helpers", () => {
     const res = runRules()
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
-    expect(res.stdout.trim()).toBe("5 4 9 9 -1 5 -1 1 1 1 -1 5 -1 1 1 4 -1")
+    expect(res.stdout.trim()).toBe("5 4 9 9 -1 5 -1 1 1 1 -1 5 2 -1 5 2 -1 1 -1 1 5 -1 1 1 4 -1")
   })
 })
