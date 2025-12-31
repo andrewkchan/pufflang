@@ -291,6 +291,25 @@ def tok_string(tokens Vec, idx int, src byte~) String {
   return String{src + st, ln};
 }
 
+// Collect parameter identifier names starting at startIdx until right paren.
+def param_names_string(tokens Vec, src byte~, startIdx int) String {
+  if (startIdx == -1) { return String{src, 0}; }
+  var sb = sb_new();
+  var i = startIdx;
+  var first = 1;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == TOKEN_RIGHT_PAREN) { break; }
+    if (k == TOKEN_IDENTIFIER) {
+      if (first == 0) { sb = sb_append_byte(sb, byte(44)); } // ','
+      sb = sb_append_string(sb, tok_string(tokens, i, src));
+      first = 0;
+    }
+    i = i + 1;
+  }
+  return sb_to_string(sb);
+}
+
 def module_summary(res ParseModuleResult) String {
   if (res.err != 0) {
     var sbErr = sb_new();
@@ -339,6 +358,9 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_int(sb, n.d);
       sb = sb_append_cstr(sb, byte~(&" export="[0]));
       sb = sb_append_int(sb, n.value);
+      var pnames = param_names_string(res.tokens, res.src, n.b);
+      sb = sb_append_cstr(sb, byte~(&" names="[0]));
+      sb = sb_append_string(sb, pnames);
     }
     if (n.kind == NODE_IF) {
       sb = sb_append_cstr(sb, byte~(&" then="[0]));
