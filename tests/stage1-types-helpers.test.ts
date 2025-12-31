@@ -103,4 +103,50 @@ def main() {
     expect(res.stderr).toBe("")
     expect(res.stdout.trim()).toBe("1 0 1 0 1 0 0")
   })
+
+  it("checks cast and coerce rules", () => {
+    const source = `
+${typesSrc}
+
+def print_int(x int) {
+  if (x == 0) { __putchar__(48); return; }
+  var n = x;
+  var buf = vecbyte_new(16);
+  if (n < 0) { __putchar__(45); n = 0 - n; }
+  while (n > 0) { buf = vecbyte_push(buf, byte(48 + (n % 10))); n = n / 10; }
+  var i = buf.length - 1;
+  while (i >= 0) { __putchar__(int((buf.data + i)~)); i = i - 1; }
+}
+
+def main() {
+  var tt = typetable_new();
+  var idByte = 2;
+  var idInt = 5;
+  var idFloat = 4;
+  var idBool = 1;
+  var ptrInt = tt.types.length; tt = typetable_make_pointer(tt, idInt);
+  var ptrByte = tt.types.length; tt = typetable_make_pointer(tt, idByte);
+  var arrByte3 = tt.types.length; tt = typetable_make_array(tt, idByte, 3);
+
+  // can_cast
+  print_int(type_can_cast(tt, idInt, idFloat)); __putchar__(32);  // 1
+  print_int(type_can_cast(tt, idFloat, idByte)); __putchar__(32); // 1
+  print_int(type_can_cast(tt, ptrInt, ptrByte)); __putchar__(32); // 1 (any pointer)
+  print_int(type_can_cast(tt, idBool, idInt)); __putchar__(32);   // 1
+  print_int(type_can_cast(tt, idInt, idBool)); __putchar__(32);   // 1
+
+  // can_coerce
+  print_int(type_can_coerce(tt, idByte, idInt)); __putchar__(32);   // 1
+  print_int(type_can_coerce(tt, idInt, idByte)); __putchar__(32);   // 0
+  print_int(type_can_coerce(tt, idFloat, idInt)); __putchar__(32);  // 0
+  print_int(type_can_coerce(tt, idInt, idFloat)); __putchar__(32);  // 1
+  print_int(type_can_coerce(tt, arrByte3, ptrByte)); __putchar__(32); //1
+  print_int(type_can_coerce(tt, ptrInt, ptrByte)); __putchar__(10); //0
+}
+`
+    const res = compileAndRunWithStdlib(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(res.stdout.trim()).toBe("1 1 1 1 1 1 0 0 1 1 0")
+  })
 })

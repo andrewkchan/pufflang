@@ -102,3 +102,52 @@ def type_equals(tt TypeTable, a int, b int) int {
   }
   return 1;
 }
+
+// Casting: allow numeric<->numeric/bool, pointer<->pointer (any element), or exact match.
+def type_can_cast(tt TypeTable, from int, to int) int {
+  if (type_equals(tt, from, to) == 1) { return 1; }
+  var tf = typetable_get(tt, from);
+  var ttgt = typetable_get(tt, to);
+  if (tf.category == TYPECATEGORY_POINTER && ttgt.category == TYPECATEGORY_POINTER) { return 1; }
+  if (type_is_numeric(tt, from) == 1 && type_is_numeric(tt, to) == 1) { return 1; }
+  if (tf.category == TYPECATEGORY_BOOL && type_is_numeric(tt, to) == 1) { return 1; }
+  if (ttgt.category == TYPECATEGORY_BOOL && type_is_numeric(tt, from) == 1) { return 1; }
+  if (tf.category == TYPECATEGORY_BOOL && ttgt.category == TYPECATEGORY_BOOL) { return 1; }
+  return 0;
+}
+
+// Coercion (implicit): follow Stage0 rules for numerics/arrays/pointers.
+def type_can_coerce(tt TypeTable, from int, to int) int {
+  if (type_equals(tt, from, to) == 1) { return 1; }
+  var tf = typetable_get(tt, from);
+  var ttgt = typetable_get(tt, to);
+  // array -> pointer of same element
+  if (tf.category == TYPECATEGORY_ARRAY && ttgt.category == TYPECATEGORY_POINTER) {
+    return type_equals(tt, tf.element, ttgt.element);
+  }
+  // numeric widening
+  if (tf.category == TYPECATEGORY_INT) {
+    if (ttgt.category == TYPECATEGORY_INT) { return 1; }
+    if (ttgt.category == TYPECATEGORY_FLOAT) { return 1; }
+    if (ttgt.category == TYPECATEGORY_BOOL) { return 1; }
+    return 0;
+  }
+  if (tf.category == TYPECATEGORY_FLOAT) {
+    if (ttgt.category == TYPECATEGORY_FLOAT) { return 1; }
+    return 0;
+  }
+  if (tf.category == TYPECATEGORY_BYTE) {
+    if (ttgt.category == TYPECATEGORY_BYTE) { return 1; }
+    if (ttgt.category == TYPECATEGORY_INT) { return 1; }
+    if (ttgt.category == TYPECATEGORY_FLOAT) { return 1; }
+    return 0;
+  }
+  if (tf.category == TYPECATEGORY_BOOL) {
+    if (ttgt.category == TYPECATEGORY_BOOL) { return 1; }
+    return 0;
+  }
+  if (tf.category == TYPECATEGORY_POINTER && ttgt.category == TYPECATEGORY_POINTER) {
+    return type_equals(tt, tf.element, ttgt.element);
+  }
+  return 0;
+}
