@@ -94,4 +94,22 @@ def beta() { return 0; }
     expect(alphaLine).toContain("names=a,b,c")
     expect(betaLine).toContain("names=")
   })
+
+  it("parses imported functions", () => {
+    const program = `
+import def ext0();
+import def ext1(a, b);
+def main() { return 0; }
+`
+    const res = runStage1ModuleSummary(program)
+    expect(res.status).toBe(0)
+    const lines = res.stdout.trim().split("\n")
+    expect(lines[0]).toMatch(/root=\d+ count=\d+/)
+    const hasExt0 = lines.some((l) => l.includes("name=ext0") && l.includes("import=1") && l.includes("params=0"))
+    const hasExt1 = lines.some((l) => l.includes("name=ext1") && l.includes("import=1") && l.includes("params=2"))
+    const hasMain = lines.some((l) => l.includes("name=main") && l.includes("import=0"))
+    expect(hasExt0).toBe(true)
+    expect(hasExt1).toBe(true)
+    expect(hasMain).toBe(true)
+  })
 })

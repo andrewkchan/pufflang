@@ -223,6 +223,11 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
       isExport = 1;
       ctx = p_advance(ctx);
     }
+    var isImport = 0;
+    if (p_kind(ctx) == TOKEN_IMPORT) {
+      isImport = 1;
+      ctx = p_advance(ctx);
+    }
     if (p_kind(ctx) != TOKEN_DEF) {
       ctx = p_advance(ctx);
       continue;
@@ -249,10 +254,16 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
     if (ctx.err != 0) { break; }
     if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 105; break; }
     ctx = p_advance(ctx);
+    if (isImport == 1) {
+      if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 107; break; }
+      ctx = p_advance(ctx);
+      ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, -1, paramsStart, nameTok, paramCount, isExport, 1});
+      continue;
+    }
     if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 106; break; }
     var bodyIdx = parse_block(ctx, &ctx);
     if (ctx.err != 0) { break; }
-    ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, bodyIdx, paramsStart, nameTok, paramCount, isExport, -1});
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, bodyIdx, paramsStart, nameTok, paramCount, isExport, 0});
   }
   if (ctx.err != 0) { return ParseModuleResult{ctx.arena, -1, ctx.err, tokens, src}; }
   var rootCount = ctx.arena.nodes.length - rootStart;
@@ -378,6 +389,8 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_int(sb, n.d);
       sb = sb_append_cstr(sb, byte~(&" export="[0]));
       sb = sb_append_int(sb, n.value);
+      sb = sb_append_cstr(sb, byte~(&" import="[0]));
+      sb = sb_append_int(sb, n.typeId);
       var pnames = param_names_string(res.tokens, res.src, n.b);
       sb = sb_append_cstr(sb, byte~(&" names="[0]));
       sb = sb_append_string(sb, pnames);
