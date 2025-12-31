@@ -1,0 +1,80 @@
+// Stage1 standalone type helpers (lightweight, no parser integration).
+// Mirrors the TypeCategory enums and simple predicates from Stage0.
+
+var TYPECATEGORY_ARRAY int = 0;
+var TYPECATEGORY_BOOL int = 1;
+var TYPECATEGORY_BYTE int = 2;
+var TYPECATEGORY_ERROR int = 3;
+var TYPECATEGORY_FLOAT int = 4;
+var TYPECATEGORY_INT int = 5;
+var TYPECATEGORY_POINTER int = 6;
+var TYPECATEGORY_STRUCT int = 7;
+var TYPECATEGORY_VOID int = 8;
+
+struct Type { category int, element int, length int, structId int }
+struct TypeTable { types Vec }
+
+def typetable_new() TypeTable {
+  var v = vec_new(16, 16);
+  v.length = 0;
+  // id 0: placeholder array
+  v = typetable_push_raw(v, Type{TYPECATEGORY_ARRAY, -1, 0, -1});
+  // id 1..8 scalar/builtin
+  v = typetable_push_raw(v, Type{TYPECATEGORY_BOOL, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_BYTE, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_ERROR, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_FLOAT, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_INT, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_POINTER, -1, 0, -1}); // placeholder
+  v = typetable_push_raw(v, Type{TYPECATEGORY_STRUCT, -1, 0, -1});  // placeholder
+  v = typetable_push_raw(v, Type{TYPECATEGORY_VOID, -1, 0, -1});
+  return TypeTable{v};
+}
+
+def typetable_push_raw(v Vec, t Type) Vec {
+  var out = vec_reserve(v, v.length + 1);
+  var dest = vec_get_ptr(out, out.length);
+  (int~(dest))~ = t.category;
+  (int~(dest + 4))~ = t.element;
+  (int~(dest + 8))~ = t.length;
+  (int~(dest + 12))~ = t.structId;
+  out.length = out.length + 1;
+  return out;
+}
+
+def typetable_make_pointer(tt TypeTable, elemId int) TypeTable {
+  var t = Type{TYPECATEGORY_POINTER, elemId, 0, -1};
+  var v = typetable_push_raw(tt.types, t);
+  return TypeTable{v};
+}
+
+def typetable_make_array(tt TypeTable, elemId int, length int) TypeTable {
+  var t = Type{TYPECATEGORY_ARRAY, elemId, length, -1};
+  var v = typetable_push_raw(tt.types, t);
+  return TypeTable{v};
+}
+
+def typetable_get(tt TypeTable, id int) Type {
+  var ptr = vec_get_ptr(tt.types, id);
+  var cat = (int~(ptr))~;
+  var elem = (int~(ptr + 4))~;
+  var lengthVal = (int~(ptr + 8))~;
+  var sid = (int~(ptr + 12))~;
+  return Type{cat, elem, lengthVal, sid};
+}
+
+def type_is_numeric(tt TypeTable, id int) int {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_INT) { return 1; }
+  if (t.category == TYPECATEGORY_FLOAT) { return 1; }
+  if (t.category == TYPECATEGORY_BYTE) { return 1; }
+  return 0;
+}
+
+def type_is_scalar(tt TypeTable, id int) int {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_ARRAY) { return 0; }
+  if (t.category == TYPECATEGORY_STRUCT) { return 0; }
+  if (t.category == TYPECATEGORY_VOID) { return 0; }
+  return 1;
+}
