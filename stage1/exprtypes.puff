@@ -5,12 +5,6 @@
 struct TypeInferResult { env TypeEnv, typeId int, err int }
 
 def tok_kind(tokens Vec, idx int) int { return token_kind_at(tokens, idx); }
-def tok_lexeme(tokens Vec, idx int, src byte~) String {
-  var start = token_start_at(tokens, idx);
-  var ln = token_length_at(tokens, idx);
-  return String{src + start, ln};
-}
-
 def infer_node(env TypeEnv, tokens Vec, src byte~, arena NodeArena, idx int) TypeInferResult {
   var n = nodearena_get(arena, idx);
   // literal
@@ -52,7 +46,6 @@ def infer_node(env TypeEnv, tokens Vec, src byte~, arena NodeArena, idx int) Typ
     var r = infer_node(l.env, tokens, src, arena, n.b);
     if (r.err == 1) { return r; }
     var k = tok_kind(tokens, n.c);
-    var lex = tok_lexeme(tokens, n.c, src);
     var opId = -1;
     var result = -1;
     // arithmetic / pointer / numeric
