@@ -4,6 +4,8 @@ import { compileAndRunWithStdlib } from "../../../src/harness"
 
 const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "scanner.puff"), "utf8")
 const astSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "ast.puff"), "utf8")
+const parserExprSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "parser_expr.puff"), "utf8")
+const parserFullSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "parser_full.puff"), "utf8")
 const resolverSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "resolver.puff"), "utf8")
 
 const lines = (out: string) => out.trim().split("\n").map((s) => s.trim())
@@ -13,6 +15,8 @@ describe("Stage1 resolver with scopes", () => {
     const source = `
     ${scannerSrc}
     ${astSrc}
+    ${parserExprSrc}
+    ${parserFullSrc}
     ${resolverSrc}
     def main() {
       var src = "def foo() { var x = 1; var y = 2; return y; }";
@@ -30,6 +34,8 @@ describe("Stage1 resolver with scopes", () => {
     const source = `
     ${scannerSrc}
     ${astSrc}
+    ${parserExprSrc}
+    ${parserFullSrc}
     ${resolverSrc}
     def main() {
       var src = "def foo() { var x = 1; var x = 2; return x; }";
@@ -47,6 +53,8 @@ describe("Stage1 resolver with scopes", () => {
     const source = `
     ${scannerSrc}
     ${astSrc}
+    ${parserExprSrc}
+    ${parserFullSrc}
     ${resolverSrc}
     def main() {
       var src = "def foo() { var x = 1; }";

@@ -34,19 +34,7 @@ def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
   if (res.err == 1 || res.root == -1) {
     ctx.err = 6000;
   } else {
-    // 1) append tokens (excluding EOF) and remember base
-    var tokBase = ctx.tokens.length;
-    var ti = 0;
-    while (ti < res.tokens.length) {
-      var tk = token_kind_at(res.tokens, ti);
-      if (tk == TOKEN_EOF) { ti = ti + 1; continue; }
-      var tStart = token_start_at(res.tokens, ti);
-      var tLen = token_length_at(res.tokens, ti);
-      var tLine = token_line_at(res.tokens, ti);
-      ctx.tokens = push_token(ctx.tokens, tk, tStart, tLen, tLine);
-      ti = ti + 1;
-    }
-    // 2) merge nodes with token and node offsets
+    // merge nodes with node index offsets (token indices are already absolute via tokOffset)
     var base = ctx.arena.nodes.length;
     var ni = 0;
     while (ni < res.arena.nodes.length) {
@@ -80,22 +68,6 @@ def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
       } else if (knd == NODE_ASSIGN) {
         if (n.a != -1) { n.a = n.a + base; }
         if (n.b != -1) { n.b = n.b + base; }
-      }
-      // adjust token references
-      if (knd == NODE_LITERAL || knd == NODE_VARIABLE) {
-        n.a = n.a + tokBase;
-      } else if (knd == NODE_UNARY || knd == NODE_UPDATE) {
-        n.a = n.a + tokBase;
-      } else if (knd == NODE_BINARY || knd == NODE_LOGICAL) {
-        n.c = n.c + tokBase;
-      } else if (knd == NODE_INDEX) {
-        n.c = n.c + tokBase;
-      } else if (knd == NODE_DEREF) {
-        n.b = n.b + tokBase;
-      } else if (knd == NODE_DOT) {
-        n.b = n.b + tokBase;
-      } else if (knd == NODE_ASSIGN) {
-        n.c = n.c + tokBase;
       }
       ctx.arena = nodearena_push(ctx.arena, n);
       ni = ni + 1;
@@ -376,11 +348,11 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
     if (ctx.err != 0) { break; }
     ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, bodyIdx, paramsStart, nameTok, paramCount, isExport, 0});
   }
-  if (ctx.err != 0) { return ParseModuleResult{ctx.arena, -1, ctx.err, tokens, src}; }
+  if (ctx.err != 0) { return ParseModuleResult{ctx.arena, -1, ctx.err, ctx.tokens, src}; }
   var rootCount = ctx.arena.nodes.length - rootStart;
   ctx.arena = nodearena_push(ctx.arena, Node{NODE_BLOCK, rootStart, rootCount, 0, 0, 0, -1});
   var rootIdx = ctx.arena.nodes.length - 1;
-  return ParseModuleResult{ctx.arena, rootIdx, ctx.err, tokens, src};
+  return ParseModuleResult{ctx.arena, rootIdx, ctx.err, ctx.tokens, src};
 }
 
 // Convenience: parse directly from source.
