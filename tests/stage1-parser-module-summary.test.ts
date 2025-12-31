@@ -74,4 +74,20 @@ def bar() { return 0; }
     expect(hasFoo).toBe(true)
     expect(hasBar).toBe(true)
   })
+
+  it("emits parameter names in summary", () => {
+    const program = `
+def alpha(a, b, c) { return a; }
+def beta() { return 0; }
+`
+    const res = runStage1ModuleSummary(program)
+    expect(res.status).toBe(0)
+    const lines = res.stdout.trim().split("\n")
+    const alphaLine = lines.find((l) => l.includes("name=alpha"))
+    const betaLine = lines.find((l) => l.includes("name=beta"))
+    expect(alphaLine).toBeDefined()
+    expect(betaLine).toBeDefined()
+    expect(alphaLine).toContain("names=a,b,c")
+    expect(betaLine).toContain("names=")
+  })
 })
