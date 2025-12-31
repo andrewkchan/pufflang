@@ -310,16 +310,17 @@ def resolve_expr(ctx ResolveCtx, idx int) ResolveCtx {
     return r;
   }
   if (k == NODE_ASSIGN) {
-    // Statement assignments use token for lhs, expression assignments carry node refs and op token in c.
     if (n.c != 0) {
+      // expression assignment: lhs is an expression node
       r = resolve_expr(r, n.a);
       if (r.err == 1) { return r; }
-    } else {
-      var nameTok = n.a;
-      var name = tok_str(r.tokens, nameTok, r.src);
-      var foundIdx = scope_lookup_index_any(r.scope, name);
-      if (foundIdx == -1) { r.err = 1; return r; }
+      return resolve_expr(r, n.b);
     }
+    // statement assignment: lhs is a token
+    var nameTok = n.a;
+    var name = tok_str(r.tokens, nameTok, r.src);
+    var foundIdx = scope_lookup_index_any(r.scope, name);
+    if (foundIdx == -1) { r.err = 1; return r; }
     return resolve_expr(r, n.b);
   }
   return r;
@@ -339,8 +340,8 @@ def is_statement_kind(k int) int {
   return 0;
 }
 
-// Resolve a single statement node by index (with current scope).
-def resolve_statement(ctx ResolveCtx, stmtIdx int) ResolveCtx {
+// Resolve a single statement node by index (with current scope and loop depth).
+def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
   var r = ctx;
   var n = nodearena_get(r.arena, stmtIdx);
   var k = n.kind;
@@ -364,37 +365,22 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int) ResolveCtx {
     r = resolve_expr(r, n.a);
     return r;
   }
-  if (k == NODE_PRINT || k == NODE_EXPR_STMT) {
-    r = resolve_expr(r, n.a);
-    return r;
-  }
-  if (k == NODE_BREAK) {
-    r = resolve_expr(r, n.a);
-    return r;
-  }
-  if (k == NODE_CONTINUE) {
-    r = resolve_expr(r, n.a);
-    return r;
-  }
+  if (k == NODE_PRINT || k == NODE_EXPR_STMT) { r = resolve_expr(r, n.a); return r; }
+  if (k == NODE_BREAK) { if (loopDepth <= 0) { r.err = 1; return r; } r = resolve_expr(r, n.a); return r; }
+  if (k == NODE_CONTINUE) { if (loopDepth <= 0) { r.err = 1; return r; } r = resolve_expr(r, n.a); return r; }
   if (k == NODE_IF) {
     r = resolve_expr(r, n.a);
     if (r.err == 1) { return r; }
     if (n.b != -1) {
       var thenNode = nodearena_get(r.arena, n.b);
-      if (thenNode.kind == NODE_BLOCK) {
-        r = resolve_block_nodes(r, n.b);
-      } else {
-        r = resolve_statement(r, n.b);
-      }
+      if (thenNode.kind == NODE_BLOCK) { r = resolve_block_nodes(r, n.b, loopDepth); }
+      else { r = resolve_statement(r, n.b, loopDepth); }
     }
     if (r.err == 1) { return r; }
     if (n.c != -1) {
       var elseNode = nodearena_get(r.arena, n.c);
-      if (elseNode.kind == NODE_BLOCK) {
-        r = resolve_block_nodes(r, n.c);
-      } else {
-        r = resolve_statement(r, n.c);
-      }
+      if (elseNode.kind == NODE_BLOCK) { r = resolve_block_nodes(r, n.c, loopDepth); }
+      else { r = resolve_statement(r, n.c, loopDepth); }
     }
     return r;
   }
@@ -403,11 +389,8 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int) ResolveCtx {
     if (r.err == 1) { return r; }
     if (n.b != -1) {
       var body = nodearena_get(r.arena, n.b);
-      if (body.kind == NODE_BLOCK) {
-        r = resolve_block_nodes(r, n.b);
-      } else {
-        r = resolve_statement(r, n.b);
-      }
+      if (body.kind == NODE_BLOCK) { r = resolve_block_nodes(r, n.b, loopDepth + 1); }
+      else { r = resolve_statement(r, n.b, loopDepth + 1); }
     }
     return r;
   }
@@ -420,34 +403,60 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int) ResolveCtx {
     if (r.err == 1) { return r; }
     if (n.d != -1) {
       var body2 = nodearena_get(r.arena, n.d);
-      if (body2.kind == NODE_BLOCK) {
-        r = resolve_block_nodes(r, n.d);
-      } else {
-        r = resolve_statement(r, n.d);
-      }
+      if (body2.kind == NODE_BLOCK) { r = resolve_block_nodes(r, n.d, loopDepth + 1); }
+      else { r = resolve_statement(r, n.d, loopDepth + 1); }
     }
     return r;
   }
   if (k == NODE_BLOCK) {
-    return resolve_block_nodes(r, stmtIdx);
+    return resolve_block_nodes(r, stmtIdx, loopDepth);
   }
   return r;
 }
 
-// Resolve a block by walking only its direct statements.
-def resolve_block_nodes(ctx ResolveCtx, blockIdx int) ResolveCtx {
+// Resolve a block by walking only its direct statements (depth + loopDepth carried in).
+def resolve_block_nodes(ctx ResolveCtx, blockIdx int, loopDepth int) ResolveCtx {
   var r = ctx;
   var blk = nodearena_get(r.arena, blockIdx);
   var start = blk.a;
   var end = blk.a + blk.b;
 
+  // Precompute nested block ranges to skip linear scanning of child contents here.
+  var childStarts = vecint_new(8);
+  var childEnds = vecint_new(8);
+  var scan = start;
+  while (scan < end) {
+    if (scan == blockIdx) { scan = scan + 1; continue; }
+    var bn = nodearena_get(r.arena, scan);
+    if (bn.kind == NODE_BLOCK) {
+      childStarts = vecint_push(childStarts, bn.a);
+      childEnds = vecint_push(childEnds, bn.a + bn.b);
+    }
+    scan = scan + 1;
+  }
+
   r.scope = scope_enter(r.scope);
   var i = start;
   while (i < end && r.err == 0) {
+    // Skip over child block contents (they are handled via parent statements).
+    var j = 0;
+    var skipped = 0;
+    while (j < childStarts.length) {
+      var cs = vecint_get(childStarts, j);
+      var ce = vecint_get(childEnds, j);
+      if (i >= cs && i < ce) {
+        i = ce;
+        skipped = 1;
+        break;
+      }
+      j = j + 1;
+    }
+    if (skipped == 1) { continue; }
+
     var n2 = nodearena_get(r.arena, i);
     // Skip nested block nodes here; they are traversed via their parent statements.
     if (n2.kind != NODE_BLOCK && is_statement_kind(n2.kind) == 1) {
-      r = resolve_statement(r, i);
+      r = resolve_statement(r, i, loopDepth);
     }
     i = i + 1;
   }
@@ -477,7 +486,7 @@ def resolve_function(ctx ResolveCtx, fn Node) ResolveCtx {
   var bodyIdx = fn.a;
   var fnCtx = ResolveCtx{r.arena, r.tokens, r.src, fnScope, r.types, 0, 0};
   if (bodyIdx != -1) {
-    fnCtx = resolve_block_nodes(fnCtx, bodyIdx);
+    fnCtx = resolve_block_nodes(fnCtx, bodyIdx, 0);
   }
   if (fnCtx.err == 1) { r.err = 1; return r; }
   if (fnCtx.hasReturn == 0) { r.err = 1; return r; }
