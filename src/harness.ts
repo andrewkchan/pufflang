@@ -130,7 +130,7 @@ def main() {
   var src = "${expr}";
   var ok = parse_expr_ok(byte~(&src[0]), len(src));
   if (ok == 0 && ${allowError ? 0 : 1} == 1) { __exit__(2); }
-  var sexpr = parse_expr_to_sexpr(byte~(&src[0]), len(src));
+  var sexpr = parse_expr_ast_to_sexpr(byte~(&src[0]), len(src));
   print_str(sexpr);
 }
 `
