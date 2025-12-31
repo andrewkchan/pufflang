@@ -142,3 +142,44 @@ export function runRawIR(ir: string): RunResult {
   const binPath = buildWithClang(irPath)
   return runBinary(binPath)
 }
+
+/**
+ * Convenience: run Stage1 expression token/operator counters.
+ * Returns stdout as string with counts separated by spaces.
+ */
+export function runStage1ExprCounts(expr: string): RunResult {
+  const source = `
+${loadStage1Ast()}
+${loadStage1Scanner()}
+${loadStage1ParserExpr()}
+
+def print_int(x int) {
+  if (x == 0) { __putchar__(48); return; }
+  var n = x;
+  var buf = vecbyte_new(16);
+  if (n < 0) { __putchar__(45); n = 0 - n; }
+  while (n > 0) {
+    buf = vecbyte_push(buf, byte(48 + (n % 10)));
+    n = n / 10;
+  }
+  var i = buf.length - 1;
+  while (i >= 0) {
+    __putchar__(int((buf.data + i)~));
+    i = i - 1;
+  }
+}
+
+def main() {
+  var src = "${expr}";
+  var ptr = byte~(&src[0]);
+  var l = len(src);
+  var tok = expr_token_count(ptr, l);
+  var op = expr_operator_count(ptr, l);
+  print_int(tok);
+  __putchar__(32);
+  print_int(op);
+  __putchar__(10);
+}
+`
+  return compileAndRunWithStdlib(source)
+}
