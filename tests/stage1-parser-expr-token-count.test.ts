@@ -18,15 +18,17 @@ def print_int(x int) { if (x == 0) { __putchar__(48); return; } var n = x; var b
 def main() {
   var a = byte~(&"1+2"[0]);
   var b = byte~(&"a||b&&c"[0]);
-  print_int(expr_token_count(a, cstr_len(a)));
-  __putchar__(32);
-  print_int(expr_token_count(b, cstr_len(b)));
-  __putchar__(10);
+  var c = byte~(&"0x10+1"[0]);
+  var d = byte~(&"-a*2"[0]);
+  print_int(expr_token_count(a, cstr_len(a))); __putchar__(32);
+  print_int(expr_token_count(b, cstr_len(b))); __putchar__(32);
+  print_int(expr_token_count(c, cstr_len(c))); __putchar__(32);
+  print_int(expr_token_count(d, cstr_len(d))); __putchar__(10);
 }
 `
     const res = compileAndRunWithStdlib(source)
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
-    expect(res.stdout.trim()).toBe("4 6")
+    expect(res.stdout.trim()).toBe("4 6 4 5")
   })
 })
