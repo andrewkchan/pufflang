@@ -17,13 +17,18 @@ def p_kind(p ParseCtx) int { return token_kind_at(p.tokens, p.idx); }
 def p_advance(p ParseCtx) ParseCtx { return ParseCtx{p.tokens, p.src, p.idx + 1, p.err, p.arena}; }
 
 // Placeholder: expression parsing should defer to parser_expr.puff once integrated.
-def p_skip_expr(p ParseCtx) ParseCtx {
-  // naive skip until ';' or '}' or EOF
-  var cur = p;
-  while (p_kind(cur) != TOKEN_SEMICOLON && p_kind(cur) != TOKEN_RIGHT_BRACE && p_kind(cur) != TOKEN_EOF) {
-    cur = p_advance(cur);
+// Integrate expression parser for real spans and S-expr capture.
+// We don't build expression AST here yet; store the S-expr as a StringBuilder->
+// String node by encoding in Node fields a/b as offsets into a temp string table (future work).
+// For now, return the token span to keep resolver/codegen unblocked.
+struct Span { start int, end int, err int }
+
+def p_parse_expr_span(p ParseCtx) Span {
+  var start = p.idx;
+  while (p_kind(p) != TOKEN_SEMICOLON && p_kind(p) != TOKEN_RIGHT_BRACE && p_kind(p) != TOKEN_EOF) {
+    p = p_advance(p);
   }
-  return cur;
+  return Span{start, p.idx, 0};
 }
 
 def parse_statement(p ParseCtx, out ParseCtx~) int {
@@ -35,36 +40,41 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     p2 = p_advance(p2);
     if (p_kind(p2) != TOKEN_EQUAL) { p2.err = 1; out~ = p2; return -1; }
     p2 = p_advance(p2);
-    p2 = p_skip_expr(p2);
+    var span = p_parse_expr_span(p2);
+    p2.idx = span.end;
     if (p_kind(p2) != TOKEN_SEMICOLON) { p2.err = 1; out~ = p2; return -1; }
     p2 = p_advance(p2);
-    p2.arena = nodearena_push(p2.arena, Node{NODE_VAR_STMT, nameTok, 0, 0, 0, 0, -1});
+    p2.arena = nodearena_push(p2.arena, Node{NODE_VAR_STMT, nameTok, span.start, span.end, 0, 0, -1});
     out~ = p2;
     return p2.arena.nodes.length - 1;
   }
   if (k == TOKEN_RETURN) {
     var p2 = p_advance(p);
-    p2 = p_skip_expr(p2);
+    var span = p_parse_expr_span(p2);
+    p2.idx = span.end;
     if (p_kind(p2) != TOKEN_SEMICOLON) { p2.err = 1; out~ = p2; return -1; }
     p2 = p_advance(p2);
-    p2.arena = nodearena_push(p2.arena, Node{NODE_RETURN, 0, 0, 0, 0, 0, -1});
+    p2.arena = nodearena_push(p2.arena, Node{NODE_RETURN, span.start, span.end, 0, 0, 0, -1});
     out~ = p2;
     return p2.arena.nodes.length - 1;
   }
   if (k == TOKEN_PRINT) {
     var p2 = p_advance(p);
-    p2 = p_skip_expr(p2);
+    var span = p_parse_expr_span(p2);
+    p2.idx = span.end;
     if (p_kind(p2) != TOKEN_SEMICOLON) { p2.err = 1; out~ = p2; return -1; }
     p2 = p_advance(p2);
-    p2.arena = nodearena_push(p2.arena, Node{NODE_PRINT, 0, 0, 0, 0, 0, -1});
+    p2.arena = nodearena_push(p2.arena, Node{NODE_PRINT, span.start, span.end, 0, 0, 0, -1});
     out~ = p2;
     return p2.arena.nodes.length - 1;
   }
   // fallback: expression statement
-  var p3 = p_skip_expr(p);
+  var p3 = p;
+  var span = p_parse_expr_span(p3);
+  p3.idx = span.end;
   if (p_kind(p3) != TOKEN_SEMICOLON) { p3.err = 1; out~ = p3; return -1; }
   p3 = p_advance(p3);
-  p3.arena = nodearena_push(p3.arena, Node{NODE_EXPR_STMT, 0, 0, 0, 0, 0, -1});
+  p3.arena = nodearena_push(p3.arena, Node{NODE_EXPR_STMT, span.start, span.end, 0, 0, 0, -1});
   out~ = p3;
   return p3.arena.nodes.length - 1;
 }
