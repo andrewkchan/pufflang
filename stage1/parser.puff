@@ -185,6 +185,12 @@ def parse_simple_ast(tokens VecInt) ParseResult {
   return ParseResult{arena, root};
 }
 
+// Convenience helper: scan source to token kinds and build AST.
+def parse_simple_ast_from_source(src byte~, n int) ParseResult {
+  var toks = scan_kinds(src, n);
+  return parse_simple_ast(toks);
+}
+
 // --- Minimal S-expression printer for a single def/return program ---
 
 def ts_kind(tokens Vec, idx int) int { return token_kind_at(tokens, idx); }
