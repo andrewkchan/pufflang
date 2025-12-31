@@ -58,4 +58,49 @@ describe("Stage1 types helpers", () => {
     expect(res.stderr).toBe("")
     expect(res.stdout.trim()).toBe("0 1 1 0 0 1 1")
   })
+
+  it("compares types structurally", () => {
+    const source = `
+${typesSrc}
+
+def print_int(x int) {
+  if (x == 0) { __putchar__(48); return; }
+  var n = x;
+  var buf = vecbyte_new(16);
+  if (n < 0) { __putchar__(45); n = 0 - n; }
+  while (n > 0) {
+    buf = vecbyte_push(buf, byte(48 + (n % 10)));
+    n = n / 10;
+  }
+  var i = buf.length - 1;
+  while (i >= 0) {
+    __putchar__(int((buf.data + i)~));
+    i = i - 1;
+  }
+}
+
+def main() {
+  var tt = typetable_new();
+  var idInt = 5;
+  var idFloat = 4;
+  var idPtrInt = tt.types.length; tt = typetable_make_pointer(tt, idInt);
+  var idPtrByte = tt.types.length; tt = typetable_make_pointer(tt, 2);
+  var idArrInt3 = tt.types.length; tt = typetable_make_array(tt, idInt, 3);
+  var idArrInt4 = tt.types.length; tt = typetable_make_array(tt, idInt, 4);
+  var idArrByte3 = tt.types.length; tt = typetable_make_array(tt, 2, 3);
+
+  print_int(type_equals(tt, idInt, idInt)); __putchar__(32);      // 1
+  print_int(type_equals(tt, idInt, idFloat)); __putchar__(32);    // 0
+  print_int(type_equals(tt, idPtrInt, idPtrInt)); __putchar__(32);// 1
+  print_int(type_equals(tt, idPtrInt, idPtrByte)); __putchar__(32);//0
+  print_int(type_equals(tt, idArrInt3, idArrInt3)); __putchar__(32);//1
+  print_int(type_equals(tt, idArrInt3, idArrInt4)); __putchar__(32);//0
+  print_int(type_equals(tt, idArrInt3, idArrByte3)); __putchar__(10);//0
+}
+`
+    const res = compileAndRunWithStdlib(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(res.stdout.trim()).toBe("1 0 1 0 1 0 0")
+  })
 })
