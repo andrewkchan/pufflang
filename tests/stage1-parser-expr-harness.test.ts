@@ -21,4 +21,9 @@ describe("Stage1 expression parser via harness", () => {
     expect(res.stderr).toBe("")
     expect(res.stdout.trim()).toBe("(| (<< x 1) (& y z))")
   })
+
+  test("fails on invalid expression", () => {
+    const res = runStage1ExprSexpr("1 +", { allowError: false })
+    expect(res.status).not.toBe(0)
+  })
 })

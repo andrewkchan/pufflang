@@ -112,7 +112,8 @@ export function compileAndRunWithStdlib(source: string, input?: string, env?: No
  * Convenience: run the Stage1 Puff expression parser to produce an S-expression.
  * This uses the Stage0 compiler to compile Puff Stage1 sources plus stdlib.
  */
-export function runStage1ExprSexpr(expr: string): RunResult {
+export function runStage1ExprSexpr(expr: string, opts?: { allowError?: boolean }): RunResult {
+  const allowError = opts?.allowError ?? false
   const source = `
 ${loadStage1Ast()}
 ${loadStage1Scanner()}
@@ -127,6 +128,8 @@ def print_str(s String) {
 }
 def main() {
   var src = "${expr}";
+  var ok = parse_expr_ok(byte~(&src[0]), len(src));
+  if (ok == 0 && ${allowError ? 0 : 1} == 1) { __exit__(2); }
   var sexpr = parse_expr_to_sexpr(byte~(&src[0]), len(src));
   print_str(sexpr);
 }
