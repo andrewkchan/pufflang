@@ -40,4 +40,18 @@ describe("Stage1 expression parser via harness", () => {
     expect(res.stderr).toBe("")
     expect(res.stdout.trim()).toBe("(|| (! a) b)")
   })
+
+  test("handles prefix increment", () => {
+    const res = runStage1ExprSexpr("++x + 1")
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(res.stdout.trim()).toBe("(+ (pre++ x) 1)")
+  })
+
+  test("handles postfix increment", () => {
+    const res = runStage1ExprSexpr("x++ + 1")
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(res.stdout.trim()).toBe("(+ (post++ x) 1)")
+  })
 })

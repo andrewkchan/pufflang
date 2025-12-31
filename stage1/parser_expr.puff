@@ -70,6 +70,17 @@ def parse_expression(ps ParseState, minPrec int, out ParseState~) StringBuilder 
     lhs = sb_append_byte(lhs, byte(32));
     lhs = sb_append_string(lhs, sb_to_string(inner));
     lhs = sb_append_byte(lhs, byte(41));
+  } else if (k0 == TOKEN_PLUS_PLUS || k0 == TOKEN_MINUS_MINUS) {
+    var opLex = ps_lexeme(ps2, ps2.idx);
+    ps2 = ps_advance(ps2);
+    var inner = parse_expression(ps2, 9, &ps2);
+    if (ps2.err == 1) { out~ = ps2; return inner; }
+    lhs = sb_append_byte(lhs, byte(40));
+    lhs = sb_append_bytes(lhs, byte~(&"pre"[0]), 3);
+    lhs = sb_append_string(lhs, opLex);
+    lhs = sb_append_byte(lhs, byte(32));
+    lhs = sb_append_string(lhs, sb_to_string(inner));
+    lhs = sb_append_byte(lhs, byte(41));
   } else {
     if (k0 == TOKEN_LEFT_PAREN) {
       ps2 = ps_advance(ps2);
@@ -91,6 +102,20 @@ def parse_expression(ps ParseState, minPrec int, out ParseState~) StringBuilder 
       out~ = ps2;
       return lhs;
     }
+  }
+
+  // postfix ++/--
+  while (ps_kind(ps2) == TOKEN_PLUS_PLUS || ps_kind(ps2) == TOKEN_MINUS_MINUS) {
+    var opLex2 = ps_lexeme(ps2, ps2.idx);
+    ps2 = ps_advance(ps2);
+    var newSb = sb_new();
+    newSb = sb_append_byte(newSb, byte(40));
+    newSb = sb_append_bytes(newSb, byte~(&"post"[0]), 4);
+    newSb = sb_append_string(newSb, opLex2);
+    newSb = sb_append_byte(newSb, byte(32));
+    newSb = sb_append_string(newSb, sb_to_string(lhs));
+    newSb = sb_append_byte(newSb, byte(41));
+    lhs = newSb;
   }
 
   while (true) {
