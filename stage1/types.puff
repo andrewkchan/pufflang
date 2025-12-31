@@ -54,6 +54,12 @@ def typetable_make_array(tt TypeTable, elemId int, length int) TypeTable {
   return TypeTable{v};
 }
 
+def typetable_make_struct(tt TypeTable, structId int) TypeTable {
+  var t = Type{TYPECATEGORY_STRUCT, -1, 0, structId};
+  var v = typetable_push_raw(tt.types, t);
+  return TypeTable{v};
+}
+
 def typetable_get(tt TypeTable, id int) Type {
   var ptr = vec_get_ptr(tt.types, id);
   var cat = (int~(ptr))~;
