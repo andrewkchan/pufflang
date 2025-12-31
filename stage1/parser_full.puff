@@ -1,0 +1,109 @@
+// Stage1 parser scaffold for full language coverage (work-in-progress).
+// Not wired into tests yet; kept separate from the minimal parser to avoid regressions.
+// Goals for future iterations:
+//  - Parse statements (var/expr/if/while/for/return/print/block) with expression parser from parser_expr.puff
+//  - Produce NodeArena with spans into token stream for later resolver/codegen
+//  - Support import/export/default args/overloading as grammar grows
+
+struct ParseCtx {
+  tokens Vec,
+  src byte~,
+  idx int,
+  err int,
+  arena NodeArena
+}
+
+def p_kind(p ParseCtx) int { return token_kind_at(p.tokens, p.idx); }
+def p_advance(p ParseCtx) ParseCtx { return ParseCtx{p.tokens, p.src, p.idx + 1, p.err, p.arena}; }
+
+// Placeholder: expression parsing should defer to parser_expr.puff once integrated.
+def p_skip_expr(p ParseCtx) ParseCtx {
+  // naive skip until ';' or '}' or EOF
+  var cur = p;
+  while (p_kind(cur) != TOKEN_SEMICOLON && p_kind(cur) != TOKEN_RIGHT_BRACE && p_kind(cur) != TOKEN_EOF) {
+    cur = p_advance(cur);
+  }
+  return cur;
+}
+
+def parse_statement(p ParseCtx, out ParseCtx~) int {
+  var k = p_kind(p);
+  if (k == TOKEN_VAR) {
+    var p2 = p_advance(p);
+    if (p_kind(p2) != TOKEN_IDENTIFIER) { p2.err = 1; out~ = p2; return -1; }
+    var nameTok = p2.idx;
+    p2 = p_advance(p2);
+    if (p_kind(p2) != TOKEN_EQUAL) { p2.err = 1; out~ = p2; return -1; }
+    p2 = p_advance(p2);
+    p2 = p_skip_expr(p2);
+    if (p_kind(p2) != TOKEN_SEMICOLON) { p2.err = 1; out~ = p2; return -1; }
+    p2 = p_advance(p2);
+    p2.arena = nodearena_push(p2.arena, Node{NODE_VAR_STMT, nameTok, 0, 0, 0, 0, -1});
+    out~ = p2;
+    return p2.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_RETURN) {
+    var p2 = p_advance(p);
+    p2 = p_skip_expr(p2);
+    if (p_kind(p2) != TOKEN_SEMICOLON) { p2.err = 1; out~ = p2; return -1; }
+    p2 = p_advance(p2);
+    p2.arena = nodearena_push(p2.arena, Node{NODE_RETURN, 0, 0, 0, 0, 0, -1});
+    out~ = p2;
+    return p2.arena.nodes.length - 1;
+  }
+  if (k == TOKEN_PRINT) {
+    var p2 = p_advance(p);
+    p2 = p_skip_expr(p2);
+    if (p_kind(p2) != TOKEN_SEMICOLON) { p2.err = 1; out~ = p2; return -1; }
+    p2 = p_advance(p2);
+    p2.arena = nodearena_push(p2.arena, Node{NODE_PRINT, 0, 0, 0, 0, 0, -1});
+    out~ = p2;
+    return p2.arena.nodes.length - 1;
+  }
+  // fallback: expression statement
+  var p3 = p_skip_expr(p);
+  if (p_kind(p3) != TOKEN_SEMICOLON) { p3.err = 1; out~ = p3; return -1; }
+  p3 = p_advance(p3);
+  p3.arena = nodearena_push(p3.arena, Node{NODE_EXPR_STMT, 0, 0, 0, 0, 0, -1});
+  out~ = p3;
+  return p3.arena.nodes.length - 1;
+}
+
+struct ParseModuleResult { arena NodeArena, root int, err int }
+
+def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
+  var ctx = ParseCtx{tokens, src, 0, 0, nodearena_new(64)};
+  var fnStart = ctx.arena.nodes.length;
+  while (p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
+    // Only allow def for now; skip others.
+    if (p_kind(ctx) != TOKEN_DEF) { ctx.err = 1; break; }
+    ctx = p_advance(ctx);
+    if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 1; break; }
+    var nameTok = ctx.idx;
+    ctx = p_advance(ctx);
+    if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 1; break; }
+    // Skip params
+    while (p_kind(ctx) != TOKEN_RIGHT_PAREN && p_kind(ctx) != TOKEN_EOF) { ctx = p_advance(ctx); }
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 1; break; }
+    ctx = p_advance(ctx);
+    if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 1; break; }
+    ctx = p_advance(ctx);
+    var blockStart = ctx.arena.nodes.length;
+    while (p_kind(ctx) != TOKEN_RIGHT_BRACE && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
+      var stmtIdx = parse_statement(ctx, &ctx);
+      if (ctx.err == 1) { break; }
+    }
+    if (ctx.err == 1) { break; }
+    if (p_kind(ctx) != TOKEN_RIGHT_BRACE) { ctx.err = 1; break; }
+    ctx = p_advance(ctx);
+    var blockCount = ctx.arena.nodes.length - blockStart;
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_BLOCK, blockStart, blockCount, 0, 0, 0, -1});
+    var blkIdx = ctx.arena.nodes.length - 1;
+    ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, blkIdx, 0, nameTok, 0, 0, -1});
+  }
+  if (ctx.err == 1) { return ParseModuleResult{ctx.arena, -1, 1}; }
+  var rootCount = ctx.arena.nodes.length - fnStart;
+  ctx.arena = nodearena_push(ctx.arena, Node{NODE_BLOCK, fnStart, rootCount, 0, 0, 0, -1});
+  var rootIdx = ctx.arena.nodes.length - 1;
+  return ParseModuleResult{ctx.arena, rootIdx, 0};
+}

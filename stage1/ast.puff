@@ -164,6 +164,13 @@ var NODE_DOT int = 17;
 var NODE_LEN int = 18;
 var NODE_LIST int = 19;
 var NODE_CAST int = 20;
+var NODE_PRINT int = 21;
+var NODE_EXPR_STMT int = 22;
+var NODE_IF int = 23;
+var NODE_WHILE int = 24;
+var NODE_FOR int = 25; // lowered to while but keep node kind for clarity
+var NODE_BREAK int = 26;
+var NODE_CONTINUE int = 27;
 // List initializer kinds
 var LIST_INIT_LIST int = 1;
 var LIST_INIT_REPEAT int = 2;
