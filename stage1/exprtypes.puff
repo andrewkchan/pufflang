@@ -1,0 +1,100 @@
+// Expression type inference for Stage1 using ParseExprAstResult and helper tables.
+// Depends on: ast.puff (Node/NodeArena access), parser_expr.puff (NODE kinds and arena),
+// typerules.puff (binary/unary typing), literaltypes.puff (literal typing), typeenv.puff.
+
+struct TypeInferResult { env TypeEnv, typeId int, err int }
+
+def tok_kind(tokens Vec, idx int) int { return token_kind_at(tokens, idx); }
+def tok_lexeme(tokens Vec, idx int, src byte~) String {
+  var start = token_start_at(tokens, idx);
+  var ln = token_length_at(tokens, idx);
+  return String{src + start, ln};
+}
+
+def infer_node(env TypeEnv, tokens Vec, src byte~, arena NodeArena, idx int) TypeInferResult {
+  var n = nodearena_get(arena, idx);
+  // literal
+  if (n.kind == NODE_LITERAL) {
+    return literal_type(env, tokens, n.a, src);
+  }
+  // group
+  if (n.kind == NODE_GROUP) {
+    return infer_node(env, tokens, src, arena, n.a);
+  }
+  // unary
+  if (n.kind == NODE_UNARY) {
+    var opTok = n.a;
+    var operand = infer_node(env, tokens, src, arena, n.b);
+    if (operand.err == 1) { return operand; }
+    var k = tok_kind(tokens, opTok);
+    var op = -1;
+    if (k == TOKEN_MINUS) { op = UOP_NEG; }
+    if (k == TOKEN_BANG) { op = UOP_NOT; }
+    if (k == TOKEN_TILDE) { op = UOP_DEREF; }
+    var resId = type_unary_result(operand.env.tt, operand.typeId, op);
+    if (resId == -1) { return TypeInferResult{operand.env, -1, 1}; }
+    return TypeInferResult{operand.env, resId, 0};
+  }
+  // logical
+  if (n.kind == NODE_LOGICAL) {
+    var l = infer_node(env, tokens, src, arena, n.a);
+    if (l.err == 1) { return l; }
+    var r = infer_node(l.env, tokens, src, arena, n.b);
+    if (r.err == 1) { return r; }
+    var resId = type_binary_logical_result(r.env.tt, l.typeId, r.typeId, 0);
+    if (resId == -1) { return TypeInferResult{r.env, -1, 1}; }
+    return TypeInferResult{r.env, resId, 0};
+  }
+  // binary
+  if (n.kind == NODE_BINARY) {
+    var l = infer_node(env, tokens, src, arena, n.a);
+    if (l.err == 1) { return l; }
+    var r = infer_node(l.env, tokens, src, arena, n.b);
+    if (r.err == 1) { return r; }
+    var k = tok_kind(tokens, n.c);
+    var lex = tok_lexeme(tokens, n.c, src);
+    var opId = -1;
+    var result = -1;
+    // arithmetic / pointer / numeric
+    if (k == TOKEN_PLUS) { opId = OP_ADD; result = type_binary_arith_result(r.env.tt, l.typeId, r.typeId, opId); }
+    if (k == TOKEN_MINUS) { opId = OP_SUB; result = type_binary_arith_result(r.env.tt, l.typeId, r.typeId, opId); }
+    if (k == TOKEN_STAR) { opId = OP_MUL; result = type_binary_arith_result(r.env.tt, l.typeId, r.typeId, opId); }
+    if (k == TOKEN_SLASH) { opId = OP_DIV; result = type_binary_arith_result(r.env.tt, l.typeId, r.typeId, opId); }
+    if (k == TOKEN_PERCENT) { opId = OP_MOD; result = type_binary_arith_result(r.env.tt, l.typeId, r.typeId, opId); }
+    // bitwise
+    if (k == TOKEN_AMP) { result = type_binary_bitwise_result(r.env.tt, l.typeId, r.typeId, OP_BIT_AND); }
+    if (k == TOKEN_BAR) { result = type_binary_bitwise_result(r.env.tt, l.typeId, r.typeId, OP_BIT_OR); }
+    if (k == TOKEN_CARET) { result = type_binary_bitwise_result(r.env.tt, l.typeId, r.typeId, OP_BIT_XOR); }
+    // shifts
+    if (k == TOKEN_SHIFT_LEFT) { result = type_binary_shift_result(r.env.tt, l.typeId, r.typeId, OP_SHL); }
+    if (k == TOKEN_SHIFT_RIGHT) { result = type_binary_shift_result(r.env.tt, l.typeId, r.typeId, OP_SHR); }
+    // comparisons
+    if (k == TOKEN_LESS) { result = type_binary_compare_result(r.env.tt, l.typeId, r.typeId, OP_LT); }
+    if (k == TOKEN_LESS_EQUAL) { result = type_binary_compare_result(r.env.tt, l.typeId, r.typeId, OP_LE); }
+    if (k == TOKEN_GREATER) { result = type_binary_compare_result(r.env.tt, l.typeId, r.typeId, OP_GT); }
+    if (k == TOKEN_GREATER_EQUAL) { result = type_binary_compare_result(r.env.tt, l.typeId, r.typeId, OP_GE); }
+    if (k == TOKEN_EQUAL_EQUAL) { result = type_binary_compare_result(r.env.tt, l.typeId, r.typeId, OP_EQ); }
+    if (k == TOKEN_BANG_EQUAL) { result = type_binary_compare_result(r.env.tt, l.typeId, r.typeId, OP_NE); }
+    if (result == -1) { return TypeInferResult{r.env, -1, 1}; }
+    return TypeInferResult{r.env, result, 0};
+  }
+  // ternary
+  if (n.kind == NODE_TERNARY) {
+    var c = infer_node(env, tokens, src, arena, n.a);
+    if (c.err == 1) { return c; }
+    var t = infer_node(c.env, tokens, src, arena, n.b);
+    if (t.err == 1) { return t; }
+    var e = infer_node(t.env, tokens, src, arena, n.c);
+    if (e.err == 1) { return e; }
+    if (type_equals(e.env.tt, t.typeId, e.typeId) == 0) { return TypeInferResult{e.env, -1, 1}; }
+    return TypeInferResult{e.env, t.typeId, 0};
+  }
+  return TypeInferResult{env, -1, 1};
+}
+
+// Infer type for expression source; returns updated env to persist newly allocated types.
+def infer_expression_type(env TypeEnv, src byte~, n int) TypeInferResult {
+  var parsed = parse_expression_ast(src, n);
+  if (parsed.err == 1) { return TypeInferResult{env, -1, 1}; }
+  return infer_node(env, parsed.tokens, parsed.src, parsed.arena, parsed.root);
+}
