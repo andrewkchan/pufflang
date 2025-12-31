@@ -20,4 +20,11 @@ var g = 1;
     expect(out).toMatch(/structs=2/)
     expect(out).toMatch(/vars=1/)
   })
+
+  it("handles empty module", () => {
+    const res = runStage1ModuleCounts("")
+    expect(res.status).toBe(0)
+    const out = res.stdout.trim()
+    expect(out).toBe("funcs=0 imports=0 exports=0 structs=0 vars=0")
+  })
 })
