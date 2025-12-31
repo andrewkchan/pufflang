@@ -252,13 +252,14 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
         if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 3011; break; }
         ctx = p_advance(ctx);
         var fieldCount = 0;
+        var fieldStart = ctx.idx;
         while (p_kind(ctx) != TOKEN_RIGHT_BRACE && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
           if (p_kind(ctx) == TOKEN_IDENTIFIER) { fieldCount = fieldCount + 1; }
           ctx = p_advance(ctx);
         }
         if (p_kind(ctx) != TOKEN_RIGHT_BRACE) { ctx.err = 3012; break; }
         ctx = p_advance(ctx);
-        ctx.arena = nodearena_push(ctx.arena, Node{NODE_STRUCT_DECL, fieldCount, isExport, nameTok, 0, 0, -1});
+        ctx.arena = nodearena_push(ctx.arena, Node{NODE_STRUCT_DECL, fieldCount, isExport, nameTok, fieldStart, 0, -1});
         continue;
       }
       ctx = p_advance(ctx);
@@ -369,6 +370,25 @@ def param_names_string(tokens Vec, src byte~, startIdx int) String {
   return sb_to_string(sb);
 }
 
+// Collect struct field identifier names starting at startIdx until right brace.
+def field_names_string(tokens Vec, src byte~, startIdx int) String {
+  if (startIdx == -1) { return String{src, 0}; }
+  var sb = sb_new();
+  var i = startIdx;
+  var first = 1;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == TOKEN_RIGHT_BRACE) { break; }
+    if (k == TOKEN_IDENTIFIER) {
+      if (first == 0) { sb = sb_append_byte(sb, byte(44)); } // ','
+      sb = sb_append_string(sb, tok_string(tokens, i, src));
+      first = 0;
+    }
+    i = i + 1;
+  }
+  return sb_to_string(sb);
+}
+
 def module_summary(res ParseModuleResult) String {
   if (res.err != 0) {
     var sbErr = sb_new();
@@ -450,6 +470,9 @@ def module_summary(res ParseModuleResult) String {
       sb = sb_append_string(sb, sname);
       sb = sb_append_cstr(sb, byte~(&" export="[0]));
       sb = sb_append_int(sb, n.b);
+      var fnames = field_names_string(res.tokens, res.src, n.d);
+      sb = sb_append_cstr(sb, byte~(&" names="[0]));
+      sb = sb_append_string(sb, fnames);
     }
     if (n.kind == NODE_BLOCK) {
       sb = sb_append_cstr(sb, byte~(&" start="[0]));
