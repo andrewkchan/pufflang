@@ -495,17 +495,19 @@ def count_functions(arena NodeArena, importFlag int, exportFlag int) int {
   return cnt;
 }
 
-// Returns "funcs=<n> imports=<n> exports=<n> structs=<n>"
+// Returns "funcs=<n> imports=<n> exports=<n> structs=<n> vars=<n>"
 def module_counts(res ParseModuleResult) String {
   if (res.err != 0) { return String{byte~(&"err"[0]), 3}; }
   var funcs = count_functions(res.arena, -1, -1);
   var imports = count_functions(res.arena, 1, -1);
   var exports = count_functions(res.arena, -1, 1);
   var structs = count_nodes(res.arena, NODE_STRUCT_DECL);
+  var vars = count_nodes(res.arena, NODE_VAR_STMT);
   var sb = sb_new();
   sb = sb_append_cstr(sb, byte~(&"funcs="[0])); sb = sb_append_int(sb, funcs);
   sb = sb_append_cstr(sb, byte~(&" imports="[0])); sb = sb_append_int(sb, imports);
   sb = sb_append_cstr(sb, byte~(&" exports="[0])); sb = sb_append_int(sb, exports);
   sb = sb_append_cstr(sb, byte~(&" structs="[0])); sb = sb_append_int(sb, structs);
+  sb = sb_append_cstr(sb, byte~(&" vars="[0])); sb = sb_append_int(sb, vars);
   return sb_to_string(sb);
 }

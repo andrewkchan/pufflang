@@ -9,6 +9,7 @@ import def ext0();
 import def ext1(a, b);
 export struct P { x; y; }
 struct Q { z; }
+var g = 1;
 `
     const res = runStage1ModuleCounts(program)
     expect(res.status).toBe(0)
@@ -17,5 +18,6 @@ struct Q { z; }
     expect(out).toMatch(/imports=2/)
     expect(out).toMatch(/exports=1/)
     expect(out).toMatch(/structs=2/)
+    expect(out).toMatch(/vars=1/)
   })
 })

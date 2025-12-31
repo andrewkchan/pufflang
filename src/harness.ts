@@ -283,7 +283,7 @@ def main() {
 
 /**
  * Count module-level constructs using parser_full: functions, imports, exports, structs.
- * Outputs: "funcs=<n> imports=<n> exports=<n> structs=<n>"
+ * Outputs: "funcs=<n> imports=<n> exports=<n> structs=<n> vars=<n>"
  */
 export function runStage1ModuleCounts(program: string): RunResult {
   const normalized = program.trim().replace(/\r?\n/g, " ")
