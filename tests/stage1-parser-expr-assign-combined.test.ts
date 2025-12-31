@@ -78,4 +78,33 @@ describe("Stage1 parser_expr combined assignments", () => {
     const lines = res.stdout.trim().split("\n")
     expect(lines).toEqual(["4", "9", "3"])
   })
+
+  it("desugars chained +=", () => {
+    const res = (() => {
+      const source = `
+${astSrc}
+${scannerSrc}
+${parserExprSrc}
+
+def print_int(x int) { __putchar__(48 + x); __putchar__(32); }
+
+def main() {
+  var src = "a += b += c";
+  var res = parse_expr_ast(byte~(&src[0]), len(src));
+  if (res.err == 1 || res.root == -1) { __exit__(1); }
+  print_int(res.arena.nodes.length);
+  var i = 0;
+  while (i < res.arena.nodes.length) {
+    var n = nodearena_get(res.arena, i);
+    print_int(n.kind);
+    i = i + 1;
+  }
+}
+`
+      return compileAndRunWithStdlib(source)
+    })()
+    expect(res.status).toBe(0)
+    const nums = res.stdout.trim().split(/\s+/).map(Number)
+    expect(nums).toEqual([7, 2, 2, 2, 3, 9, 3, 9])
+  })
 })
