@@ -1,11 +1,11 @@
-import { compileAndRunWithStdlib } from "../src/harness"
+import { compileAndRunWithStdlib } from "../../../src/harness"
 import fs from "fs"
 import path from "path"
 
 function runResolver(src: string): { status: number; stdout: string } {
-  const ast = fs.readFileSync(path.join(__dirname, "..", "stage1", "ast.puff"), "utf8")
-  const scanner = fs.readFileSync(path.join(__dirname, "..", "stage1", "scanner.puff"), "utf8")
-  const resolver = fs.readFileSync(path.join(__dirname, "..", "stage1", "resolver.puff"), "utf8")
+  const ast = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "ast.puff"), "utf8")
+  const scanner = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "scanner.puff"), "utf8")
+  const resolver = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "resolver.puff"), "utf8")
   const code = `
 ${ast}
 ${scanner}

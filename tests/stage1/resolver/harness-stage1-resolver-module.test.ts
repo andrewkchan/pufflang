@@ -1,4 +1,4 @@
-import { runStage1ResolverModule } from "../src/harness"
+import { runStage1ResolverModule } from "../../../src/harness"
 
 describe("harness: Stage1 resolver module", () => {
   it("accepts valid program", () => {

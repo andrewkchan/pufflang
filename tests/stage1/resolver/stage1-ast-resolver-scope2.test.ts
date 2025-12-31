@@ -1,10 +1,10 @@
 import fs from "fs"
 import path from "path"
-import { compileAndRunWithStdlib } from "../src/harness"
+import { compileAndRunWithStdlib } from "../../../src/harness"
 
-const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "scanner.puff"), "utf8")
-const astSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "ast.puff"), "utf8")
-const resolverSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "resolver.puff"), "utf8")
+const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "scanner.puff"), "utf8")
+const astSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "ast.puff"), "utf8")
+const resolverSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "resolver.puff"), "utf8")
 
 const lines = (out: string) => out.trim().split("\n").map((s) => s.trim())
 
