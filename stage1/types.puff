@@ -151,3 +151,25 @@ def type_can_coerce(tt TypeTable, from int, to int) int {
   }
   return 0;
 }
+
+// Lowest common numeric type: choose the first type in precedence order
+// that both operands can coerce to. Returns -1 if either is non-numeric
+// or no common type exists.
+def type_lowest_common_numeric(tt TypeTable, a int, b int) int {
+  if (type_is_numeric(tt, a) == 0) { return -1; }
+  if (type_is_numeric(tt, b) == 0) { return -1; }
+  // precedence: byte -> int -> float
+  var cand = vecint_new(3);
+  cand = vecint_push(cand, 2); // byte id
+  cand = vecint_push(cand, 5); // int id
+  cand = vecint_push(cand, 4); // float id
+  var i = 0;
+  while (i < cand.length) {
+    var id = vecint_get(cand, i);
+    if (type_can_coerce(tt, a, id) == 1 && type_can_coerce(tt, b, id) == 1) {
+      return id;
+    }
+    i = i + 1;
+  }
+  return -1;
+}

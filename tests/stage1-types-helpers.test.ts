@@ -149,4 +149,34 @@ def main() {
     expect(res.stderr).toBe("")
     expect(res.stdout.trim()).toBe("1 1 1 1 1 1 0 0 1 1 0")
   })
+
+  it("computes lowest common numeric types", () => {
+    const source = `
+${typesSrc}
+
+def print_int(x int) {
+  if (x == 0) { __putchar__(48); return; }
+  var n = x; var buf = vecbyte_new(16); if (n < 0) { __putchar__(45); n = 0 - n; }
+  while (n > 0) { buf = vecbyte_push(buf, byte(48 + (n % 10))); n = n / 10; }
+  var i = buf.length - 1; while (i >= 0) { __putchar__(int((buf.data + i)~)); i = i - 1; }
+}
+
+def main() {
+  var tt = typetable_new();
+  var idByte = 2;
+  var idInt = 5;
+  var idFloat = 4;
+
+  print_int(type_lowest_common_numeric(tt, idByte, idInt)); __putchar__(32);   // 5
+  print_int(type_lowest_common_numeric(tt, idInt, idFloat)); __putchar__(32); // 4
+  print_int(type_lowest_common_numeric(tt, idByte, idFloat)); __putchar__(32); // 4
+  print_int(type_lowest_common_numeric(tt, idByte, idByte)); __putchar__(32); // 2
+  print_int(type_lowest_common_numeric(tt, idFloat, idFloat)); __putchar__(10); //4
+}
+`
+    const res = compileAndRunWithStdlib(source)
+    expect(res.status).toBe(0)
+    expect(res.stderr).toBe("")
+    expect(res.stdout.trim()).toBe("5 4 4 2 4")
+  })
 })
