@@ -1,0 +1,34 @@
+// Struct layout helpers for Stage1.
+// Requires type helpers (TypeTable, type_is_valid_element_type, type_sizeof).
+
+struct StructLayoutResult { offsets VecInt, size int, err int }
+
+// Validate that all field types are usable as struct elements (non-void).
+def struct_validate_fields(tt TypeTable, fieldTypes VecInt) int {
+  var i = 0;
+  while (i < fieldTypes.length) {
+    var tid = vecint_get(fieldTypes, i);
+    if (type_is_valid_element_type(tt, tid) == 0) { return 0; }
+    i = i + 1;
+  }
+  return 1;
+}
+
+// Compute byte offsets and total size for a struct with the given field type
+// ids. Struct sizes (for nested struct references) are provided via structSizes
+// indexed by structId. Returns err=1 on unknown size (e.g., unresolved struct
+// or error type).
+def struct_compute_layout(tt TypeTable, fieldTypes VecInt, structSizes VecInt) StructLayoutResult {
+  var offsets = vecint_new(fieldTypes.length);
+  var size = 0;
+  var i = 0;
+  while (i < fieldTypes.length) {
+    var tid = vecint_get(fieldTypes, i);
+    var sz = type_sizeof(tt, tid, structSizes);
+    if (sz < 0) { return StructLayoutResult{offsets, -1, 1}; }
+    offsets = vecint_push(offsets, size);
+    size = size + sz;
+    i = i + 1;
+  }
+  return StructLayoutResult{offsets, size, 0};
+}

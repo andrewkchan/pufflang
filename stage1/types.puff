@@ -1,0 +1,212 @@
+// Stage1 standalone type helpers (lightweight, no parser integration).
+// Mirrors the TypeCategory enums and simple predicates from Stage0.
+
+var TYPECATEGORY_ARRAY int = 0;
+var TYPECATEGORY_BOOL int = 1;
+var TYPECATEGORY_BYTE int = 2;
+var TYPECATEGORY_ERROR int = 3;
+var TYPECATEGORY_FLOAT int = 4;
+var TYPECATEGORY_INT int = 5;
+var TYPECATEGORY_POINTER int = 6;
+var TYPECATEGORY_STRUCT int = 7;
+var TYPECATEGORY_VOID int = 8;
+
+struct Type { category int, element int, length int, structId int }
+struct TypeTable { types Vec }
+
+def typetable_new() TypeTable {
+  var v = vec_new(16, 16);
+  v.length = 0;
+  // id 0: placeholder array
+  v = typetable_push_raw(v, Type{TYPECATEGORY_ARRAY, -1, 0, -1});
+  // id 1..8 scalar/builtin
+  v = typetable_push_raw(v, Type{TYPECATEGORY_BOOL, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_BYTE, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_ERROR, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_FLOAT, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_INT, -1, 0, -1});
+  v = typetable_push_raw(v, Type{TYPECATEGORY_POINTER, -1, 0, -1}); // placeholder
+  v = typetable_push_raw(v, Type{TYPECATEGORY_STRUCT, -1, 0, -1});  // placeholder
+  v = typetable_push_raw(v, Type{TYPECATEGORY_VOID, -1, 0, -1});
+  return TypeTable{v};
+}
+
+def typetable_push_raw(v Vec, t Type) Vec {
+  var out = vec_reserve(v, v.length + 1);
+  var dest = vec_get_ptr(out, out.length);
+  (int~(dest))~ = t.category;
+  (int~(dest + 4))~ = t.element;
+  (int~(dest + 8))~ = t.length;
+  (int~(dest + 12))~ = t.structId;
+  out.length = out.length + 1;
+  return out;
+}
+
+def typetable_make_pointer(tt TypeTable, elemId int) TypeTable {
+  var t = Type{TYPECATEGORY_POINTER, elemId, 0, -1};
+  var v = typetable_push_raw(tt.types, t);
+  return TypeTable{v};
+}
+
+def typetable_make_array(tt TypeTable, elemId int, length int) TypeTable {
+  var t = Type{TYPECATEGORY_ARRAY, elemId, length, -1};
+  var v = typetable_push_raw(tt.types, t);
+  return TypeTable{v};
+}
+
+def typetable_make_struct(tt TypeTable, structId int) TypeTable {
+  var t = Type{TYPECATEGORY_STRUCT, -1, 0, structId};
+  var v = typetable_push_raw(tt.types, t);
+  return TypeTable{v};
+}
+
+def typetable_get(tt TypeTable, id int) Type {
+  var ptr = vec_get_ptr(tt.types, id);
+  var cat = (int~(ptr))~;
+  var elem = (int~(ptr + 4))~;
+  var lengthVal = (int~(ptr + 8))~;
+  var sid = (int~(ptr + 12))~;
+  return Type{cat, elem, lengthVal, sid};
+}
+
+def type_is_numeric(tt TypeTable, id int) int {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_INT) { return 1; }
+  if (t.category == TYPECATEGORY_FLOAT) { return 1; }
+  if (t.category == TYPECATEGORY_BYTE) { return 1; }
+  return 0;
+}
+
+def type_is_scalar(tt TypeTable, id int) int {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_ARRAY) { return 0; }
+  if (t.category == TYPECATEGORY_STRUCT) { return 0; }
+  if (t.category == TYPECATEGORY_VOID) { return 0; }
+  return 1;
+}
+
+// Shallow equality:
+// - arrays: same length and element equality
+// - pointers: element equality
+// - structs: same structId
+// - scalars: same category
+def type_equals(tt TypeTable, a int, b int) int {
+  if (a == b) { return 1; }
+  var ta = typetable_get(tt, a);
+  var tb = typetable_get(tt, b);
+  if (ta.category != tb.category) { return 0; }
+  if (ta.category == TYPECATEGORY_ARRAY) {
+    if (ta.length != tb.length) { return 0; }
+    return type_equals(tt, ta.element, tb.element);
+  }
+  if (ta.category == TYPECATEGORY_POINTER) {
+    return type_equals(tt, ta.element, tb.element);
+  }
+  if (ta.category == TYPECATEGORY_STRUCT) {
+    if (ta.structId == tb.structId) { return 1; }
+    return 0;
+  }
+  return 1;
+}
+
+// Casting: allow numeric<->numeric/bool, pointer<->pointer (any element), or exact match.
+def type_can_cast(tt TypeTable, from int, to int) int {
+  if (type_equals(tt, from, to) == 1) { return 1; }
+  var tf = typetable_get(tt, from);
+  var ttgt = typetable_get(tt, to);
+  if (tf.category == TYPECATEGORY_POINTER && ttgt.category == TYPECATEGORY_POINTER) { return 1; }
+  if (type_is_numeric(tt, from) == 1 && type_is_numeric(tt, to) == 1) { return 1; }
+  if (tf.category == TYPECATEGORY_BOOL && type_is_numeric(tt, to) == 1) { return 1; }
+  if (ttgt.category == TYPECATEGORY_BOOL && type_is_numeric(tt, from) == 1) { return 1; }
+  if (tf.category == TYPECATEGORY_BOOL && ttgt.category == TYPECATEGORY_BOOL) { return 1; }
+  return 0;
+}
+
+// Coercion (implicit): follow Stage0 rules for numerics/arrays/pointers.
+def type_can_coerce(tt TypeTable, from int, to int) int {
+  if (type_equals(tt, from, to) == 1) { return 1; }
+  var tf = typetable_get(tt, from);
+  var ttgt = typetable_get(tt, to);
+  // array -> pointer of same element
+  if (tf.category == TYPECATEGORY_ARRAY && ttgt.category == TYPECATEGORY_POINTER) {
+    return type_equals(tt, tf.element, ttgt.element);
+  }
+  // numeric widening
+  if (tf.category == TYPECATEGORY_INT) {
+    if (ttgt.category == TYPECATEGORY_INT) { return 1; }
+    if (ttgt.category == TYPECATEGORY_FLOAT) { return 1; }
+    if (ttgt.category == TYPECATEGORY_BOOL) { return 1; }
+    return 0;
+  }
+  if (tf.category == TYPECATEGORY_FLOAT) {
+    if (ttgt.category == TYPECATEGORY_FLOAT) { return 1; }
+    return 0;
+  }
+  if (tf.category == TYPECATEGORY_BYTE) {
+    if (ttgt.category == TYPECATEGORY_BYTE) { return 1; }
+    if (ttgt.category == TYPECATEGORY_INT) { return 1; }
+    if (ttgt.category == TYPECATEGORY_FLOAT) { return 1; }
+    return 0;
+  }
+  if (tf.category == TYPECATEGORY_BOOL) {
+    if (ttgt.category == TYPECATEGORY_BOOL) { return 1; }
+    return 0;
+  }
+  if (tf.category == TYPECATEGORY_POINTER && ttgt.category == TYPECATEGORY_POINTER) {
+    return type_equals(tt, tf.element, ttgt.element);
+  }
+  return 0;
+}
+
+// Lowest common numeric type: choose the first type in precedence order
+// that both operands can coerce to. Returns -1 if either is non-numeric
+// or no common type exists.
+def type_lowest_common_numeric(tt TypeTable, a int, b int) int {
+  if (type_is_numeric(tt, a) == 0) { return -1; }
+  if (type_is_numeric(tt, b) == 0) { return -1; }
+  // precedence: byte -> int -> float
+  var cand = vecint_new(3);
+  cand = vecint_push(cand, 2); // byte id
+  cand = vecint_push(cand, 5); // int id
+  cand = vecint_push(cand, 4); // float id
+  var i = 0;
+  while (i < cand.length) {
+    var id = vecint_get(cand, i);
+    if (type_can_coerce(tt, a, id) == 1 && type_can_coerce(tt, b, id) == 1) {
+      return id;
+    }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Valid element types: anything except void. Error is treated as valid to
+// mirror Stage0's isValidElementType permissiveness for forward references.
+def type_is_valid_element_type(tt TypeTable, id int) int {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_VOID) { return 0; }
+  return 1;
+}
+
+// Compute sizeof for a type id using the provided structSizes table (indexed by
+// structId). Returns -1 if size is unknown (e.g., unresolved struct or error).
+def type_sizeof(tt TypeTable, id int, structSizes VecInt) int {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_ARRAY) {
+    var elemSize = type_sizeof(tt, t.element, structSizes);
+    if (elemSize < 0) { return -1; }
+    return elemSize * t.length;
+  }
+  if (t.category == TYPECATEGORY_STRUCT) {
+    if (t.structId < 0) { return -1; }
+    if (t.structId >= structSizes.length) { return -1; }
+    return vecint_get(structSizes, t.structId);
+  }
+  if (t.category == TYPECATEGORY_POINTER) { return 4; }
+  if (t.category == TYPECATEGORY_INT) { return 4; }
+  if (t.category == TYPECATEGORY_FLOAT) { return 4; }
+  if (t.category == TYPECATEGORY_BYTE) { return 1; }
+  if (t.category == TYPECATEGORY_BOOL) { return 1; }
+  if (t.category == TYPECATEGORY_VOID) { return 0; }
+  return -1;
+}

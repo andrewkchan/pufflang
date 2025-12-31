@@ -397,6 +397,20 @@ def parse_expression_ast_internal(ctx ParseAstCtx, out ParseAstCtx~) int {
     if (p.err == 1) { out~ = p; return rhs; }
     p.arena = n_assign(p.arena, expr, rhs, opTok, p.tokOffset);
     expr = p.arena.nodes.length - 1;
+  } else if (pa_kind(p) == TOKEN_PLUS_EQUAL || pa_kind(p) == TOKEN_MINUS_EQUAL ||
+             pa_kind(p) == TOKEN_STAR_EQUAL || pa_kind(p) == TOKEN_SLASH_EQUAL ||
+             pa_kind(p) == TOKEN_PERCENT_EQUAL) {
+    var opTok2 = p.idx;
+    var combinedKind = pa_kind(p);
+    p = pa_advance(p);
+    var rhs2 = parse_expression_ast_internal(p, &p);
+    if (p.err == 1) { out~ = p; return rhs2; }
+    // Build synthetic binary using the original lhs and rhs.
+    // Operator token remains combined; sexpr printer maps it to base op.
+    p.arena = n_binary(p.arena, expr, rhs2, opTok2, p.tokOffset);
+    var binIdx = p.arena.nodes.length - 1;
+    p.arena = n_assign(p.arena, expr, binIdx, opTok2, p.tokOffset);
+    expr = p.arena.nodes.length - 1;
   }
   out~ = p;
   return expr;
