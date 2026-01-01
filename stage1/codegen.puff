@@ -171,8 +171,11 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
       if (argRes.err == 1) { return argRes; }
       argInstr = sb_append_string(argInstr, argRes.instr);
       if (idx > 0) { argVals = sb_append_cstr(argVals, byte~(&", "[0])); }
-      // Use parameter type for cast? For now assume i32.
-      argVals = sb_append_cstr(argVals, byte~(&"i32 "[0]));
+      var paramTyId = tm_fn_param_type(tm, fi, idx);
+      if (paramTyId == -1) { paramTyId = 5; } // default int
+      var paramTy = cg_llvm_type(tm.env.tt, paramTyId);
+      argVals = sb_append_string(argVals, paramTy);
+      argVals = sb_append_byte(argVals, byte(32));
       argVals = sb_append_string(argVals, argRes.value);
       head = argNode.b;
       idx = idx + 1;
