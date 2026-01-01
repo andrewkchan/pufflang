@@ -311,7 +311,13 @@ def main() {
  */
 export function runStage1ModuleSummary(program: string): RunResult {
   const normalized = program.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
@@ -348,8 +354,8 @@ def print_str(s String) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var res = parse_module_source(byte~(&src[0]), len(src));
+${srcBuilder}
+  var res = parse_module_source(src.data, src.length);
   var summary = module_summary(res);
   print_str(summary);
 }
@@ -363,7 +369,13 @@ def main() {
  */
 export function runStage1ModuleCounts(program: string): RunResult {
   const normalized = program.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
@@ -384,8 +396,8 @@ def print_str(s String) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var res = parse_module_source(byte~(&src[0]), len(src));
+${srcBuilder}
+  var res = parse_module_source(src.data, src.length);
   var counts = module_counts(res);
   print_str(counts);
 }
@@ -399,7 +411,13 @@ def main() {
  */
 export function runStage1ResolverModule(src: string): RunResult {
   const normalized = src.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
@@ -430,8 +448,8 @@ def print_int(x int) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var ok = resolve_module_tokens(byte~(&src[0]), len(src));
+${srcBuilder}
+  var ok = resolve_module_tokens(src.data, src.length);
   print_int(ok);
   __putchar__(10);
 }
@@ -445,7 +463,13 @@ def main() {
  */
 export function runStage1ResolverAst(src: string): RunResult {
   const normalized = src.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
@@ -476,8 +500,8 @@ def print_int(x int) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var ok = resolve_module_ast(byte~(&src[0]), len(src));
+${srcBuilder}
+  var ok = resolve_module_ast(src.data, src.length);
   print_int(ok);
   __putchar__(10);
 }
@@ -490,7 +514,13 @@ def main() {
  */
 export function runStage1CompileToIr(program: string): RunResult {
   const normalized = program.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
@@ -516,8 +546,8 @@ def print_str(s String) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var ir = compile_to_ir(byte~(&src[0]), len(src));
+${srcBuilder}
+  var ir = compile_to_ir(src.data, src.length);
   print_str(ir);
 }
 `
