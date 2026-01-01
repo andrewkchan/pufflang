@@ -733,28 +733,98 @@ def cg_expr(
     var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     var lbool = cg_to_bool(left, tmp);
     if (lbool.err == 1) { return lbool; }
-    var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
-    var rbool = cg_to_bool(right, tmp);
-    if (rbool.err == 1) { return rbool; }
     var opTok2 = cg_tok_string(pmr.tokens, pmr.src, n.c);
-    var tmpLogic = cg_fresh_tmp(tmp);
+    var rhsLabel = cg_fresh_label(tmp);
+    var skipLabel = cg_fresh_label(tmp);
+    var endLabel = cg_fresh_label(tmp);
+    var tmpPhi = cg_fresh_tmp(tmp);
     var sbLogic = sb_new();
     sbLogic = sb_append_string(sbLogic, lbool.instr);
-    sbLogic = sb_append_string(sbLogic, rbool.instr);
-    sbLogic = sb_append_cstr(sbLogic, byte~(&"  "[0]));
-    sbLogic = sb_append_string(sbLogic, tmpLogic);
+    // branch based on operator
     if (opTok2.length == 2 && (opTok2.data)~ == byte(38) && (opTok2.data + 1)~ == byte(38)) { // &&
-      sbLogic = sb_append_cstr(sbLogic, byte~(&" = and i1 "[0]));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br i1 "[0]));
+      sbLogic = sb_append_string(sbLogic, lbool.value);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", label %"[0]));
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", label %"[0]));
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // rhs block
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+      var rbool = cg_to_bool(right, tmp);
+      if (rbool.err == 1) { return rbool; }
+      sbLogic = sb_append_string(sbLogic, rbool.instr);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br label %"[0]));
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // skip block
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br label %"[0]));
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // end + phi
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  "[0]));
+      sbLogic = sb_append_string(sbLogic, tmpPhi);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" = phi i1 [ "[0]));
+      sbLogic = sb_append_string(sbLogic, rbool.value);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", %"[0]));
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" ], [ 0, %"[0]));
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" ]"[0]));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      return ExprCodegenResult{sb_to_string(sbLogic), tmpPhi, String{byte~(&"i1"[0]), 2}, 0};
     } else if (opTok2.length == 2 && (opTok2.data)~ == byte(124) && (opTok2.data + 1)~ == byte(124)) { // ||
-      sbLogic = sb_append_cstr(sbLogic, byte~(&" = or i1 "[0]));
-    } else {
-      return ExprCodegenResult{sb_to_string(sbLogic), tmpLogic, String{pmr.src, 0}, 1};
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br i1 "[0]));
+      sbLogic = sb_append_string(sbLogic, lbool.value);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", label %"[0]));
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", label %"[0]));
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // rhs block
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      var right2 = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+      var rbool2 = cg_to_bool(right2, tmp);
+      if (rbool2.err == 1) { return rbool2; }
+      sbLogic = sb_append_string(sbLogic, rbool2.instr);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br label %"[0]));
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // skip block (left true)
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br label %"[0]));
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // end + phi
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  "[0]));
+      sbLogic = sb_append_string(sbLogic, tmpPhi);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" = phi i1 [ "[0]));
+      sbLogic = sb_append_string(sbLogic, rbool2.value);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", %"[0]));
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" ], [ 1, %"[0]));
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" ]"[0]));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      return ExprCodegenResult{sb_to_string(sbLogic), tmpPhi, String{byte~(&"i1"[0]), 2}, 0};
     }
-    sbLogic = sb_append_string(sbLogic, lbool.value);
-    sbLogic = sb_append_cstr(sbLogic, byte~(&", "[0]));
-    sbLogic = sb_append_string(sbLogic, rbool.value);
-    sbLogic = sb_append_byte(sbLogic, byte(10));
-    return ExprCodegenResult{sb_to_string(sbLogic), tmpLogic, String{byte~(&"i1"[0]), 2}, 0};
+    return ExprCodegenResult{sb_to_string(sbLogic), tmpPhi, String{pmr.src, 0}, 1};
   }
   if (n.kind == NODE_TERNARY) {
     var condRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
