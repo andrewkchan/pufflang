@@ -8,7 +8,7 @@
   - Runtime/I/O: libc-backed builtins (__malloc__/__free__/__exit__/__putchar__/__write__/__read__/__open__/__close__/__sqrt__) with stdin/stdout/file round-trip tests; harness can feed stdin.
   - Stdlib growth: generic Vec/VecInt/VecByte, String helpers (eq/starts_with/clone/index_of/contains/slice/trim), StringBuilder helpers (clear/append cstr/int/hex), argv/env/time wrappers, Map<int,int>, MapStr (string->int), VecStr, String interner utilities, file helpers; new regression suites cover these.
   - Stage1 progress: expression ASTs are merged into `parser_full` arenas; scanner/parsers suites stay green. Added AST-based resolver (`resolve_module_ast`) with scope/arity checks, undefined-variable detection, loop depth validation, and duplicate-function guarding (overloads currently rejected for stability). New resolver tests cover loops, arity mismatches, undefined functions, and duplicate functions. Stage1 driver now routes through parse_full + AST resolver. Minimal parser remains untouched for stability.
-  - New Stage1 helper modules: `types.puff` (type table + predicates), `typeenv.puff` (struct registration + sizes), `structlayout.puff` (offset/size computation), `typerules.puff` (unary/binary result typing incl. bitwise/shifts/logical), `literaltypes.puff` (literal type inference), and `exprtypes.puff` (expression type inference atop AST). These are currently helper building blocks; resolver/codegen integration is planned next.
+  - New Stage1 helper modules: `types.puff` (type table + predicates), `typeenv.puff` (struct registration + sizes), `structlayout.puff` (offset/size computation), `typerules.puff` (unary/binary result typing incl. bitwise/shifts/logical), `literaltypes.puff` (literal type inference), `exprtypes.puff` (expression type inference atop AST), and `typeparse.puff` (parses type literals to S-expressions and TypeEnv-backed ids). These are currently helper building blocks; resolver/codegen integration is planned next.
 - Remaining (Phases 3 tail/4–6): enable true overload support + types/defaults/import/export resolution in Stage1, implement Stage1 LLVM codegen + CLI, and wire the bootstrap pipeline (Stage0 → Stage1 → Stage2).
 
 ## Language extensions and semantics notes
@@ -37,7 +37,7 @@
 - Scanner tokens: Added support for commas, `=`, arithmetic ops (+, -, *, /) to enable richer Stage1 parsing paths.
 
 ## How to run tests
-- Full suite: `npm test` (currently 122 suites / 241 tests)
+- Full suite: `npm test` (currently 130 suites / 258 tests)
 
 ## Notes
 - Builtin names are double-underscore prefixed and map to libc where relevant.
