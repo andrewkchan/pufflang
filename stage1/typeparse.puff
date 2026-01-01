@@ -41,6 +41,7 @@ struct TypeParseIdResult { env TypeEnv, next int, typeId int, err int }
 struct ParamTypesResult { env TypeEnv, ids VecInt, err int }
 struct ParamTypesTokResult { env TypeEnv, ids VecInt, next int, err int }
 struct FnTypesResult { env TypeEnv, params VecInt, ret int, err int }
+struct FnTypesTokResult { env TypeEnv, params VecInt, ret int, next int, err int }
 
 def wrap_ptr(inner String) String {
   var sb = sb_new();
@@ -258,5 +259,21 @@ def parse_fn_types(env TypeEnv, src byte~, n int) FnTypesResult {
   if (retRes.err == 1) { return FnTypesResult{retRes.env, params.ids, -1, 1}; }
   if (token_kind_at(toks, retRes.next) != TOKEN_EOF) { return FnTypesResult{retRes.env, params.ids, -1, 1}; }
   return FnTypesResult{retRes.env, params.ids, retRes.typeId, 0};
+}
+
+// Token-based variant: parse "(params) rettype" from existing tokens starting at idx,
+// returning next index (after rettype) and type ids. Expects terminator TOKEN_RIGHT_PAREN
+// for params and consumes rettype after it. If return type missing or invalid, err=1.
+def parse_fn_types_tokens(env TypeEnv, tokens Vec, src byte~, idx int) FnTypesTokResult {
+  if (token_kind_at(tokens, idx) != TOKEN_LEFT_PAREN) { return FnTypesTokResult{env, vecint_new(0), -1, idx, 1}; }
+  var params = parse_param_types_tokens(env, tokens, src, idx + 1, TOKEN_RIGHT_PAREN);
+  if (params.err == 1) { return FnTypesTokResult{params.env, params.ids, -1, params.next, 1}; }
+  var i = params.next;
+  if (token_kind_at(tokens, i) != TOKEN_RIGHT_PAREN) { return FnTypesTokResult{params.env, params.ids, -1, i, 1}; }
+  i = i + 1;
+  var retRes = parse_type_id(params.env, tokens, src, i);
+  if (retRes.err == 1) { return FnTypesTokResult{retRes.env, params.ids, -1, retRes.next, 1}; }
+  i = retRes.next;
+  return FnTypesTokResult{retRes.env, params.ids, retRes.typeId, i, 0};
 }
 
