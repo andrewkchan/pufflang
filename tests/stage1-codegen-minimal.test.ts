@@ -83,4 +83,28 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     const bin = runRawIR(irRes.stdout)
     expect(bin.status).toBe(1)
   })
+
+  it("supports logical and/or", () => {
+    const program = `
+      def main() int {
+        return (1 < 2) && (2 < 3) || (0 == 1);
+      }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    const bin = runRawIR(irRes.stdout)
+    expect(bin.status).toBe(1)
+  })
+
+  it("supports ternary expressions", () => {
+    const program = `
+      def main() int {
+        return (1 < 2) ? 7 : 9;
+      }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    const bin = runRawIR(irRes.stdout)
+    expect(bin.status).toBe(7)
+  })
 })

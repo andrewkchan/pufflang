@@ -37,6 +37,30 @@ def cg_str_eq(a String, b String) int {
   return 1;
 }
 
+// Convert an expression result to i1 (non-short-circuit); appends icmp if needed.
+def cg_to_bool(res ExprCodegenResult, tmp int~) ExprCodegenResult {
+  if (res.err == 1) { return res; }
+  if (res.valTy.length == 2 && (res.valTy.data)~ == byte(105) && (res.valTy.data + 1)~ == byte(49)) {
+    return res;
+  }
+  var ty = res.valTy;
+  if (ty.length == 0) { ty = String{byte~(&"i32"[0]), 3}; }
+  var zero = String{byte~(&"0"[0]), 1};
+  var tmpName = cg_fresh_tmp(tmp);
+  var sb = sb_new();
+  sb = sb_append_string(sb, res.instr);
+  sb = sb_append_cstr(sb, byte~(&"  "[0]));
+  sb = sb_append_string(sb, tmpName);
+  sb = sb_append_cstr(sb, byte~(&" = icmp ne "[0]));
+  sb = sb_append_string(sb, ty);
+  sb = sb_append_byte(sb, byte(32));
+  sb = sb_append_string(sb, res.value);
+  sb = sb_append_cstr(sb, byte~(&", "[0]));
+  sb = sb_append_string(sb, zero);
+  sb = sb_append_byte(sb, byte(10));
+  return ExprCodegenResult{sb_to_string(sb), tmpName, String{byte~(&"i1"[0]), 2}, 0};
+}
+
 // Collect parameter names from function tokens (best-effort).
 def cg_collect_param_names(pmr ParseModuleResult, fn Node) VecStr {
   var names = vecstr_new(4);
@@ -230,6 +254,66 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     sbInstr2 = sb_append_string(sbInstr2, right.value);
     sbInstr2 = sb_append_byte(sbInstr2, byte(10));
     return ExprCodegenResult{sb_to_string(sbInstr2), tmpName2, resultTy, 0};
+  }
+  if (n.kind == NODE_LOGICAL) {
+    var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var lbool = cg_to_bool(left, tmp);
+    if (lbool.err == 1) { return lbool; }
+    var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var rbool = cg_to_bool(right, tmp);
+    if (rbool.err == 1) { return rbool; }
+    var opTok2 = cg_tok_string(pmr.tokens, pmr.src, n.c);
+    var tmpLogic = cg_fresh_tmp(tmp);
+    var sbLogic = sb_new();
+    sbLogic = sb_append_string(sbLogic, lbool.instr);
+    sbLogic = sb_append_string(sbLogic, rbool.instr);
+    sbLogic = sb_append_cstr(sbLogic, byte~(&"  "[0]));
+    sbLogic = sb_append_string(sbLogic, tmpLogic);
+    if (opTok2.length == 2 && (opTok2.data)~ == byte(38) && (opTok2.data + 1)~ == byte(38)) { // &&
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" = and i1 "[0]));
+    } else if (opTok2.length == 2 && (opTok2.data)~ == byte(124) && (opTok2.data + 1)~ == byte(124)) { // ||
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" = or i1 "[0]));
+    } else {
+      return ExprCodegenResult{sb_to_string(sbLogic), tmpLogic, String{pmr.src, 0}, 1};
+    }
+    sbLogic = sb_append_string(sbLogic, lbool.value);
+    sbLogic = sb_append_cstr(sbLogic, byte~(&", "[0]));
+    sbLogic = sb_append_string(sbLogic, rbool.value);
+    sbLogic = sb_append_byte(sbLogic, byte(10));
+    return ExprCodegenResult{sb_to_string(sbLogic), tmpLogic, String{byte~(&"i1"[0]), 2}, 0};
+  }
+  if (n.kind == NODE_TERNARY) {
+    var condRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var condBool = cg_to_bool(condRes, tmp);
+    if (condBool.err == 1) { return condBool; }
+    var thenRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    if (thenRes.err == 1) { return thenRes; }
+    var elseRes = cg_expr(pmr, tm, n.c, paramNames, paramTypes, tmp);
+    if (elseRes.err == 1) { return elseRes; }
+    var tyThen = thenRes.valTy;
+    var tyElse = elseRes.valTy;
+    if (tyThen.length == 0) { tyThen = String{byte~(&"i32"[0]), 3}; }
+    if (tyElse.length == 0) { tyElse = String{byte~(&"i32"[0]), 3}; }
+    if (cg_str_eq(tyThen, tyElse) == 0) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
+    var tmpTern = cg_fresh_tmp(tmp);
+    var sbTern = sb_new();
+    sbTern = sb_append_string(sbTern, condBool.instr);
+    sbTern = sb_append_string(sbTern, thenRes.instr);
+    sbTern = sb_append_string(sbTern, elseRes.instr);
+    sbTern = sb_append_cstr(sbTern, byte~(&"  "[0]));
+    sbTern = sb_append_string(sbTern, tmpTern);
+    sbTern = sb_append_cstr(sbTern, byte~(&" = select i1 "[0]));
+    sbTern = sb_append_string(sbTern, condBool.value);
+    sbTern = sb_append_cstr(sbTern, byte~(&", "[0]));
+    sbTern = sb_append_string(sbTern, tyThen);
+    sbTern = sb_append_byte(sbTern, byte(32));
+    sbTern = sb_append_string(sbTern, thenRes.value);
+    sbTern = sb_append_cstr(sbTern, byte~(&", "[0]));
+    sbTern = sb_append_string(sbTern, tyElse);
+    sbTern = sb_append_byte(sbTern, byte(32));
+    sbTern = sb_append_string(sbTern, elseRes.value);
+    sbTern = sb_append_byte(sbTern, byte(10));
+    return ExprCodegenResult{sb_to_string(sbTern), tmpTern, tyThen, 0};
   }
   if (n.kind == NODE_CALL) {
     // Only support direct identifier callees for now.
