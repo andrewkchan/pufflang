@@ -112,6 +112,67 @@ def cg_to_bool(res ExprCodegenResult, tmp int~) ExprCodegenResult {
   return ExprCodegenResult{sb_to_string(sb), tmpName, String{byte~(&"i1"[0]), 2}, 0};
 }
 
+// Coerce a value to a target LLVM type (limited to int widening/trunc).
+def cg_coerce(val ExprCodegenResult, targetTy String, tmp int~) ExprCodegenResult {
+  if (val.err == 1) { return val; }
+  if (cg_str_eq(val.valTy, targetTy) == 1) { return val; }
+  // widen i1/i8 -> i32
+  if (targetTy.length == 3 && (targetTy.data)~ == byte(105) && (targetTy.data + 1)~ == byte(51)) {
+    if (val.valTy.length == 2 && (val.valTy.data)~ == byte(105) && (val.valTy.data + 1)~ == byte(49)) {
+      var tmpZ = cg_fresh_tmp(tmp);
+      var sb = sb_new();
+      sb = sb_append_string(sb, val.instr);
+      sb = sb_append_cstr(sb, byte~(&"  "[0]));
+      sb = sb_append_string(sb, tmpZ);
+      sb = sb_append_cstr(sb, byte~(&" = zext i1 "[0]));
+      sb = sb_append_string(sb, val.value);
+      sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
+      sb = sb_append_byte(sb, byte(10));
+      return ExprCodegenResult{sb_to_string(sb), tmpZ, targetTy, 0};
+    }
+    if (val.valTy.length == 2 && (val.valTy.data)~ == byte(105) && (val.valTy.data + 1)~ == byte(56)) {
+      var tmpZ2 = cg_fresh_tmp(tmp);
+      var sb2 = sb_new();
+      sb2 = sb_append_string(sb2, val.instr);
+      sb2 = sb_append_cstr(sb2, byte~(&"  "[0]));
+      sb2 = sb_append_string(sb2, tmpZ2);
+      sb2 = sb_append_cstr(sb2, byte~(&" = zext i8 "[0]));
+      sb2 = sb_append_string(sb2, val.value);
+      sb2 = sb_append_cstr(sb2, byte~(&" to i32"[0]));
+      sb2 = sb_append_byte(sb2, byte(10));
+      return ExprCodegenResult{sb_to_string(sb2), tmpZ2, targetTy, 0};
+    }
+  }
+  // truncate i32 -> i8/i1
+  if (val.valTy.length == 3 && (val.valTy.data)~ == byte(105) && (val.valTy.data + 1)~ == byte(51)) {
+    if (targetTy.length == 2 && (targetTy.data)~ == byte(105) && (targetTy.data + 1)~ == byte(56)) {
+      var tmpT = cg_fresh_tmp(tmp);
+      var sbt = sb_new();
+      sbt = sb_append_string(sbt, val.instr);
+      sbt = sb_append_cstr(sbt, byte~(&"  "[0]));
+      sbt = sb_append_string(sbt, tmpT);
+      sbt = sb_append_cstr(sbt, byte~(&" = trunc i32 "[0]));
+      sbt = sb_append_string(sbt, val.value);
+      sbt = sb_append_cstr(sbt, byte~(&" to i8"[0]));
+      sbt = sb_append_byte(sbt, byte(10));
+      return ExprCodegenResult{sb_to_string(sbt), tmpT, targetTy, 0};
+    }
+    if (targetTy.length == 2 && (targetTy.data)~ == byte(105) && (targetTy.data + 1)~ == byte(49)) {
+      var tmpTb = cg_fresh_tmp(tmp);
+      var sbtb = sb_new();
+      sbtb = sb_append_string(sbtb, val.instr);
+      sbtb = sb_append_cstr(sbtb, byte~(&"  "[0]));
+      sbtb = sb_append_string(sbtb, tmpTb);
+      sbtb = sb_append_cstr(sbtb, byte~(&" = trunc i32 "[0]));
+      sbtb = sb_append_string(sbtb, val.value);
+      sbtb = sb_append_cstr(sbtb, byte~(&" to i1"[0]));
+      sbtb = sb_append_byte(sbtb, byte(10));
+      return ExprCodegenResult{sb_to_string(sbtb), tmpTb, targetTy, 0};
+    }
+  }
+  return ExprCodegenResult{val.instr, val.value, val.valTy, 1};
+}
+
 // Collect parameter names from function tokens (best-effort).
 def cg_collect_param_names(pmr ParseModuleResult, fn Node) VecStr {
   var names = vecstr_new(4);
@@ -162,9 +223,32 @@ def cg_find_fn_index(pmr ParseModuleResult, tm TypeModuleTypes, name String) int
   return -1;
 }
 
-// Emit simple expressions (literal, group, unary -, parameter variable, binary +,-,*,/, call).
+// Helper to find a name in VecStr (returns index or -1).
+def cg_find_name(v VecStr, name String) int {
+  var i = 0;
+  while (i < v.length) {
+    var n = vecstr_get(v, i);
+    if (str_eq(n.data, n.length, name.data, name.length) == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Emit simple expressions (literal, group, unary, variable, binary, call).
 // Returns accumulated instructions (in order) and the SSA value to use.
-def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames VecStr, paramTypes VecStr, tmp int~) ExprCodegenResult {
+def cg_expr(
+  pmr ParseModuleResult,
+  tm TypeModuleTypes,
+  exprIdx int,
+  paramNames VecStr,
+  paramTypes VecStr,
+  paramSlots VecStr,
+  paramSlotTypes VecStr,
+  localNames VecStr,
+  localPtrs VecStr,
+  localTypes VecStr,
+  tmp int~
+) ExprCodegenResult {
   if (exprIdx < 0 || exprIdx >= pmr.arena.nodes.length) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
   var n = nodearena_get(pmr.arena, exprIdx);
   if (n.kind == NODE_LITERAL) {
@@ -175,11 +259,11 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     return ExprCodegenResult{String{pmr.src, 0}, lex, String{byte~(&"i32"[0]), 3}, 0};
   }
   if (n.kind == NODE_GROUP) {
-    return cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    return cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
   }
   if (n.kind == NODE_UNARY) {
     var op = cg_tok_string(pmr.tokens, pmr.src, n.a);
-    var inner = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var inner = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (inner.err == 1) { return ExprCodegenResult{inner.instr, inner.value, inner.valTy, 1}; }
     // unary + : no-op
     if (op.length == 1 && (op.data)~ == byte(43)) { return inner; } // '+'
@@ -240,20 +324,46 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
   }
   if (n.kind == NODE_VARIABLE) {
     var name = cg_tok_string(pmr.tokens, pmr.src, n.a);
+    // locals
+    var li = cg_find_name(localNames, name);
+    if (li != -1) {
+      var ptr = vecstr_get(localPtrs, li);
+      var lty = vecstr_get(localTypes, li);
+      var tmpLd = cg_fresh_tmp(tmp);
+      var sbLd = sb_new();
+      sbLd = sb_append_cstr(sbLd, byte~(&"  "[0]));
+      sbLd = sb_append_string(sbLd, tmpLd);
+      sbLd = sb_append_cstr(sbLd, byte~(&" = load "[0]));
+      sbLd = sb_append_string(sbLd, lty);
+      sbLd = sb_append_cstr(sbLd, byte~(&", "[0]));
+      sbLd = sb_append_string(sbLd, lty);
+      sbLd = sb_append_cstr(sbLd, byte~(&"* "[0]));
+      sbLd = sb_append_string(sbLd, ptr);
+      sbLd = sb_append_byte(sbLd, byte(10));
+      return ExprCodegenResult{sb_to_string(sbLd), tmpLd, lty, 0};
+    }
     var idx = cg_match_param(paramNames, name);
     if (idx == -1) { return ExprCodegenResult{String{pmr.src, 0}, name, String{pmr.src, 0}, 1}; }
-    var sbVar = sb_new();
-    sbVar = sb_append_byte(sbVar, byte(37)); // '%'
-    sbVar = sb_append_cstr(sbVar, byte~(&"p"[0]));
-    sbVar = sb_append_int(sbVar, idx);
     var pty = String{byte~(&"i32"[0]), 3};
     if (idx < paramTypes.length) { pty = vecstr_get(paramTypes, idx); }
-    return ExprCodegenResult{String{pmr.src, 0}, sb_to_string(sbVar), pty, 0};
+    var pslot = vecstr_get(paramSlots, idx);
+    var tmpParam = cg_fresh_tmp(tmp);
+    var sbParam = sb_new();
+    sbParam = sb_append_cstr(sbParam, byte~(&"  "[0]));
+    sbParam = sb_append_string(sbParam, tmpParam);
+    sbParam = sb_append_cstr(sbParam, byte~(&" = load "[0]));
+    sbParam = sb_append_string(sbParam, pty);
+    sbParam = sb_append_cstr(sbParam, byte~(&", "[0]));
+    sbParam = sb_append_string(sbParam, pty);
+    sbParam = sb_append_cstr(sbParam, byte~(&"* "[0]));
+    sbParam = sb_append_string(sbParam, pslot);
+    sbParam = sb_append_byte(sbParam, byte(10));
+    return ExprCodegenResult{sb_to_string(sbParam), tmpParam, pty, 0};
   }
   if (n.kind == NODE_BINARY) {
-    var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (left.err == 1) { return left; }
-    var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (right.err == 1) { return right; }
     var lTy = left.valTy;
     if (lTy.length == 0) { lTy = String{byte~(&"i32"[0]), 3}; }
@@ -507,10 +617,10 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     return ExprCodegenResult{sb_to_string(sbInstr2), tmpName2, resultTy, 0};
   }
   if (n.kind == NODE_LOGICAL) {
-    var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     var lbool = cg_to_bool(left, tmp);
     if (lbool.err == 1) { return lbool; }
-    var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     var rbool = cg_to_bool(right, tmp);
     if (rbool.err == 1) { return rbool; }
     var opTok2 = cg_tok_string(pmr.tokens, pmr.src, n.c);
@@ -534,12 +644,12 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     return ExprCodegenResult{sb_to_string(sbLogic), tmpLogic, String{byte~(&"i1"[0]), 2}, 0};
   }
   if (n.kind == NODE_TERNARY) {
-    var condRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var condRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     var condBool = cg_to_bool(condRes, tmp);
     if (condBool.err == 1) { return condBool; }
-    var thenRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var thenRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (thenRes.err == 1) { return thenRes; }
-    var elseRes = cg_expr(pmr, tm, n.c, paramNames, paramTypes, tmp);
+    var elseRes = cg_expr(pmr, tm, n.c, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (elseRes.err == 1) { return elseRes; }
     var tyThen = thenRes.valTy;
     var tyElse = elseRes.valTy;
@@ -567,7 +677,7 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     return ExprCodegenResult{sb_to_string(sbTern), tmpTern, tyThen, 0};
   }
   if (n.kind == NODE_DEREF) {
-    var baseRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var baseRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (baseRes.err == 1) { return baseRes; }
     if (cg_is_pointer_type(baseRes.valTy) == 0) { return ExprCodegenResult{baseRes.instr, baseRes.value, String{pmr.src, 0}, 1}; }
     var elemTy = cg_pointer_elem_ty(baseRes.valTy);
@@ -587,9 +697,9 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     return ExprCodegenResult{sb_to_string(sbLd), tmpLoad, elemTy, 0};
   }
   if (n.kind == NODE_INDEX) {
-    var baseResIdx = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var baseResIdx = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (baseResIdx.err == 1) { return baseResIdx; }
-    var idxRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var idxRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (idxRes.err == 1) { return idxRes; }
     if (cg_is_pointer_type(baseResIdx.valTy) == 0) { return ExprCodegenResult{baseResIdx.instr, baseResIdx.value, String{pmr.src, 0}, 1}; }
     var elemTyIdx = cg_pointer_elem_ty(baseResIdx.valTy);
@@ -647,7 +757,7 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
         return ExprCodegenResult{String{pmr.src, 0}, sb_to_string(sbLen), String{byte~(&"i32"[0]), 3}, 0};
       }
     }
-    var ctxRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var ctxRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (ctxRes.err == 1) { return ctxRes; }
     return ExprCodegenResult{ctxRes.instr, ctxRes.value, String{pmr.src, 0}, 1};
   }
@@ -670,7 +780,7 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     var idx = 0;
     while (head != -1 && idx < argCount) {
       var argNode = nodearena_get(pmr.arena, head);
-      var argRes = cg_expr(pmr, tm, argNode.a, paramNames, paramTypes, tmp);
+      var argRes = cg_expr(pmr, tm, argNode.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
       if (argRes.err == 1) { return argRes; }
       argInstr = sb_append_string(argInstr, argRes.instr);
       if (idx > 0) { argVals = sb_append_cstr(argVals, byte~(&", "[0])); }
@@ -782,6 +892,41 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
     return FnCodegenResult{sb_to_string(sb), 0};
   }
 
+  // Prepare param slots and locals
+  var paramSlots = vecstr_new(4);
+  var paramSlotTypes = vecstr_new(4);
+  var localNames = vecstr_new(4);
+  var localPtrs = vecstr_new(4);
+  var localTypes = vecstr_new(4);
+  var allocas = sb_new();
+  var psi = 0;
+  while (psi < paramCount) {
+    var pid = vecint_get(tm.paramTypeIds, paramStart + psi);
+    var pty = cg_llvm_type(tm.env.tt, pid);
+    var slot = cg_fresh_tmp(&tmp);
+    allocas = sb_append_cstr(allocas, byte~(&"  "[0]));
+    allocas = sb_append_string(allocas, slot);
+    allocas = sb_append_cstr(allocas, byte~(&" = alloca "[0]));
+    allocas = sb_append_string(allocas, pty);
+    allocas = sb_append_byte(allocas, byte(10));
+    allocas = sb_append_cstr(allocas, byte~(&"  store "[0]));
+    allocas = sb_append_string(allocas, pty);
+    allocas = sb_append_cstr(allocas, byte~(&" %"[0]));
+    allocas = sb_append_cstr(allocas, byte~(&"p"[0]));
+    allocas = sb_append_int(allocas, psi);
+    allocas = sb_append_cstr(allocas, byte~(&", "[0]));
+    allocas = sb_append_string(allocas, pty);
+    allocas = sb_append_cstr(allocas, byte~(&"* "[0]));
+    allocas = sb_append_string(allocas, slot);
+    allocas = sb_append_byte(allocas, byte(10));
+    paramSlots = vecstr_push(paramSlots, slot);
+    paramSlotTypes = vecstr_push(paramSlotTypes, pty);
+    psi = psi + 1;
+  }
+
+  var sbBody = sb_new();
+  sbBody = sb_append_string(sbBody, sb_to_string(allocas));
+
   // Body: expect a block node at fn.a
   var body = nodearena_get(pmr.arena, fn.a);
   var start = body.a;
@@ -792,72 +937,46 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
     var stmt = nodearena_get(pmr.arena, i);
     if (stmt.kind == NODE_RETURN) {
       if (retTy.length == 4 && (retTy.data)~ == byte(118)) { // "void"
-        sb = sb_append_cstr(sb, byte~(&"  ret void"[0]));
-        sb = sb_append_byte(sb, byte(10));
+        sbBody = sb_append_cstr(sbBody, byte~(&"  ret void"[0]));
+        sbBody = sb_append_byte(sbBody, byte(10));
         emittedRet = 1;
         break;
       }
-      var exprRes = cg_expr(pmr, tm, stmt.a, paramNames, paramTypes, &tmp);
+      var exprRes = cg_expr(pmr, tm, stmt.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, &tmp);
       if (exprRes.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
-      var retValName = exprRes.value;
-      var retValTy = exprRes.valTy;
-      if (cg_str_eq(retValTy, retTy) == 0 && retValTy.length > 0 && retTy.length > 0) {
-        // widen i1/i8 -> i32
-        if (retTy.length == 3 && (retTy.data)~ == byte(105) && (retTy.data + 1)~ == byte(51)) {
-          if (retValTy.length == 2 && (retValTy.data)~ == byte(105) && (retValTy.data + 1)~ == byte(49)) {
-            var convTmp = cg_fresh_tmp(&tmp);
-            sb = sb_append_string(sb, exprRes.instr);
-            sb = sb_append_cstr(sb, byte~(&"  "[0]));
-            sb = sb_append_string(sb, convTmp);
-            sb = sb_append_cstr(sb, byte~(&" = zext i1 "[0]));
-            sb = sb_append_string(sb, retValName);
-            sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
-            sb = sb_append_byte(sb, byte(10));
-            retValName = convTmp;
-            retValTy = retTy;
-          } else if (retValTy.length == 2 && (retValTy.data)~ == byte(105) && (retValTy.data + 1)~ == byte(56)) {
-            var convTmp2 = cg_fresh_tmp(&tmp);
-            sb = sb_append_string(sb, exprRes.instr);
-            sb = sb_append_cstr(sb, byte~(&"  "[0]));
-            sb = sb_append_string(sb, convTmp2);
-            sb = sb_append_cstr(sb, byte~(&" = zext i8 "[0]));
-            sb = sb_append_string(sb, retValName);
-            sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
-            sb = sb_append_byte(sb, byte(10));
-            retValName = convTmp2;
-            retValTy = retTy;
-          } else {
-            return FnCodegenResult{sb_to_string(sb), 1};
-          }
-        } else {
-          return FnCodegenResult{sb_to_string(sb), 1};
-        }
-      } else {
-        sb = sb_append_string(sb, exprRes.instr);
-      }
-      sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
-      sb = sb_append_string(sb, retTy);
-      sb = sb_append_byte(sb, byte(32));
-      sb = sb_append_string(sb, retValName);
-      sb = sb_append_byte(sb, byte(10));
+      // widen if needed
+      var coerced = cg_coerce(exprRes, retTy, &tmp);
+      if (coerced.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
+      sbBody = sb_append_string(sbBody, coerced.instr);
+      sbBody = sb_append_cstr(sbBody, byte~(&"  ret "[0]));
+      sbBody = sb_append_string(sbBody, retTy);
+      sbBody = sb_append_byte(sbBody, byte(32));
+      sbBody = sb_append_string(sbBody, coerced.value);
+      sbBody = sb_append_byte(sbBody, byte(10));
       emittedRet = 1;
       break;
+    } else if (stmt.kind == NODE_EXPR_STMT) {
+      var exprOnly = cg_expr(pmr, tm, stmt.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, &tmp);
+      if (exprOnly.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
+      sbBody = sb_append_string(sbBody, exprOnly.instr);
+    } else {
+      // Unsupported stmt kinds for now.
     }
-    // For now, ignore other statement kinds gracefully.
     i = i + 1;
   }
   if (emittedRet == 0) {
     if (retTy.length == 4 && (retTy.data)~ == byte(118)) {
-      sb = sb_append_cstr(sb, byte~(&"  ret void"[0]));
+      sbBody = sb_append_cstr(sbBody, byte~(&"  ret void"[0]));
     } else {
-      sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
-      sb = sb_append_string(sb, retTy);
-      sb = sb_append_byte(sb, byte(32));
-      sb = sb_append_byte(sb, byte(48)); // '0'
+      sbBody = sb_append_cstr(sbBody, byte~(&"  ret "[0]));
+      sbBody = sb_append_string(sbBody, retTy);
+      sbBody = sb_append_byte(sbBody, byte(32));
+      sbBody = sb_append_byte(sbBody, byte(48)); // '0'
     }
-    sb = sb_append_byte(sb, byte(10));
+    sbBody = sb_append_byte(sbBody, byte(10));
   }
 
+  sb = sb_append_string(sb, sb_to_string(sbBody));
   sb = sb_append_byte(sb, byte(125)); // '}'
   sb = sb_append_byte(sb, byte(10));
   return FnCodegenResult{sb_to_string(sb), 0};

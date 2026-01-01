@@ -8,7 +8,7 @@ describe("Stage1 codegen pointers", () => {
     `
     const irRes = runStage1CompileToIr(program)
     expect(irRes.status).toBe(0)
-    expect(irRes.stdout).toContain("getelementptr i8, i8* %p0, i32 %p1")
+    expect(irRes.stdout).toContain("getelementptr i8, i8* %t2, i32 %t3")
   })
 
   it("emits ptrtoint diff for pointer subtraction", () => {
@@ -18,8 +18,8 @@ describe("Stage1 codegen pointers", () => {
     `
     const irRes = runStage1CompileToIr(program)
     expect(irRes.status).toBe(0)
-    expect(irRes.stdout).toContain("ptrtoint i8* %p0 to i64")
-    expect(irRes.stdout).toContain("ptrtoint i8* %p1 to i64")
+    expect(irRes.stdout).toContain("ptrtoint i8* %t2 to i64")
+    expect(irRes.stdout).toContain("ptrtoint i8* %t3 to i64")
   })
 
   it("emits pointer equality compare", () => {
@@ -29,7 +29,7 @@ describe("Stage1 codegen pointers", () => {
     `
     const irRes = runStage1CompileToIr(program)
     expect(irRes.status).toBe(0)
-    expect(irRes.stdout).toContain("icmp eq i8* %p0, %p1")
+    expect(irRes.stdout).toContain("icmp eq i8* %t2, %t3")
     const bin = runRawIR(irRes.stdout)
     expect(bin.status).toBe(0)
   })
