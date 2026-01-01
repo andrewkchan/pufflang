@@ -59,6 +59,13 @@ def cg_pointer_elem_ty(ptrTy String) String {
   return sb_to_string(sb);
 }
 
+def cg_string_name(tokIdx int) String {
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&".str."[0]));
+  sb = sb_append_int(sb, tokIdx);
+  return sb_to_string(sb);
+}
+
 // Ensure an expression is i32; zext from i1/i8.
 def cg_to_i32(res ExprCodegenResult, tmp int~) ExprCodegenResult {
   if (res.err == 1) { return res; }
@@ -381,6 +388,25 @@ def cg_expr(
     var tk = token_kind_at(pmr.tokens, n.a);
     if (tk == TOKEN_TRUE) { return ExprCodegenResult{String{pmr.src, 0}, String{byte~(&"1"[0]), 1}, String{byte~(&"i1"[0]), 2}, 0}; }
     if (tk == TOKEN_FALSE) { return ExprCodegenResult{String{pmr.src, 0}, String{byte~(&"0"[0]), 1}, String{byte~(&"i1"[0]), 2}, 0}; }
+    if (tk == TOKEN_STRING) {
+      var nameStr = cg_string_name(n.a);
+      var tlen = token_length_at(pmr.tokens, n.a);
+      var clen = tlen - 2;
+      var tmpStr = cg_fresh_tmp(tmp);
+      var sbStr = sb_new();
+      sbStr = sb_append_cstr(sbStr, byte~(&"  "[0]));
+      sbStr = sb_append_string(sbStr, tmpStr);
+      sbStr = sb_append_cstr(sbStr, byte~(&" = getelementptr inbounds ["[0]));
+      sbStr = sb_append_int(sbStr, clen + 1);
+      sbStr = sb_append_cstr(sbStr, byte~(&" x i8, "[0]));
+      sbStr = sb_append_int(sbStr, clen + 1);
+      sbStr = sb_append_cstr(sbStr, byte~(&" x i8* "[0]));
+      sbStr = sb_append_byte(sbStr, byte(64)); // '@'
+      sbStr = sb_append_string(sbStr, nameStr);
+      sbStr = sb_append_cstr(sbStr, byte~(&", i32 0, i32 0"[0]));
+      sbStr = sb_append_byte(sbStr, byte(10));
+      return ExprCodegenResult{sb_to_string(sbStr), tmpStr, String{byte~(&"i8*"[0]), 3}, 0};
+    }
     return ExprCodegenResult{String{pmr.src, 0}, lex, String{byte~(&"i32"[0]), 3}, 0};
   }
   if (n.kind == NODE_GROUP) {
@@ -1589,6 +1615,35 @@ def cg_function_decl(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int)
 // Module-level codegen entry.
 def codegen_module(pmr ParseModuleResult, tm TypeModuleTypes) String {
   var sb = sb_new();
+
+  // Emit string literal constants.
+  var si = 0;
+  while (si < pmr.tokens.length) {
+    var tkSi = token_kind_at(pmr.tokens, si);
+    if (tkSi == TOKEN_STRING) {
+      var nameStr2 = cg_string_name(si);
+      var tlen2 = token_length_at(pmr.tokens, si);
+      var clen2 = tlen2 - 2;
+      sb = sb_append_byte(sb, byte(64)); // '@'
+      sb = sb_append_string(sb, nameStr2);
+      sb = sb_append_cstr(sb, byte~(&" = private unnamed_addr constant ["[0]));
+      sb = sb_append_int(sb, clen2 + 1);
+      sb = sb_append_cstr(sb, byte~(&" x i8] [ "[0]));
+      var start2 = token_start_at(pmr.tokens, si) + 1;
+      var idx2 = 0;
+      while (idx2 < clen2) {
+        if (idx2 > 0) { sb = sb_append_cstr(sb, byte~(&", "[0])); }
+        var ch2 = (pmr.src + start2 + idx2)~;
+        sb = sb_append_cstr(sb, byte~(&"i8 "[0]));
+        sb = sb_append_int(sb, int(ch2));
+        idx2 = idx2 + 1;
+      }
+      if (clen2 > 0) { sb = sb_append_cstr(sb, byte~(&", "[0])); }
+      sb = sb_append_cstr(sb, byte~(&"i8 0 ]"[0]));
+      sb = sb_append_byte(sb, byte(10));
+    }
+    si = si + 1;
+  }
 
   // Emit globals with literal initializers (ints/bools/bytes).
   var gi = 0;

@@ -36,4 +36,15 @@ describe("Stage1 codegen globals", () => {
     const bin = runRawIR(irRes.stdout)
     expect(bin.status).toBe(104)
   })
+
+  it("emits string literal constant", () => {
+    const program = `
+      var s = "hi";
+      def main() int { return 0; }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    expect(irRes.stdout).toContain("@.str.")
+    expect(irRes.stdout).toContain("= private unnamed_addr constant [3 x i8] [ i8 104, i8 105, i8 0 ]")
+  })
 })
