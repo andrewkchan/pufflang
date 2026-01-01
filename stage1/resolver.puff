@@ -777,6 +777,8 @@ def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
   }
   if (fnCtx.err == 1) { r.err = 1; return r; }
   if (fnCtx.hasReturn == 0) { r.err = 1; return r; }
+  // Clean up parameter scope
+  fnCtx.scope = scope_exit(fnCtx.scope);
   r.hasReturn = 1;
   return r;
 }

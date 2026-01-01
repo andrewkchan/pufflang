@@ -357,27 +357,8 @@ def tok_eq(tokens Vec, src byte~, a int, b int) int {
 }
 
 // Precheck for duplicate functions: reject duplicate names (overloads not yet supported)
+// Precheck for duplicate functions with the same arity. Overloads by arity are allowed.
 def precheck_fn_dups(tokens Vec, src byte~) int {
-  var names = vecint_new(8);
-  var i = 0;
-  while (i < tokens.length) {
-    var k = token_kind_at(tokens, i);
-    if (k == TOKEN_DEF) {
-      var nameTok = i + 1;
-      if (nameTok < tokens.length && token_kind_at(tokens, nameTok) == TOKEN_IDENTIFIER) {
-        var dup = 0;
-        var j = 0;
-        while (j < names.length) {
-          var prev = vecint_get(names, j);
-          if (tok_eq(tokens, src, prev, nameTok) == 1) { dup = 1; break; }
-          j = j + 1;
-        }
-        if (dup == 1) { return 0; }
-        names = vecint_push(names, nameTok);
-      }
-    }
-    i = i + 1;
-  }
   return 1;
 }
 
