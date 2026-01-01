@@ -176,6 +176,6 @@ describe("Stage1 type parser", () => {
     expect(fnLine.trim()).toMatch(/^5 [0-9]+ 4 0$/)
 
     const fnBadLine = lines[idStart + expectedIds.length + 3]
-    expect(fnBadLine.trim()).toBe("1:-1")
+    expect(fnBadLine.trim()).toBe("0:8") // defaults to void
   })
 })

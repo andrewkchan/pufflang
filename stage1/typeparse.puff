@@ -253,7 +253,7 @@ def parse_fn_types(env TypeEnv, src byte~, n int) FnTypesResult {
   idx = idx + 1;
   // optional return type
   if (token_kind_at(toks, idx) == TOKEN_EOF) {
-    return FnTypesResult{params.env, params.ids, -1, 1};
+    return FnTypesResult{params.env, params.ids, 8, 0}; // default void
   }
   var retRes = parse_type_id(params.env, toks, src, idx);
   if (retRes.err == 1) { return FnTypesResult{retRes.env, params.ids, -1, 1}; }
@@ -271,6 +271,9 @@ def parse_fn_types_tokens(env TypeEnv, tokens Vec, src byte~, idx int) FnTypesTo
   var i = params.next;
   if (token_kind_at(tokens, i) != TOKEN_RIGHT_PAREN) { return FnTypesTokResult{params.env, params.ids, -1, i, 1}; }
   i = i + 1;
+  if (token_kind_at(tokens, i) == TOKEN_EOF) {
+    return FnTypesTokResult{params.env, params.ids, 8, i, 0}; // default void
+  }
   var retRes = parse_type_id(params.env, tokens, src, i);
   if (retRes.err == 1) { return FnTypesTokResult{retRes.env, params.ids, -1, retRes.next, 1}; }
   i = retRes.next;
