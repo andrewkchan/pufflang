@@ -1,0 +1,120 @@
+// Stage1 type parser (standalone) that parses a type string into a simple
+// S-expression-like string representation without mutating TypeEnv/TypeTable.
+// Grammar (subset):
+//   type  := array | postfix_ptr
+//   array := '[' type ';' NUMBER ']'
+//   postfix_ptr := base ('~')*
+//   base  := int | float | byte | bool | void | IDENT
+//
+// Output format examples:
+//   int           -> "int"
+//   Foo           -> "(struct Foo)"
+//   int~          -> "(ptr int)"
+//   int~~         -> "(ptr (ptr int))"
+//   [int;3]       -> "(array 3 int)"
+//   [byte;4]~     -> "(ptr (array 4 byte))"
+//   [[int;2];3]   -> "(array 3 (array 2 int))"
+
+// -------- Helpers --------
+def tok_lex(tokens Vec, idx int, src byte~) String {
+  var st = token_start_at(tokens, idx);
+  var ln = token_length_at(tokens, idx);
+  return String{src + st, ln};
+}
+
+def tok_to_int(tokens Vec, idx int, src byte~) int {
+  var s = token_start_at(tokens, idx);
+  var ln = token_length_at(tokens, idx);
+  var i = 0;
+  var acc = 0;
+  while (i < ln) {
+    var c = int((src + s + i)~) - 48;
+    if (c < 0 || c > 9) { return -1; }
+    acc = acc * 10 + c;
+    i = i + 1;
+  }
+  return acc;
+}
+
+struct TypeParseResult { ok int, next int, out String }
+
+def wrap_ptr(inner String) String {
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"(ptr "[0]));
+  sb = sb_append_string(sb, inner);
+  sb = sb_append_byte(sb, byte(41)); // ')'
+  return sb_to_string(sb);
+}
+
+def wrap_array(lengthVal int, inner String) String {
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"(array "[0]));
+  sb = sb_append_int(sb, lengthVal);
+  sb = sb_append_byte(sb, byte(32));
+  sb = sb_append_string(sb, inner);
+  sb = sb_append_byte(sb, byte(41));
+  return sb_to_string(sb);
+}
+
+// -------- Parser --------
+def parse_base(tokens Vec, src byte~, idx int) TypeParseResult {
+  var k = token_kind_at(tokens, idx);
+  if (k == TOKEN_INT) { return TypeParseResult{1, idx + 1, String{byte~(&"int"[0]), 3}}; }
+  if (k == TOKEN_FLOAT) { return TypeParseResult{1, idx + 1, String{byte~(&"float"[0]), 5}}; }
+  if (k == TOKEN_BYTE) { return TypeParseResult{1, idx + 1, String{byte~(&"byte"[0]), 4}}; }
+  if (k == TOKEN_BOOL) { return TypeParseResult{1, idx + 1, String{byte~(&"bool"[0]), 4}}; }
+  if (k == TOKEN_VOID) { return TypeParseResult{1, idx + 1, String{byte~(&"void"[0]), 4}}; }
+  if (k == TOKEN_IDENTIFIER) {
+    var name = tok_lex(tokens, idx, src);
+    var sb = sb_new();
+    sb = sb_append_cstr(sb, byte~(&"(struct "[0]));
+    sb = sb_append_string(sb, name);
+    sb = sb_append_byte(sb, byte(41));
+    return TypeParseResult{1, idx + 1, sb_to_string(sb)};
+  }
+  return TypeParseResult{0, idx, String{src, 0}};
+}
+
+def parse_type(tokens Vec, src byte~, idx int) TypeParseResult {
+  var k = token_kind_at(tokens, idx);
+  // array
+  if (k == TOKEN_LEFT_BRACKET) {
+    var inner = parse_type(tokens, src, idx + 1);
+    if (inner.ok == 0) { return inner; }
+    if (token_kind_at(tokens, inner.next) != TOKEN_SEMICOLON) { return TypeParseResult{0, inner.next, inner.out}; }
+    var lenTok = inner.next + 1;
+    if (token_kind_at(tokens, lenTok) != TOKEN_NUMBER) { return TypeParseResult{0, lenTok, inner.out}; }
+    var arrLen = tok_to_int(tokens, lenTok, src);
+    if (arrLen < 0) { return TypeParseResult{0, lenTok, inner.out}; }
+    var closeTok = lenTok + 1;
+    if (token_kind_at(tokens, closeTok) != TOKEN_RIGHT_BRACKET) { return TypeParseResult{0, closeTok, inner.out}; }
+    var outArr = wrap_array(arrLen, inner.out);
+    var nextArr = closeTok + 1;
+    while (token_kind_at(tokens, nextArr) == TOKEN_TILDE) {
+      outArr = wrap_ptr(outArr);
+      nextArr = nextArr + 1;
+    }
+    return TypeParseResult{1, nextArr, outArr};
+  }
+  // base + postfix pointers
+  var base = parse_base(tokens, src, idx);
+  if (base.ok == 0) { return base; }
+  var next = base.next;
+  while (token_kind_at(tokens, next) == TOKEN_TILDE) {
+    var wrapped = wrap_ptr(base.out);
+    base = TypeParseResult{1, next + 1, wrapped};
+    next = base.next;
+  }
+  return base;
+}
+
+// Public API: parse a type literal string into S-expression string.
+// Returns empty string on error.
+def parse_type_to_string(src byte~, n int) String {
+  var toks = scan_tokens(src, n);
+  var res = parse_type(toks, src, 0);
+  if (res.ok == 0) { return String{src, 0}; }
+  if (token_kind_at(toks, res.next) != TOKEN_EOF) { return String{src, 0}; }
+  return res.out;
+}
+
