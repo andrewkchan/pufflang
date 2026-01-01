@@ -39,6 +39,7 @@ def tok_to_int(tokens Vec, idx int, src byte~) int {
 struct TypeParseResult { ok int, next int, out String }
 struct TypeParseIdResult { env TypeEnv, next int, typeId int, err int }
 struct ParamTypesResult { env TypeEnv, ids VecInt, err int }
+struct ParamTypesTokResult { env TypeEnv, ids VecInt, next int, err int }
 
 def wrap_ptr(inner String) String {
   var sb = sb_new();
@@ -205,5 +206,35 @@ def parse_param_types(env TypeEnv, src byte~, n int) ParamTypesResult {
     return ParamTypesResult{curEnv, ids, 1};
   }
   return ParamTypesResult{curEnv, ids, 0};
+}
+
+// Parse comma-separated types from an existing token stream starting at idx,
+// stopping at the provided terminator (e.g., TOKEN_RIGHT_PAREN). Returns next
+// index positioned at the terminator token (not consumed).
+def parse_param_types_tokens(env TypeEnv, tokens Vec, src byte~, idx int, terminator int) ParamTypesTokResult {
+  var ids = vecint_new(4);
+  var curEnv = env;
+  var i = idx;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == terminator) {
+      return ParamTypesTokResult{curEnv, ids, i, 0};
+    }
+    var typeRes = parse_type_id(curEnv, tokens, src, i);
+    if (typeRes.err == 1) { return ParamTypesTokResult{curEnv, ids, typeRes.next, 1}; }
+    curEnv = typeRes.env;
+    ids = vecint_push(ids, typeRes.typeId);
+    i = typeRes.next;
+    var sep = token_kind_at(tokens, i);
+    if (sep == TOKEN_COMMA) {
+      i = i + 1;
+      continue;
+    }
+    if (sep == terminator) {
+      return ParamTypesTokResult{curEnv, ids, i, 0};
+    }
+    return ParamTypesTokResult{curEnv, ids, i, 1};
+  }
+  return ParamTypesTokResult{curEnv, ids, i, 1};
 }
 

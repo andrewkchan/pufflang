@@ -107,6 +107,21 @@ def main() {
   var bad = parse_param_types(env, byte~(&badSrc[0]), len(badSrc));
   print_int(bad.err);
   __putchar__(10);
+
+  // token-based param parsing with terminator ')'
+  var tokSrc = "int, byte~)";
+  var tokToks = scan_tokens(byte~(&tokSrc[0]), len(tokSrc));
+  var tokRes = parse_param_types_tokens(env, tokToks, byte~(&tokSrc[0]), 0, TOKEN_RIGHT_PAREN);
+  var k = 0;
+  while (k < tokRes.ids.length) {
+    print_int(vecint_get(tokRes.ids, k));
+    __putchar__(32);
+    k = k + 1;
+  }
+  print_int(tokRes.err);
+  __putchar__(32);
+  print_int(tokRes.next);
+  __putchar__(10);
 }
 `
   return compileAndRunWithStdlib(body)
@@ -155,5 +170,9 @@ describe("Stage1 type parser", () => {
 
     const badLine = lines[idStart + expectedIds.length + 1]
     expect(badLine.trim()).toBe("1")
+
+    const tokLine = lines[idStart + expectedIds.length + 2]
+    // expect: "5 <ptr_or_byte_id> 0 <terminator_idx>" (ids int, ptr/byte, err=0, next index of ')')
+    expect(tokLine.trim()).toMatch(/^5 [0-9]+ 0 [0-9]+$/)
   })
 })
