@@ -15,4 +15,17 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     // main returns 3 -> exit code 3
     expect(binRes.status).toBe(3)
   })
+
+  it("emits IR that references parameters", () => {
+    const program = `
+      def foo(x int) int { return x; }
+      def main() int { return 0; }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    expect(irRes.stderr).toBe("")
+    const ir = irRes.stdout.trim()
+    expect(ir).toContain("%p0")
+    expect(ir).toContain("define i32 @foo")
+  })
 })

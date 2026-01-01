@@ -26,8 +26,36 @@ def cg_tok_string(tokens Vec, src byte~, tokIdx int) String {
   return tok_string(tokens, tokIdx, src);
 }
 
-// Emit simple expressions (literal, group, unary -).
-def cg_expr(pmr ParseModuleResult, exprIdx int) ExprCodegenResult {
+// Collect parameter names from function tokens (best-effort).
+def cg_collect_param_names(pmr ParseModuleResult, fn Node) VecStr {
+  var names = vecstr_new(4);
+  var idx = fn.b;
+  var collected = 0;
+  while (idx < pmr.tokens.length && collected < fn.d) {
+    var k = token_kind_at(pmr.tokens, idx);
+    if (k == TOKEN_IDENTIFIER) {
+      var s = tok_string(pmr.tokens, idx, pmr.src);
+      names = vecstr_push(names, s);
+      collected = collected + 1;
+    }
+    if (k == TOKEN_RIGHT_PAREN) { break; }
+    idx = idx + 1;
+  }
+  return names;
+}
+
+def cg_match_param(params VecStr, name String) int {
+  var i = 0;
+  while (i < params.length) {
+    var p = vecstr_get(params, i);
+    if (str_eq(p.data, p.length, name.data, name.length) == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Emit simple expressions (literal, group, unary -, parameter variable).
+def cg_expr(pmr ParseModuleResult, exprIdx int, paramNames VecStr) ExprCodegenResult {
   if (exprIdx < 0 || exprIdx >= pmr.arena.nodes.length) { return ExprCodegenResult{String{pmr.src, 0}, 1}; }
   var n = nodearena_get(pmr.arena, exprIdx);
   if (n.kind == NODE_LITERAL) {
@@ -35,16 +63,26 @@ def cg_expr(pmr ParseModuleResult, exprIdx int) ExprCodegenResult {
     return ExprCodegenResult{lex, 0};
   }
   if (n.kind == NODE_GROUP) {
-    return cg_expr(pmr, n.a);
+    return cg_expr(pmr, n.a, paramNames);
   }
   if (n.kind == NODE_UNARY) {
     var op = cg_tok_string(pmr.tokens, pmr.src, n.a);
-    var inner = cg_expr(pmr, n.b);
+    var inner = cg_expr(pmr, n.b, paramNames);
     if (inner.err == 1) { return ExprCodegenResult{inner.text, 1}; }
     var sb = sb_new();
     sb = sb_append_string(sb, op);
     sb = sb_append_string(sb, inner.text);
     return ExprCodegenResult{sb_to_string(sb), 0};
+  }
+  if (n.kind == NODE_VARIABLE) {
+    var name = cg_tok_string(pmr.tokens, pmr.src, n.a);
+    var idx = cg_match_param(paramNames, name);
+    if (idx == -1) { return ExprCodegenResult{name, 1}; }
+    var sbVar = sb_new();
+    sbVar = sb_append_byte(sbVar, byte(37)); // '%'
+    sbVar = sb_append_cstr(sbVar, byte~(&"p"[0]));
+    sbVar = sb_append_int(sbVar, idx);
+    return ExprCodegenResult{sb_to_string(sbVar), 0};
   }
   // Unsupported expression kinds for now.
   return ExprCodegenResult{String{pmr.src, 0}, 1};
@@ -56,6 +94,8 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
   var retId = tm_fn_return_type(tm, fi);
   var retTy = cg_llvm_type(tm.env.tt, retId);
   var name = tok_string(pmr.tokens, fn.c, pmr.src);
+
+  var paramNames = cg_collect_param_names(pmr, fn);
 
   var sb = sb_new();
   // Function header
@@ -119,7 +159,7 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
         emittedRet = 1;
         break;
       }
-      var exprRes = cg_expr(pmr, stmt.a);
+      var exprRes = cg_expr(pmr, stmt.a, paramNames);
       if (exprRes.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
       sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
       sb = sb_append_string(sb, retTy);
