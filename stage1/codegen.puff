@@ -130,22 +130,62 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     var op = cg_tok_string(pmr.tokens, pmr.src, n.a);
     var inner = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
     if (inner.err == 1) { return ExprCodegenResult{inner.instr, inner.value, inner.valTy, 1}; }
-    // If operand is a literal constant, inline.
+    // unary + : no-op
+    if (op.length == 1 && (op.data)~ == byte(43)) { return inner; } // '+'
+    // logical not
+    if (op.length == 1 && (op.data)~ == byte(33)) { // '!'
+      var b = cg_to_bool(inner, tmp);
+      if (b.err == 1) { return b; }
+      var tmpNot = cg_fresh_tmp(tmp);
+      var sbNot = sb_new();
+      sbNot = sb_append_string(sbNot, b.instr);
+      sbNot = sb_append_cstr(sbNot, byte~(&"  "[0]));
+      sbNot = sb_append_string(sbNot, tmpNot);
+      sbNot = sb_append_cstr(sbNot, byte~(&" = xor i1 "[0]));
+      sbNot = sb_append_string(sbNot, b.value);
+      sbNot = sb_append_cstr(sbNot, byte~(&", 1"[0]));
+      sbNot = sb_append_byte(sbNot, byte(10));
+      return ExprCodegenResult{sb_to_string(sbNot), tmpNot, String{byte~(&"i1"[0]), 2}, 0};
+    }
+    // bitwise not
+    if (op.length == 1 && (op.data)~ == byte(126)) { // '~'
+      var tyBw = inner.valTy;
+      if (tyBw.length == 0) { tyBw = String{byte~(&"i32"[0]), 3}; }
+      var tmpBw = cg_fresh_tmp(tmp);
+      var sbBw = sb_new();
+      sbBw = sb_append_string(sbBw, inner.instr);
+      sbBw = sb_append_cstr(sbBw, byte~(&"  "[0]));
+      sbBw = sb_append_string(sbBw, tmpBw);
+      sbBw = sb_append_cstr(sbBw, byte~(&" = xor "[0]));
+      sbBw = sb_append_string(sbBw, tyBw);
+      sbBw = sb_append_byte(sbBw, byte(32));
+      sbBw = sb_append_string(sbBw, inner.value);
+      sbBw = sb_append_cstr(sbBw, byte~(&", -1"[0]));
+      sbBw = sb_append_byte(sbBw, byte(10));
+      return ExprCodegenResult{sb_to_string(sbBw), tmpBw, tyBw, 0};
+    }
+    // unary minus
     if (inner.instr.length == 0 && (inner.value.length > 0)) {
       var sbLit = sb_new();
       sbLit = sb_append_string(sbLit, op);
       sbLit = sb_append_string(sbLit, inner.value);
       return ExprCodegenResult{inner.instr, sb_to_string(sbLit), inner.valTy, 0};
     }
+    var tyMinus = inner.valTy;
+    if (tyMinus.length == 0) { tyMinus = String{byte~(&"i32"[0]), 3}; }
     var tmpName = cg_fresh_tmp(tmp);
     var sbInstr = sb_new();
     sbInstr = sb_append_string(sbInstr, inner.instr);
     sbInstr = sb_append_cstr(sbInstr, byte~(&"  "[0]));
     sbInstr = sb_append_string(sbInstr, tmpName);
-    sbInstr = sb_append_cstr(sbInstr, byte~(&" = sub i32 0, "[0]));
+    sbInstr = sb_append_cstr(sbInstr, byte~(&" = sub "[0]));
+    sbInstr = sb_append_string(sbInstr, tyMinus);
+    sbInstr = sb_append_byte(sbInstr, byte(32));
+    sbInstr = sb_append_string(sbInstr, String{byte~(&"0"[0]), 1});
+    sbInstr = sb_append_cstr(sbInstr, byte~(&", "[0]));
     sbInstr = sb_append_string(sbInstr, inner.value);
     sbInstr = sb_append_byte(sbInstr, byte(10));
-    return ExprCodegenResult{sb_to_string(sbInstr), tmpName, inner.valTy, 0};
+    return ExprCodegenResult{sb_to_string(sbInstr), tmpName, tyMinus, 0};
   }
   if (n.kind == NODE_VARIABLE) {
     var name = cg_tok_string(pmr.tokens, pmr.src, n.a);
@@ -164,17 +204,56 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     if (left.err == 1) { return left; }
     var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
     if (right.err == 1) { return right; }
+    var lTy = left.valTy;
+    if (lTy.length == 0) { lTy = String{byte~(&"i32"[0]), 3}; }
+    var rTy = right.valTy;
+    if (rTy.length == 0) { rTy = String{byte~(&"i32"[0]), 3}; }
+    var lInstr = left.instr;
+    var rInstr = right.instr;
+    var lVal = left.value;
+    var rVal = right.value;
+    if (cg_str_eq(lTy, rTy) == 0) {
+      // widen i1 to i32 when mixed with ints
+      if (cg_str_eq(lTy, String{byte~(&"i1"[0]), 2}) == 1 && cg_str_eq(rTy, String{byte~(&"i32"[0]), 3}) == 1) {
+        var tmpZ = cg_fresh_tmp(tmp);
+        var sbZ = sb_new();
+        sbZ = sb_append_string(sbZ, lInstr);
+        sbZ = sb_append_cstr(sbZ, byte~(&"  "[0]));
+        sbZ = sb_append_string(sbZ, tmpZ);
+        sbZ = sb_append_cstr(sbZ, byte~(&" = zext i1 "[0]));
+        sbZ = sb_append_string(sbZ, lVal);
+        sbZ = sb_append_cstr(sbZ, byte~(&" to i32"[0]));
+        sbZ = sb_append_byte(sbZ, byte(10));
+        lInstr = sb_to_string(sbZ);
+        lVal = tmpZ;
+        lTy = String{byte~(&"i32"[0]), 3};
+      } else if (cg_str_eq(rTy, String{byte~(&"i1"[0]), 2}) == 1 && cg_str_eq(lTy, String{byte~(&"i32"[0]), 3}) == 1) {
+        var tmpZr = cg_fresh_tmp(tmp);
+        var sbZr = sb_new();
+        sbZr = sb_append_string(sbZr, rInstr);
+        sbZr = sb_append_cstr(sbZr, byte~(&"  "[0]));
+        sbZr = sb_append_string(sbZr, tmpZr);
+        sbZr = sb_append_cstr(sbZr, byte~(&" = zext i1 "[0]));
+        sbZr = sb_append_string(sbZr, rVal);
+        sbZr = sb_append_cstr(sbZr, byte~(&" to i32"[0]));
+        sbZr = sb_append_byte(sbZr, byte(10));
+        rInstr = sb_to_string(sbZr);
+        rVal = tmpZr;
+        rTy = String{byte~(&"i32"[0]), 3};
+      } else {
+        return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
+      }
+    }
     var opTok = cg_tok_string(pmr.tokens, pmr.src, n.c);
     var op = opTok;
     var tmpName2 = cg_fresh_tmp(tmp);
     var sbInstr2 = sb_new();
-    sbInstr2 = sb_append_string(sbInstr2, left.instr);
-    sbInstr2 = sb_append_string(sbInstr2, right.instr);
+    sbInstr2 = sb_append_string(sbInstr2, lInstr);
+    sbInstr2 = sb_append_string(sbInstr2, rInstr);
     sbInstr2 = sb_append_cstr(sbInstr2, byte~(&"  "[0]));
     sbInstr2 = sb_append_string(sbInstr2, tmpName2);
     // Map operator to LLVM mnemonic (limited set)
-    var resultTy = left.valTy;
-    if (resultTy.length == 0) { resultTy = String{byte~(&"i32"[0]), 3}; }
+    var resultTy = lTy;
     // Map operator to LLVM mnemonic (extended set)
     if (op.length == 1 && (op.data)~ == byte(43)) { // '+'
       sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = add "[0]));
@@ -219,39 +298,39 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     } else if (op.length == 2 && (op.data)~ == byte(61) && (op.data + 1)~ == byte(61)) { // "=="
       resultTy = String{byte~(&"i1"[0]), 2};
       sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = icmp eq "[0]));
-      sbInstr2 = sb_append_string(sbInstr2, left.valTy.length == 0 ? String{byte~(&"i32"[0]), 3} : left.valTy);
+      sbInstr2 = sb_append_string(sbInstr2, lTy);
       sbInstr2 = sb_append_byte(sbInstr2, byte(32));
     } else if (op.length == 2 && (op.data)~ == byte(33) && (op.data + 1)~ == byte(61)) { // "!="
       resultTy = String{byte~(&"i1"[0]), 2};
       sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = icmp ne "[0]));
-      sbInstr2 = sb_append_string(sbInstr2, left.valTy.length == 0 ? String{byte~(&"i32"[0]), 3} : left.valTy);
+      sbInstr2 = sb_append_string(sbInstr2, lTy);
       sbInstr2 = sb_append_byte(sbInstr2, byte(32));
     } else if (op.length == 1 && (op.data)~ == byte(60)) { // '<'
       resultTy = String{byte~(&"i1"[0]), 2};
       sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = icmp slt "[0]));
-      sbInstr2 = sb_append_string(sbInstr2, left.valTy.length == 0 ? String{byte~(&"i32"[0]), 3} : left.valTy);
+      sbInstr2 = sb_append_string(sbInstr2, lTy);
       sbInstr2 = sb_append_byte(sbInstr2, byte(32));
     } else if (op.length == 2 && (op.data)~ == byte(60) && (op.data + 1)~ == byte(61)) { // "<="
       resultTy = String{byte~(&"i1"[0]), 2};
       sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = icmp sle "[0]));
-      sbInstr2 = sb_append_string(sbInstr2, left.valTy.length == 0 ? String{byte~(&"i32"[0]), 3} : left.valTy);
+      sbInstr2 = sb_append_string(sbInstr2, lTy);
       sbInstr2 = sb_append_byte(sbInstr2, byte(32));
     } else if (op.length == 1 && (op.data)~ == byte(62)) { // '>'
       resultTy = String{byte~(&"i1"[0]), 2};
       sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = icmp sgt "[0]));
-      sbInstr2 = sb_append_string(sbInstr2, left.valTy.length == 0 ? String{byte~(&"i32"[0]), 3} : left.valTy);
+      sbInstr2 = sb_append_string(sbInstr2, lTy);
       sbInstr2 = sb_append_byte(sbInstr2, byte(32));
     } else if (op.length == 2 && (op.data)~ == byte(62) && (op.data + 1)~ == byte(61)) { // ">="
       resultTy = String{byte~(&"i1"[0]), 2};
       sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = icmp sge "[0]));
-      sbInstr2 = sb_append_string(sbInstr2, left.valTy.length == 0 ? String{byte~(&"i32"[0]), 3} : left.valTy);
+      sbInstr2 = sb_append_string(sbInstr2, lTy);
       sbInstr2 = sb_append_byte(sbInstr2, byte(32));
     } else {
       return ExprCodegenResult{sb_to_string(sbInstr2), tmpName2, String{pmr.src, 0}, 1};
     }
-    sbInstr2 = sb_append_string(sbInstr2, left.value);
+    sbInstr2 = sb_append_string(sbInstr2, lVal);
     sbInstr2 = sb_append_cstr(sbInstr2, byte~(&", "[0]));
-    sbInstr2 = sb_append_string(sbInstr2, right.value);
+    sbInstr2 = sb_append_string(sbInstr2, rVal);
     sbInstr2 = sb_append_byte(sbInstr2, byte(10));
     return ExprCodegenResult{sb_to_string(sbInstr2), tmpName2, resultTy, 0};
   }
@@ -314,6 +393,22 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     sbTern = sb_append_string(sbTern, elseRes.value);
     sbTern = sb_append_byte(sbTern, byte(10));
     return ExprCodegenResult{sb_to_string(sbTern), tmpTern, tyThen, 0};
+  }
+  if (n.kind == NODE_LEN) {
+    var target = nodearena_get(pmr.arena, n.a);
+    if (target.kind == NODE_LITERAL) {
+      var tk = token_kind_at(pmr.tokens, target.a);
+      if (tk == TOKEN_STRING || tk == TOKEN_SINGLE_QUOTE_STRING) {
+        var l = token_length_at(pmr.tokens, target.a);
+        if (l >= 2) { l = l - 2; }
+        var sbLen = sb_new();
+        sbLen = sb_append_int(sbLen, l);
+        return ExprCodegenResult{String{pmr.src, 0}, sb_to_string(sbLen), String{byte~(&"i32"[0]), 3}, 0};
+      }
+    }
+    var ctxRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    if (ctxRes.err == 1) { return ctxRes; }
+    return ExprCodegenResult{ctxRes.instr, ctxRes.value, String{pmr.src, 0}, 1};
   }
   if (n.kind == NODE_CALL) {
     // Only support direct identifier callees for now.

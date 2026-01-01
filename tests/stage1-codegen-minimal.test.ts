@@ -107,4 +107,33 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     const bin = runRawIR(irRes.stdout)
     expect(bin.status).toBe(7)
   })
+
+  it("supports unary logical not and bitwise not", () => {
+    const program = `
+      def main() int {
+        return (!0) + ((~0) & 7);
+      }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    const bin = runRawIR(irRes.stdout)
+    // !0 -> 1; ~0 & 7 -> 7; total 8
+    expect(bin.status).toBe(8)
+  })
+
+  it("supports unary plus passthrough", () => {
+    const program = ` def main() int { return +5; } `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    const bin = runRawIR(irRes.stdout)
+    expect(bin.status).toBe(5)
+  })
+
+  it("supports len() on string literals", () => {
+    const program = ` def main() int { return len('hello'); } `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    const bin = runRawIR(irRes.stdout)
+    expect(bin.status).toBe(5)
+  })
 })
