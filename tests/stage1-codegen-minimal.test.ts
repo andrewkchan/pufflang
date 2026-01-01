@@ -40,4 +40,15 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     const ir = irRes.stdout.trim()
     expect(ir).toContain("add i32 %p0, %p1")
   })
+
+  it("produces runnable IR for literal arithmetic", () => {
+    const program = `
+      def main() int { return 2 + 3; }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    expect(irRes.stderr).toBe("")
+    const bin = runRawIR(irRes.stdout)
+    expect(bin.status).toBe(5)
+  })
 })
