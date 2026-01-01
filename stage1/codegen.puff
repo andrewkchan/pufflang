@@ -9,6 +9,7 @@
 struct FnCodegenResult { text String, err int }
 struct ExprCodegenResult { instr String, value String, valTy String, err int }
 struct StmtEmitResult { text String, ret int, localNames VecStr, localPtrs VecStr, localTypes VecStr, err int }
+struct SkipRanges { starts VecInt, ends VecInt }
 
 // Map a type id from TypeTable to LLVM IR textual type.
 def cg_llvm_type(tt TypeTable, typeId int) String {
@@ -240,6 +241,86 @@ def cg_fresh_label(counter int~) String {
   sb = sb_append_int(sb, counter~);
   counter~ = counter~ + 1;
   return sb_to_string(sb);
+}
+
+def cg_skip_add(r SkipRanges, s int, e int) SkipRanges {
+  var out = r;
+  out.starts = vecint_push(out.starts, s);
+  out.ends = vecint_push(out.ends, e);
+  return out;
+}
+
+def cg_in_skip(r SkipRanges, idx int) int {
+  var i = 0;
+  while (i < r.starts.length) {
+    var s = vecint_get(r.starts, i);
+    var e = vecint_get(r.ends, i);
+    if (idx >= s && idx < e) { return 1; }
+    i = i + 1;
+  }
+  return 0;
+}
+
+def cg_collect_skip_ranges(pmr ParseModuleResult, start int, end int, rootStart int, rootEnd int, r SkipRanges) SkipRanges {
+  var i = start;
+  var out = r;
+  while (i < end) {
+    var n = nodearena_get(pmr.arena, i);
+    if (n.kind == NODE_BLOCK) {
+      var bStart = n.a;
+      var bEnd = n.a + n.b;
+      if (!(bStart == rootStart && bEnd == rootEnd)) {
+        out = cg_skip_add(out, bStart, bEnd);
+        out = cg_skip_add(out, i, i + 1);
+        out = cg_collect_skip_ranges(pmr, bStart, bEnd, bStart, bEnd, out);
+      }
+    } else if (n.kind == NODE_IF) {
+      if (n.b != -1) {
+        var tb = nodearena_get(pmr.arena, n.b);
+        if (tb.kind == NODE_BLOCK) {
+          var ts = tb.a;
+          var te = tb.a + tb.b;
+          out = cg_skip_add(out, ts, te);
+          out = cg_skip_add(out, n.b, n.b + 1);
+          out = cg_collect_skip_ranges(pmr, ts, te, ts, te, out);
+        }
+      }
+      if (n.c != -1) {
+        var eb = nodearena_get(pmr.arena, n.c);
+        if (eb.kind == NODE_BLOCK) {
+          var es = eb.a;
+          var ee = eb.a + eb.b;
+          out = cg_skip_add(out, es, ee);
+          out = cg_skip_add(out, n.c, n.c + 1);
+          out = cg_collect_skip_ranges(pmr, es, ee, es, ee, out);
+        }
+      }
+    } else if (n.kind == NODE_WHILE) {
+      if (n.b != -1) {
+        var wb = nodearena_get(pmr.arena, n.b);
+        if (wb.kind == NODE_BLOCK) {
+          var ws = wb.a;
+          var we = wb.a + wb.b;
+          out = cg_skip_add(out, ws, we);
+          out = cg_skip_add(out, n.b, n.b + 1);
+          out = cg_collect_skip_ranges(pmr, ws, we, ws, we, out);
+        }
+      }
+    } else if (n.kind == NODE_FOR) {
+      if (n.d != -1) {
+        var fb = nodearena_get(pmr.arena, n.d);
+        if (fb.kind == NODE_BLOCK) {
+          var fs = fb.a;
+          var fe = fb.a + fb.b;
+          out = cg_skip_add(out, fs, fe);
+          out = cg_skip_add(out, n.d, n.d + 1);
+          out = cg_collect_skip_ranges(pmr, fs, fe, fs, fe, out);
+        }
+      }
+    }
+    i = i + 1;
+  }
+  return out;
 }
 
 // Find function index in tm by name (first match).
@@ -879,8 +960,11 @@ def cg_emit_stmt_range(
   var lp = localPtrs;
   var lt = localTypes;
   var emittedRet = 0;
+  var ranges = SkipRanges{vecint_new(4), vecint_new(4)};
+  ranges = cg_collect_skip_ranges(pmr, start, end, start, end, ranges);
   var i = start;
   while (i < end) {
+    if (cg_in_skip(ranges, i) == 1) { i = i + 1; continue; }
     if (emittedRet == 1) { break; }
     var stmt = nodearena_get(pmr.arena, i);
     if (stmt.kind == NODE_VAR_STMT) {
@@ -1033,6 +1117,61 @@ def cg_emit_stmt_range(
       if (stmt.c != -1 && thenRet == 1 && elseRet == 1) {
         emittedRet = 1;
       }
+    } else if (stmt.kind == NODE_WHILE) {
+      var lcond = cg_fresh_label(tmp);
+      var lbody = cg_fresh_label(tmp);
+      var lendw = cg_fresh_label(tmp);
+      // jump to cond
+      sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+      sb = sb_append_string(sb, lcond);
+      sb = sb_append_byte(sb, byte(10));
+      // cond block
+      sb = sb_append_string(sb, lcond);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      var condResW = cg_expr(pmr, tm, stmt.a, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+      if (condResW.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, 1}; }
+      var condBoolW = cg_to_bool(condResW, tmp);
+      if (condBoolW.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, 1}; }
+      sb = sb_append_string(sb, condBoolW.instr);
+      sb = sb_append_cstr(sb, byte~(&"  br i1 "[0]));
+      sb = sb_append_string(sb, condBoolW.value);
+      sb = sb_append_cstr(sb, byte~(&", label %"[0]));
+      sb = sb_append_string(sb, lbody);
+      sb = sb_append_cstr(sb, byte~(&", label %"[0]));
+      sb = sb_append_string(sb, lendw);
+      sb = sb_append_byte(sb, byte(10));
+      // body block
+      sb = sb_append_string(sb, lbody);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      if (stmt.b != -1) {
+        var bodyNode = nodearena_get(pmr.arena, stmt.b);
+        var bStart = stmt.b;
+        var bEnd = stmt.b + 1;
+        if (bodyNode.kind == NODE_BLOCK) {
+          bStart = bodyNode.a;
+          bEnd = bodyNode.a + bodyNode.b;
+        }
+        var bodyRes = cg_emit_stmt_range(pmr, tm, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, retTy, bStart, bEnd, tmp);
+        sb = sb_append_string(sb, bodyRes.text);
+        if (bodyRes.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, 1}; }
+        if (bodyRes.ret == 0) {
+          sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+          sb = sb_append_string(sb, lcond);
+          sb = sb_append_byte(sb, byte(10));
+        } else {
+          emittedRet = 1;
+        }
+      } else {
+        sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+        sb = sb_append_string(sb, lcond);
+        sb = sb_append_byte(sb, byte(10));
+      }
+      // end label
+      sb = sb_append_string(sb, lendw);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
     } else {
       // Unsupported stmt kinds for now.
     }
