@@ -8,6 +8,8 @@
 
 struct FnCodegenResult { text String, err int }
 struct ExprCodegenResult { instr String, value String, valTy String, err int }
+struct StmtEmitResult { text String, ret int, localNames VecStr, localPtrs VecStr, localTypes VecStr, term int, err int }
+struct SkipRanges { starts VecInt, ends VecInt }
 
 // Map a type id from TypeTable to LLVM IR textual type.
 def cg_llvm_type(tt TypeTable, typeId int) String {
@@ -54,6 +56,13 @@ def cg_pointer_elem_ty(ptrTy String) String {
     sb = sb_append_byte(sb, (ptrTy.data + i)~);
     i = i + 1;
   }
+  return sb_to_string(sb);
+}
+
+def cg_string_name(tokIdx int) String {
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&".str."[0]));
+  sb = sb_append_int(sb, tokIdx);
   return sb_to_string(sb);
 }
 
@@ -112,6 +121,90 @@ def cg_to_bool(res ExprCodegenResult, tmp int~) ExprCodegenResult {
   return ExprCodegenResult{sb_to_string(sb), tmpName, String{byte~(&"i1"[0]), 2}, 0};
 }
 
+// Coerce a value to a target LLVM type (limited to int widening/trunc).
+def cg_coerce(val ExprCodegenResult, targetTy String, tmp int~) ExprCodegenResult {
+  if (val.err == 1) { return val; }
+  if (cg_str_eq(val.valTy, targetTy) == 1) { return val; }
+  // widen i1/i8 -> i32
+  if (targetTy.length == 3 && (targetTy.data)~ == byte(105) && (targetTy.data + 1)~ == byte(51)) {
+    if (val.valTy.length == 2 && (val.valTy.data)~ == byte(105) && (val.valTy.data + 1)~ == byte(49)) {
+      var tmpZ = cg_fresh_tmp(tmp);
+      var sb = sb_new();
+      sb = sb_append_string(sb, val.instr);
+      sb = sb_append_cstr(sb, byte~(&"  "[0]));
+      sb = sb_append_string(sb, tmpZ);
+      sb = sb_append_cstr(sb, byte~(&" = zext i1 "[0]));
+      sb = sb_append_string(sb, val.value);
+      sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
+      sb = sb_append_byte(sb, byte(10));
+      return ExprCodegenResult{sb_to_string(sb), tmpZ, targetTy, 0};
+    }
+    if (val.valTy.length == 2 && (val.valTy.data)~ == byte(105) && (val.valTy.data + 1)~ == byte(56)) {
+      var tmpZ2 = cg_fresh_tmp(tmp);
+      var sb2 = sb_new();
+      sb2 = sb_append_string(sb2, val.instr);
+      sb2 = sb_append_cstr(sb2, byte~(&"  "[0]));
+      sb2 = sb_append_string(sb2, tmpZ2);
+      sb2 = sb_append_cstr(sb2, byte~(&" = zext i8 "[0]));
+      sb2 = sb_append_string(sb2, val.value);
+      sb2 = sb_append_cstr(sb2, byte~(&" to i32"[0]));
+      sb2 = sb_append_byte(sb2, byte(10));
+      return ExprCodegenResult{sb_to_string(sb2), tmpZ2, targetTy, 0};
+    }
+  }
+  // truncate i32 -> i8/i1
+  if (val.valTy.length == 3 && (val.valTy.data)~ == byte(105) && (val.valTy.data + 1)~ == byte(51)) {
+    if (targetTy.length == 2 && (targetTy.data)~ == byte(105) && (targetTy.data + 1)~ == byte(56)) {
+      var tmpT = cg_fresh_tmp(tmp);
+      var sbt = sb_new();
+      sbt = sb_append_string(sbt, val.instr);
+      sbt = sb_append_cstr(sbt, byte~(&"  "[0]));
+      sbt = sb_append_string(sbt, tmpT);
+      sbt = sb_append_cstr(sbt, byte~(&" = trunc i32 "[0]));
+      sbt = sb_append_string(sbt, val.value);
+      sbt = sb_append_cstr(sbt, byte~(&" to i8"[0]));
+      sbt = sb_append_byte(sbt, byte(10));
+      return ExprCodegenResult{sb_to_string(sbt), tmpT, targetTy, 0};
+    }
+    if (targetTy.length == 2 && (targetTy.data)~ == byte(105) && (targetTy.data + 1)~ == byte(49)) {
+      var tmpTb = cg_fresh_tmp(tmp);
+      var sbtb = sb_new();
+      sbtb = sb_append_string(sbtb, val.instr);
+      sbtb = sb_append_cstr(sbtb, byte~(&"  "[0]));
+      sbtb = sb_append_string(sbtb, tmpTb);
+      sbtb = sb_append_cstr(sbtb, byte~(&" = trunc i32 "[0]));
+      sbtb = sb_append_string(sbtb, val.value);
+      sbtb = sb_append_cstr(sbtb, byte~(&" to i1"[0]));
+      sbtb = sb_append_byte(sbtb, byte(10));
+      return ExprCodegenResult{sb_to_string(sbtb), tmpTb, targetTy, 0};
+    }
+  }
+  return ExprCodegenResult{val.instr, val.value, val.valTy, 1};
+}
+
+// Store a value into a slot of given element type.
+def cg_store(ptr String, elemTy String, val ExprCodegenResult, tmp int~) ExprCodegenResult {
+  var et = elemTy;
+  if (et.length == 0) {
+    if (val.valTy.length > 0) { et = val.valTy; }
+    else { et = String{byte~(&"i32"[0]), 3}; }
+  }
+  var coerced = cg_coerce(val, elemTy, tmp);
+  if (coerced.err == 1) { return coerced; }
+  var sb = sb_new();
+  sb = sb_append_string(sb, coerced.instr);
+  sb = sb_append_cstr(sb, byte~(&"  store "[0]));
+  sb = sb_append_string(sb, et);
+  sb = sb_append_byte(sb, byte(32));
+  sb = sb_append_string(sb, coerced.value);
+  sb = sb_append_cstr(sb, byte~(&", "[0]));
+  sb = sb_append_string(sb, et);
+  sb = sb_append_cstr(sb, byte~(&"* "[0]));
+  sb = sb_append_string(sb, ptr);
+  sb = sb_append_byte(sb, byte(10));
+  return ExprCodegenResult{sb_to_string(sb), coerced.value, et, 0};
+}
+
 // Collect parameter names from function tokens (best-effort).
 def cg_collect_param_names(pmr ParseModuleResult, fn Node) VecStr {
   var names = vecstr_new(4);
@@ -149,6 +242,94 @@ def cg_fresh_tmp(counter int~) String {
   return sb_to_string(sb);
 }
 
+def cg_fresh_label(counter int~) String {
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"L"[0]));
+  sb = sb_append_int(sb, counter~);
+  counter~ = counter~ + 1;
+  return sb_to_string(sb);
+}
+
+def cg_skip_add(r SkipRanges, s int, e int) SkipRanges {
+  var out = r;
+  out.starts = vecint_push(out.starts, s);
+  out.ends = vecint_push(out.ends, e);
+  return out;
+}
+
+def cg_in_skip(r SkipRanges, idx int) int {
+  var i = 0;
+  while (i < r.starts.length) {
+    var s = vecint_get(r.starts, i);
+    var e = vecint_get(r.ends, i);
+    if (idx >= s && idx < e) { return 1; }
+    i = i + 1;
+  }
+  return 0;
+}
+
+def cg_collect_skip_ranges(pmr ParseModuleResult, start int, end int, rootStart int, rootEnd int, r SkipRanges) SkipRanges {
+  var i = start;
+  var out = r;
+  while (i < end) {
+    var n = nodearena_get(pmr.arena, i);
+    if (n.kind == NODE_BLOCK) {
+      var bStart = n.a;
+      var bEnd = n.a + n.b;
+      if (!(bStart == rootStart && bEnd == rootEnd)) {
+        out = cg_skip_add(out, bStart, bEnd);
+        out = cg_skip_add(out, i, i + 1);
+        out = cg_collect_skip_ranges(pmr, bStart, bEnd, bStart, bEnd, out);
+      }
+    } else if (n.kind == NODE_IF) {
+      if (n.b != -1) {
+        var tb = nodearena_get(pmr.arena, n.b);
+        if (tb.kind == NODE_BLOCK) {
+          var ts = tb.a;
+          var te = tb.a + tb.b;
+          out = cg_skip_add(out, ts, te);
+          out = cg_skip_add(out, n.b, n.b + 1);
+          out = cg_collect_skip_ranges(pmr, ts, te, ts, te, out);
+        }
+      }
+      if (n.c != -1) {
+        var eb = nodearena_get(pmr.arena, n.c);
+        if (eb.kind == NODE_BLOCK) {
+          var es = eb.a;
+          var ee = eb.a + eb.b;
+          out = cg_skip_add(out, es, ee);
+          out = cg_skip_add(out, n.c, n.c + 1);
+          out = cg_collect_skip_ranges(pmr, es, ee, es, ee, out);
+        }
+      }
+    } else if (n.kind == NODE_WHILE) {
+      if (n.b != -1) {
+        var wb = nodearena_get(pmr.arena, n.b);
+        if (wb.kind == NODE_BLOCK) {
+          var ws = wb.a;
+          var we = wb.a + wb.b;
+          out = cg_skip_add(out, ws, we);
+          out = cg_skip_add(out, n.b, n.b + 1);
+          out = cg_collect_skip_ranges(pmr, ws, we, ws, we, out);
+        }
+      }
+    } else if (n.kind == NODE_FOR) {
+      if (n.d != -1) {
+        var fb = nodearena_get(pmr.arena, n.d);
+        if (fb.kind == NODE_BLOCK) {
+          var fs = fb.a;
+          var fe = fb.a + fb.b;
+          out = cg_skip_add(out, fs, fe);
+          out = cg_skip_add(out, n.d, n.d + 1);
+          out = cg_collect_skip_ranges(pmr, fs, fe, fs, fe, out);
+        }
+      }
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
 // Find function index in tm by name (first match).
 def cg_find_fn_index(pmr ParseModuleResult, tm TypeModuleTypes, name String) int {
   var i = 0;
@@ -162,9 +343,44 @@ def cg_find_fn_index(pmr ParseModuleResult, tm TypeModuleTypes, name String) int
   return -1;
 }
 
-// Emit simple expressions (literal, group, unary -, parameter variable, binary +,-,*,/, call).
+def cg_find_global_index(pmr ParseModuleResult, name String) int {
+  var i = 0;
+  while (i < pmr.meta.varNodeIndex.length) {
+    var vi = vecint_get(pmr.meta.varNodeIndex, i);
+    var n = nodearena_get(pmr.arena, vi);
+    var gname = tok_string(pmr.tokens, n.a, pmr.src);
+    if (str_eq(gname.data, gname.length, name.data, name.length) == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Helper to find a name in VecStr (returns index or -1).
+def cg_find_name(v VecStr, name String) int {
+  var i = 0;
+  while (i < v.length) {
+    var n = vecstr_get(v, i);
+    if (str_eq(n.data, n.length, name.data, name.length) == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Emit simple expressions (literal, group, unary, variable, binary, call).
 // Returns accumulated instructions (in order) and the SSA value to use.
-def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames VecStr, paramTypes VecStr, tmp int~) ExprCodegenResult {
+def cg_expr(
+  pmr ParseModuleResult,
+  tm TypeModuleTypes,
+  exprIdx int,
+  paramNames VecStr,
+  paramTypes VecStr,
+  paramSlots VecStr,
+  paramSlotTypes VecStr,
+  localNames VecStr,
+  localPtrs VecStr,
+  localTypes VecStr,
+  tmp int~
+) ExprCodegenResult {
   if (exprIdx < 0 || exprIdx >= pmr.arena.nodes.length) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
   var n = nodearena_get(pmr.arena, exprIdx);
   if (n.kind == NODE_LITERAL) {
@@ -172,14 +388,47 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     var tk = token_kind_at(pmr.tokens, n.a);
     if (tk == TOKEN_TRUE) { return ExprCodegenResult{String{pmr.src, 0}, String{byte~(&"1"[0]), 1}, String{byte~(&"i1"[0]), 2}, 0}; }
     if (tk == TOKEN_FALSE) { return ExprCodegenResult{String{pmr.src, 0}, String{byte~(&"0"[0]), 1}, String{byte~(&"i1"[0]), 2}, 0}; }
+    if (tk == TOKEN_SINGLE_QUOTE_STRING) {
+      var tlen = token_length_at(pmr.tokens, n.a);
+      if (tlen == 3) {
+        var start = token_start_at(pmr.tokens, n.a);
+        var ch = (pmr.src + start + 1)~;
+        var sbCh = sb_new();
+        sbCh = sb_append_int(sbCh, int(ch));
+        var lit = sb_to_string(sbCh);
+        return ExprCodegenResult{String{pmr.src, 0}, lit, String{byte~(&"i8"[0]), 2}, 0};
+      }
+    }
+    if (tk == TOKEN_STRING) {
+      var nameStr = cg_string_name(n.a);
+      var tlen = token_length_at(pmr.tokens, n.a);
+      var clen = tlen - 2;
+      var tmpStr = cg_fresh_tmp(tmp);
+      var sbStr = sb_new();
+      sbStr = sb_append_cstr(sbStr, byte~(&"  "[0]));
+      sbStr = sb_append_string(sbStr, tmpStr);
+      sbStr = sb_append_cstr(sbStr, byte~(&" = getelementptr inbounds "[0]));
+      sbStr = sb_append_byte(sbStr, byte(91)); // '['
+      sbStr = sb_append_int(sbStr, clen + 1);
+      sbStr = sb_append_cstr(sbStr, byte~(&" x i8]"[0]));
+      sbStr = sb_append_cstr(sbStr, byte~(&", "[0]));
+      sbStr = sb_append_byte(sbStr, byte(91)); // '['
+      sbStr = sb_append_int(sbStr, clen + 1);
+      sbStr = sb_append_cstr(sbStr, byte~(&" x i8]* "[0]));
+      sbStr = sb_append_byte(sbStr, byte(64)); // '@'
+      sbStr = sb_append_string(sbStr, nameStr);
+      sbStr = sb_append_cstr(sbStr, byte~(&", i32 0, i32 0"[0]));
+      sbStr = sb_append_byte(sbStr, byte(10));
+      return ExprCodegenResult{sb_to_string(sbStr), tmpStr, String{byte~(&"i8*"[0]), 3}, 0};
+    }
     return ExprCodegenResult{String{pmr.src, 0}, lex, String{byte~(&"i32"[0]), 3}, 0};
   }
   if (n.kind == NODE_GROUP) {
-    return cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    return cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
   }
   if (n.kind == NODE_UNARY) {
     var op = cg_tok_string(pmr.tokens, pmr.src, n.a);
-    var inner = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var inner = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (inner.err == 1) { return ExprCodegenResult{inner.instr, inner.value, inner.valTy, 1}; }
     // unary + : no-op
     if (op.length == 1 && (op.data)~ == byte(43)) { return inner; } // '+'
@@ -240,20 +489,106 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
   }
   if (n.kind == NODE_VARIABLE) {
     var name = cg_tok_string(pmr.tokens, pmr.src, n.a);
+    // locals
+    var li = cg_find_name(localNames, name);
+    if (li != -1) {
+      var ptr = vecstr_get(localPtrs, li);
+      var lty = vecstr_get(localTypes, li);
+      var tmpLd = cg_fresh_tmp(tmp);
+      var sbLd = sb_new();
+      sbLd = sb_append_cstr(sbLd, byte~(&"  "[0]));
+      sbLd = sb_append_string(sbLd, tmpLd);
+      sbLd = sb_append_cstr(sbLd, byte~(&" = load "[0]));
+      sbLd = sb_append_string(sbLd, lty);
+      sbLd = sb_append_cstr(sbLd, byte~(&", "[0]));
+      sbLd = sb_append_string(sbLd, lty);
+      sbLd = sb_append_cstr(sbLd, byte~(&"* "[0]));
+      sbLd = sb_append_string(sbLd, ptr);
+      sbLd = sb_append_byte(sbLd, byte(10));
+      return ExprCodegenResult{sb_to_string(sbLd), tmpLd, lty, 0};
+    }
     var idx = cg_match_param(paramNames, name);
-    if (idx == -1) { return ExprCodegenResult{String{pmr.src, 0}, name, String{pmr.src, 0}, 1}; }
-    var sbVar = sb_new();
-    sbVar = sb_append_byte(sbVar, byte(37)); // '%'
-    sbVar = sb_append_cstr(sbVar, byte~(&"p"[0]));
-    sbVar = sb_append_int(sbVar, idx);
+    if (idx == -1) {
+      var gi = cg_find_global_index(pmr, name);
+      if (gi != -1) {
+        var gtid = vecint_get(tm.varTypeIds, gi);
+        var gvIdx = vecint_get(pmr.meta.varNodeIndex, gi);
+        var gvNode = nodearena_get(pmr.arena, gvIdx);
+        var gty = cg_llvm_type(tm.env.tt, gtid);
+        var initTok = -1;
+        if (gvNode.b != -1) {
+          var initNode = nodearena_get(pmr.arena, gvNode.b);
+          if (initNode.kind == NODE_LITERAL) { initTok = initNode.a; }
+        }
+        if (gtid == -1 && initTok != -1) {
+          var tk0 = token_kind_at(pmr.tokens, initTok);
+          if (tk0 == TOKEN_TRUE || tk0 == TOKEN_FALSE) { gty = String{byte~(&"i1"[0]), 2}; }
+          else if (tk0 == TOKEN_SINGLE_QUOTE_STRING) { gty = String{byte~(&"i8"[0]), 2}; }
+          else if (tk0 == TOKEN_STRING) { gty = String{byte~(&"i8*"[0]), 3}; }
+          else { gty = String{byte~(&"i32"[0]), 3}; }
+        }
+        var tmpG = cg_fresh_tmp(tmp);
+        var sbG = sb_new();
+        sbG = sb_append_cstr(sbG, byte~(&"  "[0]));
+        sbG = sb_append_string(sbG, tmpG);
+        sbG = sb_append_cstr(sbG, byte~(&" = load "[0]));
+        sbG = sb_append_string(sbG, gty);
+        sbG = sb_append_cstr(sbG, byte~(&", "[0]));
+        sbG = sb_append_string(sbG, gty);
+        sbG = sb_append_cstr(sbG, byte~(&"* "[0]));
+        sbG = sb_append_byte(sbG, byte(64)); // '@'
+        sbG = sb_append_string(sbG, name);
+        sbG = sb_append_byte(sbG, byte(10));
+        return ExprCodegenResult{sb_to_string(sbG), tmpG, gty, 0};
+      }
+      return ExprCodegenResult{String{pmr.src, 0}, name, String{pmr.src, 0}, 1};
+    }
     var pty = String{byte~(&"i32"[0]), 3};
     if (idx < paramTypes.length) { pty = vecstr_get(paramTypes, idx); }
-    return ExprCodegenResult{String{pmr.src, 0}, sb_to_string(sbVar), pty, 0};
+    var pslot = vecstr_get(paramSlots, idx);
+    var tmpParam = cg_fresh_tmp(tmp);
+    var sbParam = sb_new();
+    sbParam = sb_append_cstr(sbParam, byte~(&"  "[0]));
+    sbParam = sb_append_string(sbParam, tmpParam);
+    sbParam = sb_append_cstr(sbParam, byte~(&" = load "[0]));
+    sbParam = sb_append_string(sbParam, pty);
+    sbParam = sb_append_cstr(sbParam, byte~(&", "[0]));
+    sbParam = sb_append_string(sbParam, pty);
+    sbParam = sb_append_cstr(sbParam, byte~(&"* "[0]));
+    sbParam = sb_append_string(sbParam, pslot);
+    sbParam = sb_append_byte(sbParam, byte(10));
+    return ExprCodegenResult{sb_to_string(sbParam), tmpParam, pty, 0};
+  }
+  if (n.kind == NODE_ASSIGN) {
+    var lhsNode = nodearena_get(pmr.arena, n.a);
+    if (lhsNode.kind != NODE_VARIABLE) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
+    var aname = cg_tok_string(pmr.tokens, pmr.src, lhsNode.a);
+    var slotPtr2 = String{pmr.src, 0};
+    var slotTy2 = String{pmr.src, 0};
+    var li3 = cg_find_name(localNames, aname);
+    if (li3 != -1) {
+      slotPtr2 = vecstr_get(localPtrs, li3);
+      slotTy2 = vecstr_get(localTypes, li3);
+    } else {
+      var pi3 = cg_match_param(paramNames, aname);
+      if (pi3 != -1) {
+        slotPtr2 = vecstr_get(paramSlots, pi3);
+        slotTy2 = vecstr_get(paramSlotTypes, pi3);
+      }
+    }
+    if (slotPtr2.length == 0 || slotTy2.length == 0) {
+      return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
+    }
+    var rhs2 = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+    if (rhs2.err == 1) { return rhs2; }
+    var storeRes3 = cg_store(slotPtr2, slotTy2, rhs2, tmp);
+    if (storeRes3.err == 1) { return storeRes3; }
+    return storeRes3;
   }
   if (n.kind == NODE_BINARY) {
-    var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (left.err == 1) { return left; }
-    var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (right.err == 1) { return right; }
     var lTy = left.valTy;
     if (lTy.length == 0) { lTy = String{byte~(&"i32"[0]), 3}; }
@@ -264,8 +599,125 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     var lVal = left.value;
     var rVal = right.value;
     var opTok = cg_tok_string(pmr.tokens, pmr.src, n.c);
-    // Pointer ops unsupported beyond deref/index; bail if either side is pointer.
+    // Pointer-aware ops
     if (cg_is_pointer_type(lTy) == 1 || cg_is_pointer_type(rTy) == 1) {
+      // pointer + int or int + pointer
+      if (opTok.length == 1 && (opTok.data)~ == byte(43)) { // '+'
+        var ptrVal = lVal;
+        var idxVal = rVal;
+        var ptrTy = lTy;
+        var extra = String{pmr.src, 0};
+        if (cg_is_pointer_type(lTy) == 0 && cg_is_pointer_type(rTy) == 1) {
+          ptrVal = rVal;
+          idxVal = lVal;
+          ptrTy = rTy;
+        } else if (cg_is_pointer_type(lTy) == 1 && cg_is_pointer_type(rTy) == 0) {
+          // use as-is
+        } else {
+          return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
+        }
+        var sbp = sb_new();
+        sbp = sb_append_string(sbp, lInstr);
+        sbp = sb_append_string(sbp, rInstr);
+        var tmpGep = cg_fresh_tmp(tmp);
+        sbp = sb_append_cstr(sbp, byte~(&"  "[0]));
+        sbp = sb_append_string(sbp, tmpGep);
+        sbp = sb_append_cstr(sbp, byte~(&" = getelementptr i8, i8* "[0]));
+        sbp = sb_append_string(sbp, ptrVal);
+        sbp = sb_append_cstr(sbp, byte~(&", i32 "[0]));
+        sbp = sb_append_string(sbp, idxVal);
+        sbp = sb_append_byte(sbp, byte(10));
+        return ExprCodegenResult{sb_to_string(sbp), tmpGep, ptrTy, 0};
+      }
+      // pointer - int
+      if (opTok.length == 1 && (opTok.data)~ == byte(45) && cg_is_pointer_type(lTy) == 1 && cg_is_pointer_type(rTy) == 0) { // '-'
+        var sbm = sb_new();
+        sbm = sb_append_string(sbm, lInstr);
+        sbm = sb_append_string(sbm, rInstr);
+        var negIdx = cg_fresh_tmp(tmp);
+        sbm = sb_append_cstr(sbm, byte~(&"  "[0]));
+        sbm = sb_append_string(sbm, negIdx);
+        sbm = sb_append_cstr(sbm, byte~(&" = sub i32 0, "[0]));
+        sbm = sb_append_string(sbm, rVal);
+        sbm = sb_append_byte(sbm, byte(10));
+        var tmpGep2 = cg_fresh_tmp(tmp);
+        sbm = sb_append_cstr(sbm, byte~(&"  "[0]));
+        sbm = sb_append_string(sbm, tmpGep2);
+        sbm = sb_append_cstr(sbm, byte~(&" = getelementptr i8, i8* "[0]));
+        sbm = sb_append_string(sbm, lVal);
+        sbm = sb_append_cstr(sbm, byte~(&", i32 "[0]));
+        sbm = sb_append_string(sbm, negIdx);
+        sbm = sb_append_byte(sbm, byte(10));
+        return ExprCodegenResult{sb_to_string(sbm), tmpGep2, lTy, 0};
+      }
+      // pointer difference
+      if (opTok.length == 1 && (opTok.data)~ == byte(45) && cg_is_pointer_type(lTy) == 1 && cg_is_pointer_type(rTy) == 1) {
+        var sbDiff = sb_new();
+        sbDiff = sb_append_string(sbDiff, lInstr);
+        sbDiff = sb_append_string(sbDiff, rInstr);
+        var ptoiL = cg_fresh_tmp(tmp);
+        var ptoiR = cg_fresh_tmp(tmp);
+        var subTmp = cg_fresh_tmp(tmp);
+        var truncTmp = cg_fresh_tmp(tmp);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&"  "[0]));
+        sbDiff = sb_append_string(sbDiff, ptoiL);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" = ptrtoint "[0]));
+        sbDiff = sb_append_string(sbDiff, lTy);
+        sbDiff = sb_append_byte(sbDiff, byte(32));
+        sbDiff = sb_append_string(sbDiff, lVal);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" to i64"[0]));
+        sbDiff = sb_append_byte(sbDiff, byte(10));
+        sbDiff = sb_append_cstr(sbDiff, byte~(&"  "[0]));
+        sbDiff = sb_append_string(sbDiff, ptoiR);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" = ptrtoint "[0]));
+        sbDiff = sb_append_string(sbDiff, rTy);
+        sbDiff = sb_append_byte(sbDiff, byte(32));
+        sbDiff = sb_append_string(sbDiff, rVal);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" to i64"[0]));
+        sbDiff = sb_append_byte(sbDiff, byte(10));
+        sbDiff = sb_append_cstr(sbDiff, byte~(&"  "[0]));
+        sbDiff = sb_append_string(sbDiff, subTmp);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" = sub i64 "[0]));
+        sbDiff = sb_append_string(sbDiff, ptoiL);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&", "[0]));
+        sbDiff = sb_append_string(sbDiff, ptoiR);
+        sbDiff = sb_append_byte(sbDiff, byte(10));
+        sbDiff = sb_append_cstr(sbDiff, byte~(&"  "[0]));
+        sbDiff = sb_append_string(sbDiff, truncTmp);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" = trunc i64 "[0]));
+        sbDiff = sb_append_string(sbDiff, subTmp);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" to i32"[0]));
+        sbDiff = sb_append_byte(sbDiff, byte(10));
+        return ExprCodegenResult{sb_to_string(sbDiff), truncTmp, String{byte~(&"i32"[0]), 3}, 0};
+      }
+      // pointer comparisons (eq/ne/rel)
+      if (opTok.length >= 1) {
+        var cmpTy = lTy;
+        var cmpOp = String{pmr.src, 0};
+        if (opTok.length == 2 && (opTok.data)~ == byte(61) && (opTok.data + 1)~ == byte(61)) { cmpOp = String{byte~(&"eq"[0]), 2}; }
+        else if (opTok.length == 2 && (opTok.data)~ == byte(33) && (opTok.data + 1)~ == byte(61)) { cmpOp = String{byte~(&"ne"[0]), 2}; }
+        else if (opTok.length == 1 && (opTok.data)~ == byte(60)) { cmpOp = String{byte~(&"ult"[0]), 3}; }
+        else if (opTok.length == 2 && (opTok.data)~ == byte(60) && (opTok.data + 1)~ == byte(61)) { cmpOp = String{byte~(&"ule"[0]), 3}; }
+        else if (opTok.length == 1 && (opTok.data)~ == byte(62)) { cmpOp = String{byte~(&"ugt"[0]), 3}; }
+        else if (opTok.length == 2 && (opTok.data)~ == byte(62) && (opTok.data + 1)~ == byte(61)) { cmpOp = String{byte~(&"uge"[0]), 3}; }
+        if (cmpOp.length == 0) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
+        var sbCmp = sb_new();
+        sbCmp = sb_append_string(sbCmp, lInstr);
+        sbCmp = sb_append_string(sbCmp, rInstr);
+        var tmpCmp = cg_fresh_tmp(tmp);
+        sbCmp = sb_append_cstr(sbCmp, byte~(&"  "[0]));
+        sbCmp = sb_append_string(sbCmp, tmpCmp);
+        sbCmp = sb_append_cstr(sbCmp, byte~(&" = icmp "[0]));
+        sbCmp = sb_append_string(sbCmp, cmpOp);
+        sbCmp = sb_append_byte(sbCmp, byte(32));
+        sbCmp = sb_append_string(sbCmp, cmpTy);
+        sbCmp = sb_append_byte(sbCmp, byte(32));
+        sbCmp = sb_append_string(sbCmp, lVal);
+        sbCmp = sb_append_cstr(sbCmp, byte~(&", "[0]));
+        sbCmp = sb_append_string(sbCmp, rVal);
+        sbCmp = sb_append_byte(sbCmp, byte(10));
+        return ExprCodegenResult{sb_to_string(sbCmp), tmpCmp, String{byte~(&"i1"[0]), 2}, 0};
+      }
       return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
     }
     if (cg_str_eq(lTy, rTy) == 0) {
@@ -390,67 +842,166 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     return ExprCodegenResult{sb_to_string(sbInstr2), tmpName2, resultTy, 0};
   }
   if (n.kind == NODE_LOGICAL) {
-    var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     var lbool = cg_to_bool(left, tmp);
     if (lbool.err == 1) { return lbool; }
-    var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
-    var rbool = cg_to_bool(right, tmp);
-    if (rbool.err == 1) { return rbool; }
     var opTok2 = cg_tok_string(pmr.tokens, pmr.src, n.c);
-    var tmpLogic = cg_fresh_tmp(tmp);
+    var rhsLabel = cg_fresh_label(tmp);
+    var skipLabel = cg_fresh_label(tmp);
+    var endLabel = cg_fresh_label(tmp);
+    var tmpPhi = cg_fresh_tmp(tmp);
     var sbLogic = sb_new();
     sbLogic = sb_append_string(sbLogic, lbool.instr);
-    sbLogic = sb_append_string(sbLogic, rbool.instr);
-    sbLogic = sb_append_cstr(sbLogic, byte~(&"  "[0]));
-    sbLogic = sb_append_string(sbLogic, tmpLogic);
+    // branch based on operator
     if (opTok2.length == 2 && (opTok2.data)~ == byte(38) && (opTok2.data + 1)~ == byte(38)) { // &&
-      sbLogic = sb_append_cstr(sbLogic, byte~(&" = and i1 "[0]));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br i1 "[0]));
+      sbLogic = sb_append_string(sbLogic, lbool.value);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", label %"[0]));
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", label %"[0]));
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // rhs block
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      var right = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+      var rbool = cg_to_bool(right, tmp);
+      if (rbool.err == 1) { return rbool; }
+      sbLogic = sb_append_string(sbLogic, rbool.instr);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br label %"[0]));
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // skip block
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br label %"[0]));
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // end + phi
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  "[0]));
+      sbLogic = sb_append_string(sbLogic, tmpPhi);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" = phi i1 [ "[0]));
+      sbLogic = sb_append_string(sbLogic, rbool.value);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", %"[0]));
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" ], [ 0, %"[0]));
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" ]"[0]));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      return ExprCodegenResult{sb_to_string(sbLogic), tmpPhi, String{byte~(&"i1"[0]), 2}, 0};
     } else if (opTok2.length == 2 && (opTok2.data)~ == byte(124) && (opTok2.data + 1)~ == byte(124)) { // ||
-      sbLogic = sb_append_cstr(sbLogic, byte~(&" = or i1 "[0]));
-    } else {
-      return ExprCodegenResult{sb_to_string(sbLogic), tmpLogic, String{pmr.src, 0}, 1};
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br i1 "[0]));
+      sbLogic = sb_append_string(sbLogic, lbool.value);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", label %"[0]));
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", label %"[0]));
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // rhs block
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      var right2 = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+      var rbool2 = cg_to_bool(right2, tmp);
+      if (rbool2.err == 1) { return rbool2; }
+      sbLogic = sb_append_string(sbLogic, rbool2.instr);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br label %"[0]));
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // skip block (left true)
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  br label %"[0]));
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      // end + phi
+      sbLogic = sb_append_string(sbLogic, endLabel);
+      sbLogic = sb_append_byte(sbLogic, byte(58));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      sbLogic = sb_append_cstr(sbLogic, byte~(&"  "[0]));
+      sbLogic = sb_append_string(sbLogic, tmpPhi);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" = phi i1 [ "[0]));
+      sbLogic = sb_append_string(sbLogic, rbool2.value);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&", %"[0]));
+      sbLogic = sb_append_string(sbLogic, rhsLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" ], [ 1, %"[0]));
+      sbLogic = sb_append_string(sbLogic, skipLabel);
+      sbLogic = sb_append_cstr(sbLogic, byte~(&" ]"[0]));
+      sbLogic = sb_append_byte(sbLogic, byte(10));
+      return ExprCodegenResult{sb_to_string(sbLogic), tmpPhi, String{byte~(&"i1"[0]), 2}, 0};
     }
-    sbLogic = sb_append_string(sbLogic, lbool.value);
-    sbLogic = sb_append_cstr(sbLogic, byte~(&", "[0]));
-    sbLogic = sb_append_string(sbLogic, rbool.value);
-    sbLogic = sb_append_byte(sbLogic, byte(10));
-    return ExprCodegenResult{sb_to_string(sbLogic), tmpLogic, String{byte~(&"i1"[0]), 2}, 0};
+    return ExprCodegenResult{sb_to_string(sbLogic), tmpPhi, String{pmr.src, 0}, 1};
   }
   if (n.kind == NODE_TERNARY) {
-    var condRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var condRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     var condBool = cg_to_bool(condRes, tmp);
     if (condBool.err == 1) { return condBool; }
-    var thenRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var lthen = cg_fresh_label(tmp);
+    var lelse = cg_fresh_label(tmp);
+    var lend = cg_fresh_label(tmp);
+    var tmpPhi = cg_fresh_tmp(tmp);
+    var sbTern = sb_new();
+    sbTern = sb_append_string(sbTern, condBool.instr);
+    sbTern = sb_append_cstr(sbTern, byte~(&"  br i1 "[0]));
+    sbTern = sb_append_string(sbTern, condBool.value);
+    sbTern = sb_append_cstr(sbTern, byte~(&", label %"[0]));
+    sbTern = sb_append_string(sbTern, lthen);
+    sbTern = sb_append_cstr(sbTern, byte~(&", label %"[0]));
+    sbTern = sb_append_string(sbTern, lelse);
+    sbTern = sb_append_byte(sbTern, byte(10));
+    // then block
+    sbTern = sb_append_string(sbTern, lthen);
+    sbTern = sb_append_byte(sbTern, byte(58));
+    sbTern = sb_append_byte(sbTern, byte(10));
+    var thenRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (thenRes.err == 1) { return thenRes; }
-    var elseRes = cg_expr(pmr, tm, n.c, paramNames, paramTypes, tmp);
+    sbTern = sb_append_string(sbTern, thenRes.instr);
+    sbTern = sb_append_cstr(sbTern, byte~(&"  br label %"[0]));
+    sbTern = sb_append_string(sbTern, lend);
+    sbTern = sb_append_byte(sbTern, byte(10));
+    // else block
+    sbTern = sb_append_string(sbTern, lelse);
+    sbTern = sb_append_byte(sbTern, byte(58));
+    sbTern = sb_append_byte(sbTern, byte(10));
+    var elseRes = cg_expr(pmr, tm, n.c, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (elseRes.err == 1) { return elseRes; }
+    sbTern = sb_append_string(sbTern, elseRes.instr);
+    sbTern = sb_append_cstr(sbTern, byte~(&"  br label %"[0]));
+    sbTern = sb_append_string(sbTern, lend);
+    sbTern = sb_append_byte(sbTern, byte(10));
+    // end + phi
     var tyThen = thenRes.valTy;
     var tyElse = elseRes.valTy;
     if (tyThen.length == 0) { tyThen = String{byte~(&"i32"[0]), 3}; }
     if (tyElse.length == 0) { tyElse = String{byte~(&"i32"[0]), 3}; }
-    if (cg_str_eq(tyThen, tyElse) == 0) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
-    var tmpTern = cg_fresh_tmp(tmp);
-    var sbTern = sb_new();
-    sbTern = sb_append_string(sbTern, condBool.instr);
-    sbTern = sb_append_string(sbTern, thenRes.instr);
-    sbTern = sb_append_string(sbTern, elseRes.instr);
-    sbTern = sb_append_cstr(sbTern, byte~(&"  "[0]));
-    sbTern = sb_append_string(sbTern, tmpTern);
-    sbTern = sb_append_cstr(sbTern, byte~(&" = select i1 "[0]));
-    sbTern = sb_append_string(sbTern, condBool.value);
-    sbTern = sb_append_cstr(sbTern, byte~(&", "[0]));
-    sbTern = sb_append_string(sbTern, tyThen);
-    sbTern = sb_append_byte(sbTern, byte(32));
-    sbTern = sb_append_string(sbTern, thenRes.value);
-    sbTern = sb_append_cstr(sbTern, byte~(&", "[0]));
-    sbTern = sb_append_string(sbTern, tyElse);
-    sbTern = sb_append_byte(sbTern, byte(32));
-    sbTern = sb_append_string(sbTern, elseRes.value);
+    if (cg_str_eq(tyThen, tyElse) == 0) { return ExprCodegenResult{sb_to_string(sbTern), tmpPhi, String{pmr.src, 0}, 1}; }
+    sbTern = sb_append_string(sbTern, lend);
+    sbTern = sb_append_byte(sbTern, byte(58));
     sbTern = sb_append_byte(sbTern, byte(10));
-    return ExprCodegenResult{sb_to_string(sbTern), tmpTern, tyThen, 0};
+    sbTern = sb_append_cstr(sbTern, byte~(&"  "[0]));
+    sbTern = sb_append_string(sbTern, tmpPhi);
+    sbTern = sb_append_cstr(sbTern, byte~(&" = phi "[0]));
+    sbTern = sb_append_string(sbTern, tyThen);
+    sbTern = sb_append_cstr(sbTern, byte~(&" [ "[0]));
+    sbTern = sb_append_string(sbTern, thenRes.value);
+    sbTern = sb_append_cstr(sbTern, byte~(&", %"[0]));
+    sbTern = sb_append_string(sbTern, lthen);
+    sbTern = sb_append_cstr(sbTern, byte~(&" ], [ "[0]));
+    sbTern = sb_append_string(sbTern, elseRes.value);
+    sbTern = sb_append_cstr(sbTern, byte~(&", %"[0]));
+    sbTern = sb_append_string(sbTern, lelse);
+    sbTern = sb_append_cstr(sbTern, byte~(&" ]"[0]));
+    sbTern = sb_append_byte(sbTern, byte(10));
+    return ExprCodegenResult{sb_to_string(sbTern), tmpPhi, tyThen, 0};
   }
   if (n.kind == NODE_DEREF) {
-    var baseRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var baseRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (baseRes.err == 1) { return baseRes; }
     if (cg_is_pointer_type(baseRes.valTy) == 0) { return ExprCodegenResult{baseRes.instr, baseRes.value, String{pmr.src, 0}, 1}; }
     var elemTy = cg_pointer_elem_ty(baseRes.valTy);
@@ -470,9 +1021,9 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     return ExprCodegenResult{sb_to_string(sbLd), tmpLoad, elemTy, 0};
   }
   if (n.kind == NODE_INDEX) {
-    var baseResIdx = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var baseResIdx = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (baseResIdx.err == 1) { return baseResIdx; }
-    var idxRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    var idxRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (idxRes.err == 1) { return idxRes; }
     if (cg_is_pointer_type(baseResIdx.valTy) == 0) { return ExprCodegenResult{baseResIdx.instr, baseResIdx.value, String{pmr.src, 0}, 1}; }
     var elemTyIdx = cg_pointer_elem_ty(baseResIdx.valTy);
@@ -530,7 +1081,7 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
         return ExprCodegenResult{String{pmr.src, 0}, sb_to_string(sbLen), String{byte~(&"i32"[0]), 3}, 0};
       }
     }
-    var ctxRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    var ctxRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
     if (ctxRes.err == 1) { return ctxRes; }
     return ExprCodegenResult{ctxRes.instr, ctxRes.value, String{pmr.src, 0}, 1};
   }
@@ -553,7 +1104,7 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     var idx = 0;
     while (head != -1 && idx < argCount) {
       var argNode = nodearena_get(pmr.arena, head);
-      var argRes = cg_expr(pmr, tm, argNode.a, paramNames, paramTypes, tmp);
+      var argRes = cg_expr(pmr, tm, argNode.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
       if (argRes.err == 1) { return argRes; }
       argInstr = sb_append_string(argInstr, argRes.instr);
       if (idx > 0) { argVals = sb_append_cstr(argVals, byte~(&", "[0])); }
@@ -596,6 +1147,344 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
   }
   // Unsupported expression kinds for now.
   return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
+}
+
+// Emit a range of statements [start, end) using current locals/params.
+// Supports var, assign, return, expression statements, and if/else.
+def cg_emit_stmt_range(
+  pmr ParseModuleResult,
+  tm TypeModuleTypes,
+  paramNames VecStr,
+  paramTypes VecStr,
+  paramSlots VecStr,
+  paramSlotTypes VecStr,
+  localNames VecStr,
+  localPtrs VecStr,
+  localTypes VecStr,
+  retTy String,
+  breakLabel String,
+  continueLabel String,
+  start int,
+  end int,
+  tmp int~
+) StmtEmitResult {
+  var sb = sb_new();
+  var ln = localNames;
+  var lp = localPtrs;
+  var lt = localTypes;
+  var emittedRet = 0;
+  var term = 0;
+  var ranges = SkipRanges{vecint_new(4), vecint_new(4)};
+  ranges = cg_collect_skip_ranges(pmr, start, end, start, end, ranges);
+  var i = start;
+  while (i < end) {
+    if (cg_in_skip(ranges, i) == 1) { i = i + 1; continue; }
+    if (emittedRet == 1) { break; }
+    var stmt = nodearena_get(pmr.arena, i);
+    if (stmt.kind == NODE_VAR_STMT) {
+      var vname = tok_string(pmr.tokens, stmt.a, pmr.src);
+      var vtid = tm_var_type_by_node(tm, i);
+      var vty = String{byte~(&"i32"[0]), 3};
+      if (vtid != -1) { vty = cg_llvm_type(tm.env.tt, vtid); }
+      var initRes = cg_expr(pmr, tm, stmt.b, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+      if (initRes.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      var slot = cg_fresh_tmp(tmp);
+      sb = sb_append_cstr(sb, byte~(&"  "[0]));
+      sb = sb_append_string(sb, slot);
+      sb = sb_append_cstr(sb, byte~(&" = alloca "[0]));
+      sb = sb_append_string(sb, vty);
+      sb = sb_append_byte(sb, byte(10));
+      var storeRes = cg_store(slot, vty, initRes, tmp);
+      if (storeRes.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      sb = sb_append_string(sb, storeRes.instr);
+      ln = vecstr_push(ln, vname);
+      lp = vecstr_push(lp, slot);
+      lt = vecstr_push(lt, vty);
+    } else if (stmt.kind == NODE_ASSIGN) {
+      var aname = tok_string(pmr.tokens, stmt.a, pmr.src);
+      var slotPtr = String{pmr.src, 0};
+      var slotTy = String{pmr.src, 0};
+      var li2 = cg_find_name(ln, aname);
+      if (li2 != -1) {
+        slotPtr = vecstr_get(lp, li2);
+        slotTy = vecstr_get(lt, li2);
+      } else {
+        var pi2 = cg_match_param(paramNames, aname);
+        if (pi2 != -1) {
+          slotPtr = vecstr_get(paramSlots, pi2);
+          slotTy = vecstr_get(paramSlotTypes, pi2);
+        }
+      }
+      if (slotPtr.length == 0 || slotTy.length == 0) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      var rhs = cg_expr(pmr, tm, stmt.b, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+      if (rhs.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      var storeRes2 = cg_store(slotPtr, slotTy, rhs, tmp);
+      if (storeRes2.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      sb = sb_append_string(sb, storeRes2.instr);
+    } else if (stmt.kind == NODE_RETURN) {
+      if (retTy.length == 4 && (retTy.data)~ == byte(118)) {
+        sb = sb_append_cstr(sb, byte~(&"  ret void"[0]));
+        sb = sb_append_byte(sb, byte(10));
+        emittedRet = 1;
+        term = 1;
+        break;
+      }
+      var exprRes = cg_expr(pmr, tm, stmt.a, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+      if (exprRes.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      var coerced = cg_coerce(exprRes, retTy, tmp);
+      if (coerced.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      sb = sb_append_string(sb, coerced.instr);
+      sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
+      sb = sb_append_string(sb, retTy);
+      sb = sb_append_byte(sb, byte(32));
+      sb = sb_append_string(sb, coerced.value);
+      sb = sb_append_byte(sb, byte(10));
+      emittedRet = 1;
+      term = 1;
+      break;
+    } else if (stmt.kind == NODE_EXPR_STMT) {
+      var exprOnly = cg_expr(pmr, tm, stmt.a, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+      if (exprOnly.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      sb = sb_append_string(sb, exprOnly.instr);
+    } else if (stmt.kind == NODE_IF) {
+      var condRes = cg_expr(pmr, tm, stmt.a, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+      if (condRes.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      var condBool = cg_to_bool(condRes, tmp);
+      if (condBool.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      var lthen = cg_fresh_label(tmp);
+      var lelse = cg_fresh_label(tmp);
+      var lend = cg_fresh_label(tmp);
+      sb = sb_append_string(sb, condBool.instr);
+      sb = sb_append_cstr(sb, byte~(&"  br i1 "[0]));
+      sb = sb_append_string(sb, condBool.value);
+      sb = sb_append_cstr(sb, byte~(&", label %"[0]));
+      sb = sb_append_string(sb, lthen);
+      sb = sb_append_cstr(sb, byte~(&", label %"[0]));
+      sb = sb_append_string(sb, lelse);
+      sb = sb_append_byte(sb, byte(10));
+
+      // then block
+      sb = sb_append_string(sb, lthen);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      var thenRet = 0;
+      if (stmt.b != -1) {
+        var thenNode = nodearena_get(pmr.arena, stmt.b);
+        var tStart = stmt.b;
+        var tEnd = stmt.b + 1;
+        if (thenNode.kind == NODE_BLOCK) {
+          tStart = thenNode.a;
+          tEnd = thenNode.a + thenNode.b;
+        }
+        var thenLn = ln;
+        var thenLp = lp;
+        var thenLt = lt;
+        var thenRes = cg_emit_stmt_range(pmr, tm, paramNames, paramTypes, paramSlots, paramSlotTypes, thenLn, thenLp, thenLt, retTy, breakLabel, continueLabel, tStart, tEnd, tmp);
+        sb = sb_append_string(sb, thenRes.text);
+        if (thenRes.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+        if (thenRes.ret == 0) {
+          sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+          sb = sb_append_string(sb, lend);
+          sb = sb_append_byte(sb, byte(10));
+        } else {
+          thenRet = 1;
+        }
+      } else {
+        sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+        sb = sb_append_string(sb, lend);
+        sb = sb_append_byte(sb, byte(10));
+      }
+
+      // else block
+      sb = sb_append_string(sb, lelse);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      var elseRet = 0;
+      if (stmt.c != -1) {
+        var elseNode = nodearena_get(pmr.arena, stmt.c);
+        var eStart = stmt.c;
+        var eEnd = stmt.c + 1;
+        if (elseNode.kind == NODE_BLOCK) {
+          eStart = elseNode.a;
+          eEnd = elseNode.a + elseNode.b;
+        }
+        var elseLn = ln;
+        var elseLp = lp;
+        var elseLt = lt;
+        var elseRes = cg_emit_stmt_range(pmr, tm, paramNames, paramTypes, paramSlots, paramSlotTypes, elseLn, elseLp, elseLt, retTy, breakLabel, continueLabel, eStart, eEnd, tmp);
+        sb = sb_append_string(sb, elseRes.text);
+        if (elseRes.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+        if (elseRes.ret == 0) {
+          sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+          sb = sb_append_string(sb, lend);
+          sb = sb_append_byte(sb, byte(10));
+        } else {
+          elseRet = 1;
+        }
+      } else {
+        sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+        sb = sb_append_string(sb, lend);
+        sb = sb_append_byte(sb, byte(10));
+      }
+
+      sb = sb_append_string(sb, lend);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      if (stmt.c != -1 && thenRet == 1 && elseRet == 1) {
+        emittedRet = 1;
+      }
+    } else if (stmt.kind == NODE_WHILE) {
+      var lcond = cg_fresh_label(tmp);
+      var lbody = cg_fresh_label(tmp);
+      var lendw = cg_fresh_label(tmp);
+      // jump to cond
+      sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+      sb = sb_append_string(sb, lcond);
+      sb = sb_append_byte(sb, byte(10));
+      // cond block
+      sb = sb_append_string(sb, lcond);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      var condResW = cg_expr(pmr, tm, stmt.a, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+      if (condResW.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      var condBoolW = cg_to_bool(condResW, tmp);
+      if (condBoolW.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      sb = sb_append_string(sb, condBoolW.instr);
+      sb = sb_append_cstr(sb, byte~(&"  br i1 "[0]));
+      sb = sb_append_string(sb, condBoolW.value);
+      sb = sb_append_cstr(sb, byte~(&", label %"[0]));
+      sb = sb_append_string(sb, lbody);
+      sb = sb_append_cstr(sb, byte~(&", label %"[0]));
+      sb = sb_append_string(sb, lendw);
+      sb = sb_append_byte(sb, byte(10));
+      // body block
+      sb = sb_append_string(sb, lbody);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      if (stmt.b != -1) {
+        var bodyNode = nodearena_get(pmr.arena, stmt.b);
+        var bStart = stmt.b;
+        var bEnd = stmt.b + 1;
+        if (bodyNode.kind == NODE_BLOCK) {
+          bStart = bodyNode.a;
+          bEnd = bodyNode.a + bodyNode.b;
+        }
+        var bodyRes = cg_emit_stmt_range(pmr, tm, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, retTy, lendw, lcond, bStart, bEnd, tmp);
+        sb = sb_append_string(sb, bodyRes.text);
+        if (bodyRes.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+        if (bodyRes.ret == 0 && bodyRes.term == 0) {
+          sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+          sb = sb_append_string(sb, lcond);
+          sb = sb_append_byte(sb, byte(10));
+        } else {
+          if (bodyRes.ret == 1) { emittedRet = 1; }
+          term = term | bodyRes.term;
+        }
+      } else {
+        sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+        sb = sb_append_string(sb, lcond);
+        sb = sb_append_byte(sb, byte(10));
+      }
+      // end label
+      sb = sb_append_string(sb, lendw);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+    } else if (stmt.kind == NODE_FOR) {
+      // for(init; cond; step) body
+      // (init currently ignored if present; semantics covered by preceding statements)
+      var lcondf = cg_fresh_label(tmp);
+      var lbodyf = cg_fresh_label(tmp);
+      var lstepf = cg_fresh_label(tmp);
+      var lendf = cg_fresh_label(tmp);
+      sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+      sb = sb_append_string(sb, lcondf);
+      sb = sb_append_byte(sb, byte(10));
+      // cond block
+      sb = sb_append_string(sb, lcondf);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      if (stmt.b != -1) {
+        var condResF = cg_expr(pmr, tm, stmt.b, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+        if (condResF.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+        var condBoolF = cg_to_bool(condResF, tmp);
+        if (condBoolF.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+        sb = sb_append_string(sb, condBoolF.instr);
+        sb = sb_append_cstr(sb, byte~(&"  br i1 "[0]));
+        sb = sb_append_string(sb, condBoolF.value);
+        sb = sb_append_cstr(sb, byte~(&", label %"[0]));
+        sb = sb_append_string(sb, lbodyf);
+        sb = sb_append_cstr(sb, byte~(&", label %"[0]));
+        sb = sb_append_string(sb, lendf);
+        sb = sb_append_byte(sb, byte(10));
+      } else {
+        sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+        sb = sb_append_string(sb, lbodyf);
+        sb = sb_append_byte(sb, byte(10));
+      }
+      // body block
+      sb = sb_append_string(sb, lbodyf);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      if (stmt.d != -1) {
+        var bodyNodeF = nodearena_get(pmr.arena, stmt.d);
+        var bfStart = stmt.d;
+        var bfEnd = stmt.d + 1;
+        if (bodyNodeF.kind == NODE_BLOCK) {
+          bfStart = bodyNodeF.a;
+          bfEnd = bodyNodeF.a + bodyNodeF.b;
+        }
+        var bodyResF = cg_emit_stmt_range(pmr, tm, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, retTy, lendf, lstepf, bfStart, bfEnd, tmp);
+        sb = sb_append_string(sb, bodyResF.text);
+        if (bodyResF.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+        if (bodyResF.ret == 0 && bodyResF.term == 0) {
+          sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+          sb = sb_append_string(sb, lstepf);
+          sb = sb_append_byte(sb, byte(10));
+        } else {
+          if (bodyResF.ret == 1) { emittedRet = 1; }
+          term = term | bodyResF.term;
+        }
+      } else {
+        sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+        sb = sb_append_string(sb, lstepf);
+        sb = sb_append_byte(sb, byte(10));
+      }
+      // step block
+      sb = sb_append_string(sb, lstepf);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+      if (stmt.c != -1) {
+        var stepResF = cg_expr(pmr, tm, stmt.c, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+        if (stepResF.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+        sb = sb_append_string(sb, stepResF.instr);
+      }
+      sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+      sb = sb_append_string(sb, lcondf);
+      sb = sb_append_byte(sb, byte(10));
+      // end
+      sb = sb_append_string(sb, lendf);
+      sb = sb_append_byte(sb, byte(58));
+      sb = sb_append_byte(sb, byte(10));
+    } else if (stmt.kind == NODE_BREAK) {
+      if (breakLabel.length == 0) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+      sb = sb_append_string(sb, breakLabel);
+      sb = sb_append_byte(sb, byte(10));
+      term = 1;
+      break;
+    } else if (stmt.kind == NODE_CONTINUE) {
+      if (continueLabel.length == 0) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+      sb = sb_append_cstr(sb, byte~(&"  br label %"[0]));
+      sb = sb_append_string(sb, continueLabel);
+      sb = sb_append_byte(sb, byte(10));
+      term = 1;
+      break;
+    } else {
+      // Unsupported stmt kinds for now.
+    }
+    i = i + 1;
+  }
+  return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 0};
 }
 
 // Generate LLVM IR for a single function node.
@@ -665,82 +1554,60 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
     return FnCodegenResult{sb_to_string(sb), 0};
   }
 
-  // Body: expect a block node at fn.a
-  var body = nodearena_get(pmr.arena, fn.a);
-  var start = body.a;
-  var end = body.a + body.b;
-  var emittedRet = 0;
-  var i = start;
-  while (i < end) {
-    var stmt = nodearena_get(pmr.arena, i);
-    if (stmt.kind == NODE_RETURN) {
-      if (retTy.length == 4 && (retTy.data)~ == byte(118)) { // "void"
-        sb = sb_append_cstr(sb, byte~(&"  ret void"[0]));
-        sb = sb_append_byte(sb, byte(10));
-        emittedRet = 1;
-        break;
-      }
-      var exprRes = cg_expr(pmr, tm, stmt.a, paramNames, paramTypes, &tmp);
-      if (exprRes.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
-      var retValName = exprRes.value;
-      var retValTy = exprRes.valTy;
-      if (cg_str_eq(retValTy, retTy) == 0 && retValTy.length > 0 && retTy.length > 0) {
-        // widen i1/i8 -> i32
-        if (retTy.length == 3 && (retTy.data)~ == byte(105) && (retTy.data + 1)~ == byte(51)) {
-          if (retValTy.length == 2 && (retValTy.data)~ == byte(105) && (retValTy.data + 1)~ == byte(49)) {
-            var convTmp = cg_fresh_tmp(&tmp);
-            sb = sb_append_string(sb, exprRes.instr);
-            sb = sb_append_cstr(sb, byte~(&"  "[0]));
-            sb = sb_append_string(sb, convTmp);
-            sb = sb_append_cstr(sb, byte~(&" = zext i1 "[0]));
-            sb = sb_append_string(sb, retValName);
-            sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
-            sb = sb_append_byte(sb, byte(10));
-            retValName = convTmp;
-            retValTy = retTy;
-          } else if (retValTy.length == 2 && (retValTy.data)~ == byte(105) && (retValTy.data + 1)~ == byte(56)) {
-            var convTmp2 = cg_fresh_tmp(&tmp);
-            sb = sb_append_string(sb, exprRes.instr);
-            sb = sb_append_cstr(sb, byte~(&"  "[0]));
-            sb = sb_append_string(sb, convTmp2);
-            sb = sb_append_cstr(sb, byte~(&" = zext i8 "[0]));
-            sb = sb_append_string(sb, retValName);
-            sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
-            sb = sb_append_byte(sb, byte(10));
-            retValName = convTmp2;
-            retValTy = retTy;
-          } else {
-            return FnCodegenResult{sb_to_string(sb), 1};
-          }
-        } else {
-          return FnCodegenResult{sb_to_string(sb), 1};
-        }
-      } else {
-        sb = sb_append_string(sb, exprRes.instr);
-      }
-      sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
-      sb = sb_append_string(sb, retTy);
-      sb = sb_append_byte(sb, byte(32));
-      sb = sb_append_string(sb, retValName);
-      sb = sb_append_byte(sb, byte(10));
-      emittedRet = 1;
-      break;
-    }
-    // For now, ignore other statement kinds gracefully.
-    i = i + 1;
-  }
-  if (emittedRet == 0) {
-    if (retTy.length == 4 && (retTy.data)~ == byte(118)) {
-      sb = sb_append_cstr(sb, byte~(&"  ret void"[0]));
-    } else {
-      sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
-      sb = sb_append_string(sb, retTy);
-      sb = sb_append_byte(sb, byte(32));
-      sb = sb_append_byte(sb, byte(48)); // '0'
-    }
-    sb = sb_append_byte(sb, byte(10));
+  // Prepare param slots and locals
+  var paramSlots = vecstr_new(4);
+  var paramSlotTypes = vecstr_new(4);
+  var localNames = vecstr_new(4);
+  var localPtrs = vecstr_new(4);
+  var localTypes = vecstr_new(4);
+  var allocas = sb_new();
+  var psi = 0;
+  while (psi < paramCount) {
+    var pid = vecint_get(tm.paramTypeIds, paramStart + psi);
+    var pty = cg_llvm_type(tm.env.tt, pid);
+    var slot = cg_fresh_tmp(&tmp);
+    allocas = sb_append_cstr(allocas, byte~(&"  "[0]));
+    allocas = sb_append_string(allocas, slot);
+    allocas = sb_append_cstr(allocas, byte~(&" = alloca "[0]));
+    allocas = sb_append_string(allocas, pty);
+    allocas = sb_append_byte(allocas, byte(10));
+    allocas = sb_append_cstr(allocas, byte~(&"  store "[0]));
+    allocas = sb_append_string(allocas, pty);
+    allocas = sb_append_cstr(allocas, byte~(&" %"[0]));
+    allocas = sb_append_cstr(allocas, byte~(&"p"[0]));
+    allocas = sb_append_int(allocas, psi);
+    allocas = sb_append_cstr(allocas, byte~(&", "[0]));
+    allocas = sb_append_string(allocas, pty);
+    allocas = sb_append_cstr(allocas, byte~(&"* "[0]));
+    allocas = sb_append_string(allocas, slot);
+    allocas = sb_append_byte(allocas, byte(10));
+    paramSlots = vecstr_push(paramSlots, slot);
+    paramSlotTypes = vecstr_push(paramSlotTypes, pty);
+    psi = psi + 1;
   }
 
+  var sbBody = sb_new();
+  sbBody = sb_append_string(sbBody, sb_to_string(allocas));
+
+  // Body: expect a block node at fn.a
+  var body = nodearena_get(pmr.arena, fn.a);
+  var empty = String{pmr.src, 0};
+  var bodyRes = cg_emit_stmt_range(pmr, tm, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, retTy, empty, empty, body.a, body.a + body.b, &tmp);
+  if (bodyRes.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
+  sbBody = sb_append_string(sbBody, bodyRes.text);
+  if (bodyRes.ret == 0) {
+    if (retTy.length == 4 && (retTy.data)~ == byte(118)) {
+      sbBody = sb_append_cstr(sbBody, byte~(&"  ret void"[0]));
+    } else {
+      sbBody = sb_append_cstr(sbBody, byte~(&"  ret "[0]));
+      sbBody = sb_append_string(sbBody, retTy);
+      sbBody = sb_append_byte(sbBody, byte(32));
+      sbBody = sb_append_byte(sbBody, byte(48)); // '0'
+    }
+    sbBody = sb_append_byte(sbBody, byte(10));
+  }
+
+  sb = sb_append_string(sb, sb_to_string(sbBody));
   sb = sb_append_byte(sb, byte(125)); // '}'
   sb = sb_append_byte(sb, byte(10));
   return FnCodegenResult{sb_to_string(sb), 0};
@@ -776,6 +1643,104 @@ def cg_function_decl(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int)
 // Module-level codegen entry.
 def codegen_module(pmr ParseModuleResult, tm TypeModuleTypes) String {
   var sb = sb_new();
+
+  // Emit string literal constants.
+  var si = 0;
+  while (si < pmr.tokens.length) {
+    var tkSi = token_kind_at(pmr.tokens, si);
+    if (tkSi == TOKEN_STRING) {
+      var nameStr2 = cg_string_name(si);
+      var tlen2 = token_length_at(pmr.tokens, si);
+      var clen2 = tlen2 - 2;
+      sb = sb_append_byte(sb, byte(64)); // '@'
+      sb = sb_append_string(sb, nameStr2);
+      sb = sb_append_cstr(sb, byte~(&" = private unnamed_addr constant ["[0]));
+      sb = sb_append_int(sb, clen2 + 1);
+      sb = sb_append_cstr(sb, byte~(&" x i8] [ "[0]));
+      var start2 = token_start_at(pmr.tokens, si) + 1;
+      var idx2 = 0;
+      while (idx2 < clen2) {
+        if (idx2 > 0) { sb = sb_append_cstr(sb, byte~(&", "[0])); }
+        var ch2 = (pmr.src + start2 + idx2)~;
+        sb = sb_append_cstr(sb, byte~(&"i8 "[0]));
+        sb = sb_append_int(sb, int(ch2));
+        idx2 = idx2 + 1;
+      }
+      if (clen2 > 0) { sb = sb_append_cstr(sb, byte~(&", "[0])); }
+      sb = sb_append_cstr(sb, byte~(&"i8 0 ]"[0]));
+      sb = sb_append_byte(sb, byte(10));
+    }
+    si = si + 1;
+  }
+
+  // Emit globals with literal initializers (ints/bools/bytes/strings).
+  var gi = 0;
+  while (gi < pmr.meta.varNodeIndex.length) {
+    var gvIdx = vecint_get(pmr.meta.varNodeIndex, gi);
+    var gvNode = nodearena_get(pmr.arena, gvIdx);
+    var gname = tok_string(pmr.tokens, gvNode.a, pmr.src);
+    var initTok = -1;
+    if (gvNode.b != -1) {
+      var initNode = nodearena_get(pmr.arena, gvNode.b);
+      if (initNode.kind == NODE_LITERAL) { initTok = initNode.a; }
+    }
+    var gtid = vecint_get(tm.varTypeIds, gi);
+    if (gtid == -1 && initTok != -1) {
+      var tk0 = token_kind_at(pmr.tokens, initTok);
+      if (tk0 == TOKEN_TRUE || tk0 == TOKEN_FALSE) { gtid = 1; }
+      else if (tk0 == TOKEN_NUMBER) { gtid = 5; }
+      else if (tk0 == TOKEN_SINGLE_QUOTE_STRING) { gtid = 2; }
+      else if (tk0 == TOKEN_STRING) { gtid = 6; } // pointer to byte
+    }
+    var gty = cg_llvm_type(tm.env.tt, gtid);
+    if (gtid == -1) { gty = String{byte~(&"i32"[0]), 3}; }
+    var initStr = String{byte~(&"0"[0]), 1};
+    if (initTok != -1) {
+      var tk = token_kind_at(pmr.tokens, initTok);
+      if (tk == TOKEN_NUMBER) {
+        initStr = tok_string(pmr.tokens, initTok, pmr.src);
+      } else if (tk == TOKEN_TRUE) {
+        initStr = String{byte~(&"1"[0]), 1};
+      } else if (tk == TOKEN_FALSE) {
+        initStr = String{byte~(&"0"[0]), 1};
+      } else if (tk == TOKEN_SINGLE_QUOTE_STRING) {
+        var tlen = token_length_at(pmr.tokens, initTok);
+        if (tlen >= 3) {
+          var start = token_start_at(pmr.tokens, initTok);
+          var ch = (pmr.src + start + 1)~;
+          var sbCh = sb_new();
+          sbCh = sb_append_int(sbCh, int(ch));
+          initStr = sb_to_string(sbCh);
+        }
+      } else if (tk == TOKEN_STRING) {
+        var nameStrG = cg_string_name(initTok);
+        var tlenG = token_length_at(pmr.tokens, initTok);
+        var clenG = tlenG - 2;
+        var sbInit = sb_new();
+        sbInit = sb_append_cstr(sbInit, byte~(&"getelementptr inbounds "[0]));
+        sbInit = sb_append_byte(sbInit, byte(91)); // '['
+        sbInit = sb_append_int(sbInit, clenG + 1);
+        sbInit = sb_append_cstr(sbInit, byte~(&" x i8]"[0]));
+        sbInit = sb_append_cstr(sbInit, byte~(&", "[0]));
+        sbInit = sb_append_byte(sbInit, byte(91)); // '['
+        sbInit = sb_append_int(sbInit, clenG + 1);
+        sbInit = sb_append_cstr(sbInit, byte~(&" x i8]* "[0]));
+        sbInit = sb_append_byte(sbInit, byte(64)); // '@'
+        sbInit = sb_append_string(sbInit, nameStrG);
+        sbInit = sb_append_cstr(sbInit, byte~(&", i32 0, i32 0"[0]));
+        initStr = sb_to_string(sbInit);
+        gty = String{byte~(&"i8*"[0]), 3};
+      }
+    }
+    sb = sb_append_byte(sb, byte(64)); // '@'
+    sb = sb_append_string(sb, gname);
+    sb = sb_append_cstr(sb, byte~(&" = global "[0]));
+    sb = sb_append_string(sb, gty);
+    sb = sb_append_byte(sb, byte(32));
+    sb = sb_append_string(sb, initStr);
+    sb = sb_append_byte(sb, byte(10));
+    gi = gi + 1;
+  }
 
   // Emit imported function declarations first.
   var fi = 0;

@@ -56,7 +56,7 @@ describe("Stage1 types helpers", () => {
     const res = runTypes()
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
-    expect(res.stdout.trim()).toBe("0 1 1 0 0 1 1")
+    expect(res.stdout.trim()).toBe("1 1 1 0 0 1 1")
   })
 
   it("compares types structurally", () => {

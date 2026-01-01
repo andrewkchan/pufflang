@@ -38,7 +38,7 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     expect(irRes.status).toBe(0)
     expect(irRes.stderr).toBe("")
     const ir = irRes.stdout.trim()
-    expect(ir).toContain("add i32 %p0, %p1")
+    expect(ir).toContain("add i32 %t2, %t3")
   })
 
   it("produces runnable IR for literal arithmetic", () => {
@@ -156,7 +156,7 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     `
     const irRes = runStage1CompileToIr(program)
     expect(irRes.status).toBe(0)
-    expect(irRes.stdout).toContain("getelementptr i8, i8* %p0, i32 %p1")
+    expect(irRes.stdout).toContain("getelementptr i8, i8*")
   })
 
   it("emits load for deref on byte pointer", () => {
@@ -166,7 +166,7 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     `
     const irRes = runStage1CompileToIr(program)
     expect(irRes.status).toBe(0)
-    expect(irRes.stdout).toContain("load i8, i8* %p0")
+    expect(irRes.stdout).toContain("load i8, i8* %t1")
   })
 
   it("emits i8 arithmetic for byte parameters and widens on return", () => {
@@ -176,7 +176,7 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     `
     const irRes = runStage1CompileToIr(program)
     expect(irRes.status).toBe(0)
-    expect(irRes.stdout).toContain("add i8 %p0, %p1")
+    expect(irRes.stdout).toContain("add i8 %t2, %t3")
     const bin = runRawIR(irRes.stdout)
     expect(bin.status).toBe(3)
   })

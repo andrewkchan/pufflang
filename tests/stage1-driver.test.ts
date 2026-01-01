@@ -7,6 +7,8 @@ const astSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "ast.puff"),
 const typesSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "types.puff"), "utf8")
 const structLayoutSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "structlayout.puff"), "utf8")
 const typeEnvSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "typeenv.puff"), "utf8")
+const typerulesSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "typerules.puff"), "utf8")
+const literalTypesSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "literaltypes.puff"), "utf8")
 const parserSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "parser.puff"), "utf8")
 const parserExprSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "parser_expr.puff"), "utf8")
 const typeparseSrc = fs.readFileSync(path.join(__dirname, "..", "stage1", "typeparse.puff"), "utf8")
@@ -28,6 +30,8 @@ ${stripAstTypeSection(astSrc)}
 ${scannerSrc}
 ${structLayoutSrc}
 ${typeEnvSrc}
+${typerulesSrc}
+${literalTypesSrc}
 ${parserSrc}
 ${parserExprSrc}
 ${typeparseSrc}

@@ -12,6 +12,8 @@ const stage1TypesPath = path.join(__dirname, "..", "stage1", "types.puff")
 const stage1StructLayoutPath = path.join(__dirname, "..", "stage1", "structlayout.puff")
 const stage1TypeEnvPath = path.join(__dirname, "..", "stage1", "typeenv.puff")
 const stage1TypeparsePath = path.join(__dirname, "..", "stage1", "typeparse.puff")
+const stage1TyperulesPath = path.join(__dirname, "..", "stage1", "typerules.puff")
+const stage1LiteralTypesPath = path.join(__dirname, "..", "stage1", "literaltypes.puff")
 const stage1ParserExprPath = path.join(__dirname, "..", "stage1", "parser_expr.puff")
 const stage1ParserFullPath = path.join(__dirname, "..", "stage1", "parser_full.puff")
 const stage1CodegenPath = path.join(__dirname, "..", "stage1", "codegen.puff")
@@ -22,6 +24,8 @@ let cachedStage1Types: string | null = null
 let cachedStage1StructLayout: string | null = null
 let cachedStage1TypeEnv: string | null = null
 let cachedStage1Typeparse: string | null = null
+let cachedStage1Typerules: string | null = null
+let cachedStage1LiteralTypes: string | null = null
 let cachedStage1ParserExpr: string | null = null
 let cachedStage1ParserFull: string | null = null
 let cachedStage1Codegen: string | null = null
@@ -68,6 +72,18 @@ function loadStage1TypeEnv(): string {
   if (cachedStage1TypeEnv !== null) return cachedStage1TypeEnv
   cachedStage1TypeEnv = fs.readFileSync(stage1TypeEnvPath, "utf8")
   return cachedStage1TypeEnv
+}
+
+function loadStage1Typerules(): string {
+  if (cachedStage1Typerules !== null) return cachedStage1Typerules
+  cachedStage1Typerules = fs.readFileSync(stage1TyperulesPath, "utf8")
+  return cachedStage1Typerules
+}
+
+function loadStage1LiteralTypes(): string {
+  if (cachedStage1LiteralTypes !== null) return cachedStage1LiteralTypes
+  cachedStage1LiteralTypes = fs.readFileSync(stage1LiteralTypesPath, "utf8")
+  return cachedStage1LiteralTypes
 }
 
 function loadStage1Typeparse(): string {
@@ -295,7 +311,13 @@ def main() {
  */
 export function runStage1ModuleSummary(program: string): RunResult {
   const normalized = program.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
@@ -332,8 +354,8 @@ def print_str(s String) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var res = parse_module_source(byte~(&src[0]), len(src));
+${srcBuilder}
+  var res = parse_module_source(src.data, src.length);
   var summary = module_summary(res);
   print_str(summary);
 }
@@ -347,7 +369,13 @@ def main() {
  */
 export function runStage1ModuleCounts(program: string): RunResult {
   const normalized = program.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
@@ -368,8 +396,8 @@ def print_str(s String) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var res = parse_module_source(byte~(&src[0]), len(src));
+${srcBuilder}
+  var res = parse_module_source(src.data, src.length);
   var counts = module_counts(res);
   print_str(counts);
 }
@@ -383,13 +411,21 @@ def main() {
  */
 export function runStage1ResolverModule(src: string): RunResult {
   const normalized = src.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
 ${loadStage1StructLayout()}
 ${loadStage1TypeEnv()}
+${loadStage1Typerules()}
+${loadStage1LiteralTypes()}
 ${loadStage1ParserExpr()}
 ${loadStage1Typeparse()}
 ${loadStage1ParserFull()}
@@ -412,8 +448,8 @@ def print_int(x int) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var ok = resolve_module_tokens(byte~(&src[0]), len(src));
+${srcBuilder}
+  var ok = resolve_module_tokens(src.data, src.length);
   print_int(ok);
   __putchar__(10);
 }
@@ -427,13 +463,21 @@ def main() {
  */
 export function runStage1ResolverAst(src: string): RunResult {
   const normalized = src.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
 ${loadStage1StructLayout()}
 ${loadStage1TypeEnv()}
+${loadStage1Typerules()}
+${loadStage1LiteralTypes()}
 ${loadStage1ParserExpr()}
 ${loadStage1Typeparse()}
 ${loadStage1ParserFull()}
@@ -456,8 +500,8 @@ def print_int(x int) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var ok = resolve_module_ast(byte~(&src[0]), len(src));
+${srcBuilder}
+  var ok = resolve_module_ast(src.data, src.length);
   print_int(ok);
   __putchar__(10);
 }
@@ -470,13 +514,21 @@ def main() {
  */
 export function runStage1CompileToIr(program: string): RunResult {
   const normalized = program.trim().replace(/\r?\n/g, " ")
-  const programLiteral = JSON.stringify(normalized)
+  const programBytes = Array.from(Buffer.from(normalized, "utf8"))
+  const srcBuilder = [
+    `  var srcLen = ${programBytes.length};`,
+    `  var srcBuf = __malloc__(${programBytes.length});`,
+    ...programBytes.map((b, i) => `  (srcBuf + ${i})~ = ${b};`),
+    `  var src = String{srcBuf, srcLen};`,
+  ].join("\n")
   const source = `
 ${loadStage1Types()}
 ${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
 ${loadStage1StructLayout()}
 ${loadStage1TypeEnv()}
+${loadStage1Typerules()}
+${loadStage1LiteralTypes()}
 ${loadStage1ParserExpr()}
 ${loadStage1Typeparse()}
 ${loadStage1ParserFull()}
@@ -494,8 +546,8 @@ def print_str(s String) {
 }
 
 def main() {
-  var src = ${programLiteral};
-  var ir = compile_to_ir(byte~(&src[0]), len(src));
+${srcBuilder}
+  var ir = compile_to_ir(src.data, src.length);
   print_str(ir);
 }
 `
