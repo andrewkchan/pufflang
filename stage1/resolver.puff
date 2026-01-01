@@ -220,7 +220,7 @@ struct ResolveCtx {
   tokens Vec,
   src byte~,
   scope Scope,
-  types TypeTable,
+  env TypeEnv,
   tm TypeModuleTypes,
   currentFnIdx int,
   currentRetType int,
@@ -246,95 +246,263 @@ def range_contains(starts VecInt, ends VecInt, idx int) int {
   return 0;
 }
 
+struct InferResult { ctx ResolveCtx, typeId int }
+
+def ctx_set_type(ctx ResolveCtx, nodeIdx int, typeId int) ResolveCtx {
+  if (typeId != -1) {
+    ctx.arena = nodearena_set_type(ctx.arena, nodeIdx, typeId);
+  }
+  return ctx;
+}
+
+// Find a function index in tm by name and arity.
+def find_fn_index_by_name_arity(tm TypeModuleTypes, arena NodeArena, tokens Vec, src byte~, name String, argc int) int {
+  var i = 0;
+  while (i < tm.fnNodeIndex.length) {
+    var fnIdx = vecint_get(tm.fnNodeIndex, i);
+    var fnNode = nodearena_get(arena, fnIdx);
+    var fnName = tok_str(tokens, fnNode.c, src);
+    if (str_eq(fnName.data, fnName.length, name.data, name.length) == 1) {
+      if (fnNode.d == argc) { return i; }
+    }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Type inference with scope + TypeEnv; annotates node.typeId and propagates env.
+def infer_expr(ctx ResolveCtx, idx int) InferResult {
+  var r = ctx;
+  if (idx == -1) { return InferResult{r, -1}; }
+  var n = nodearena_get(r.arena, idx);
+  var k = n.kind;
+
+  if (k == NODE_LITERAL) {
+    var lit = literal_type(r.env, r.tokens, n.a, r.src);
+    if (lit.err == 1) { r.err = 1; return InferResult{r, -1}; }
+    r.env = lit.env;
+    r = ctx_set_type(r, idx, lit.typeId);
+    return InferResult{r, lit.typeId};
+  }
+
+  if (k == NODE_VARIABLE) {
+    var name = tok_str(r.tokens, n.a, r.src);
+    var symIdx = scope_lookup_index_any(r.scope, name);
+    if (symIdx == -1) { r.err = 1; return InferResult{r, -1}; }
+    var info = scope_get_info(r.scope, symIdx);
+    r = ctx_set_type(r, idx, info.typeId);
+    return InferResult{r, info.typeId};
+  }
+
+  if (k == NODE_GROUP) {
+    var inner = infer_expr(r, n.a);
+    inner.ctx = ctx_set_type(inner.ctx, idx, inner.typeId);
+    return inner;
+  }
+
+  if (k == NODE_UNARY) {
+    var operand = infer_expr(r, n.b);
+    r = operand.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var opTok = n.a;
+    var op = -1;
+    var okind = token_kind_at(r.tokens, opTok);
+    if (okind == TOKEN_MINUS) { op = UOP_NEG; }
+    if (okind == TOKEN_BANG) { op = UOP_NOT; }
+    if (okind == TOKEN_PLUS) {
+      var resPlus = operand.typeId;
+      r = ctx_set_type(r, idx, resPlus);
+      return InferResult{r, resPlus};
+    }
+    if (okind == TOKEN_TILDE) {
+      if (operand.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+      var catUnary = typetable_get(r.env.tt, operand.typeId).category;
+      if (catUnary == TYPECATEGORY_INT || catUnary == TYPECATEGORY_BYTE) {
+        r = ctx_set_type(r, idx, operand.typeId);
+        return InferResult{r, operand.typeId};
+      }
+      // treat as pointer deref for pointer types
+      if (catUnary == TYPECATEGORY_POINTER) { op = UOP_DEREF; }
+    }
+    var resId = type_unary_result(r.env.tt, operand.typeId, op);
+    if (resId == -1) { r.err = 1; return InferResult{r, -1}; }
+    r = ctx_set_type(r, idx, resId);
+    return InferResult{r, resId};
+  }
+
+  if (k == NODE_UPDATE) {
+    var opnd = infer_expr(r, n.b);
+    r = opnd.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var cat = typetable_get(r.env.tt, opnd.typeId).category;
+    if (cat != TYPECATEGORY_INT && cat != TYPECATEGORY_BYTE) { r.err = 1; return InferResult{r, -1}; }
+    r = ctx_set_type(r, idx, opnd.typeId);
+    return InferResult{r, opnd.typeId};
+  }
+
+  if (k == NODE_LOGICAL) {
+    var l = infer_expr(r, n.a);
+    r = l.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var r2 = infer_expr(r, n.b);
+    r = r2.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (l.typeId == -1 || r2.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+    var resId = type_binary_logical_result(r.env.tt, l.typeId, r2.typeId, 0);
+    if (resId == -1) { r.err = 1; return InferResult{r, -1}; }
+    r = ctx_set_type(r, idx, resId);
+    return InferResult{r, resId};
+  }
+
+  if (k == NODE_BINARY) {
+    var l = infer_expr(r, n.a);
+    r = l.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var rside = infer_expr(r, n.b);
+    r = rside.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (l.typeId == -1 || rside.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+    var opKind = token_kind_at(r.tokens, n.c);
+    var result = -1;
+    if (opKind == TOKEN_PLUS) { result = type_binary_arith_result(r.env.tt, l.typeId, rside.typeId, OP_ADD); }
+    if (opKind == TOKEN_MINUS) { result = type_binary_arith_result(r.env.tt, l.typeId, rside.typeId, OP_SUB); }
+    if (opKind == TOKEN_STAR) { result = type_binary_arith_result(r.env.tt, l.typeId, rside.typeId, OP_MUL); }
+    if (opKind == TOKEN_SLASH) { result = type_binary_arith_result(r.env.tt, l.typeId, rside.typeId, OP_DIV); }
+    if (opKind == TOKEN_PERCENT) { result = type_binary_arith_result(r.env.tt, l.typeId, rside.typeId, OP_MOD); }
+    if (opKind == TOKEN_AMP) { result = type_binary_bitwise_result(r.env.tt, l.typeId, rside.typeId, OP_BIT_AND); }
+    if (opKind == TOKEN_BAR) { result = type_binary_bitwise_result(r.env.tt, l.typeId, rside.typeId, OP_BIT_OR); }
+    if (opKind == TOKEN_CARET) { result = type_binary_bitwise_result(r.env.tt, l.typeId, rside.typeId, OP_BIT_XOR); }
+    if (opKind == TOKEN_SHIFT_LEFT) { result = type_binary_shift_result(r.env.tt, l.typeId, rside.typeId, OP_SHL); }
+    if (opKind == TOKEN_SHIFT_RIGHT) { result = type_binary_shift_result(r.env.tt, l.typeId, rside.typeId, OP_SHR); }
+    if (opKind == TOKEN_LESS) { result = type_binary_compare_result(r.env.tt, l.typeId, rside.typeId, OP_LT); }
+    if (opKind == TOKEN_LESS_EQUAL) { result = type_binary_compare_result(r.env.tt, l.typeId, rside.typeId, OP_LE); }
+    if (opKind == TOKEN_GREATER) { result = type_binary_compare_result(r.env.tt, l.typeId, rside.typeId, OP_GT); }
+    if (opKind == TOKEN_GREATER_EQUAL) { result = type_binary_compare_result(r.env.tt, l.typeId, rside.typeId, OP_GE); }
+    if (opKind == TOKEN_EQUAL_EQUAL) { result = type_binary_compare_result(r.env.tt, l.typeId, rside.typeId, OP_EQ); }
+    if (opKind == TOKEN_BANG_EQUAL) { result = type_binary_compare_result(r.env.tt, l.typeId, rside.typeId, OP_NE); }
+    if (result == -1) { r.err = 1; return InferResult{r, -1}; }
+    r = ctx_set_type(r, idx, result);
+    return InferResult{r, result};
+  }
+
+  if (k == NODE_TERNARY) {
+    var c = infer_expr(r, n.a);
+    r = c.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var t = infer_expr(r, n.b);
+    r = t.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var e = infer_expr(r, n.c);
+    r = e.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (type_equals(r.env.tt, t.typeId, e.typeId) == 0) { r.err = 1; return InferResult{r, -1}; }
+    r = ctx_set_type(r, idx, t.typeId);
+    return InferResult{r, t.typeId};
+  }
+
+  if (k == NODE_LEN) {
+    var inner = infer_expr(r, n.a);
+    r = inner.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (inner.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+    var t = typetable_get(r.env.tt, inner.typeId);
+    if (t.category != TYPECATEGORY_ARRAY) { r.err = 1; return InferResult{r, -1}; }
+    r = ctx_set_type(r, idx, 5); // int id
+    return InferResult{r, 5};
+  }
+
+  if (k == NODE_INDEX) {
+    var arr = infer_expr(r, n.a);
+    r = arr.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var idxRes = infer_expr(r, n.b);
+    r = idxRes.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (arr.typeId == -1 || idxRes.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+    var arrType = typetable_get(r.env.tt, arr.typeId);
+    var elem = -1;
+    if (arrType.category == TYPECATEGORY_ARRAY) { elem = arrType.element; }
+    else if (arrType.category == TYPECATEGORY_POINTER) { elem = arr.typeId; }
+    if (elem == -1) { r.err = 1; return InferResult{r, -1}; }
+    var idxType = typetable_get(r.env.tt, idxRes.typeId).category;
+    if (idxType != TYPECATEGORY_INT && idxType != TYPECATEGORY_BYTE) { r.err = 1; return InferResult{r, -1}; }
+    r = ctx_set_type(r, idx, elem);
+    return InferResult{r, elem};
+  }
+
+  if (k == NODE_DEREF) {
+    var operand2 = infer_expr(r, n.a);
+    r = operand2.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (operand2.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+    var tptr = typetable_get(r.env.tt, operand2.typeId);
+    if (tptr.category != TYPECATEGORY_POINTER) { r.err = 1; return InferResult{r, -1}; }
+    r = ctx_set_type(r, idx, tptr.element);
+    return InferResult{r, tptr.element};
+  }
+
+  if (k == NODE_CALL) {
+    // infer callee (for validation) and arguments
+    var calleeRes = infer_expr(r, n.a);
+    r = calleeRes.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var calleeNode = nodearena_get(r.arena, n.a);
+    if (calleeNode.kind != NODE_VARIABLE) { r.err = 1; return InferResult{r, -1}; }
+    var name = tok_str(r.tokens, calleeNode.a, r.src);
+    var fi = find_fn_index_by_name_arity(r.tm, r.arena, r.tokens, r.src, name, n.c);
+    if (fi == -1) { r.err = 1; return InferResult{r, -1}; }
+    var expectedCount = tm_fn_param_count(r.tm, fi);
+    if (expectedCount != -1 && expectedCount != n.c) { r.err = 1; return InferResult{r, -1}; }
+    var head = n.b;
+    var argIdx = 0;
+    while (head != -1 && r.err == 0) {
+      var argNode = nodearena_get(r.arena, head);
+      var argRes = infer_expr(r, argNode.a);
+      r = argRes.ctx;
+      if (r.err == 1) { break; }
+      if (argRes.typeId == -1) { r.err = 1; break; }
+      var expectedType = tm_fn_param_type(r.tm, fi, argIdx);
+      if (expectedType != -1 && argRes.typeId != -1) {
+        if (type_can_coerce(r.env.tt, argRes.typeId, expectedType) == 0 && type_can_cast(r.env.tt, argRes.typeId, expectedType) == 0) {
+          r.err = 1; break;
+        }
+      }
+      head = argNode.b;
+      argIdx = argIdx + 1;
+    }
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var retId = tm_fn_return_type(r.tm, fi);
+    r = ctx_set_type(r, idx, retId);
+    return InferResult{r, retId};
+  }
+
+  if (k == NODE_ASSIGN) {
+    if (n.c == 0) { return InferResult{r, -1}; }
+    var lhs = infer_expr(r, n.a);
+    r = lhs.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    var rhs = infer_expr(r, n.b);
+    r = rhs.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (lhs.typeId == -1 || rhs.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+    if (lhs.typeId != -1 && rhs.typeId != -1) {
+      if (type_can_coerce(r.env.tt, rhs.typeId, lhs.typeId) == 0) {
+        r.err = 1; return InferResult{r, -1};
+      }
+    }
+    r = ctx_set_type(r, idx, lhs.typeId);
+    return InferResult{r, lhs.typeId};
+  }
+
+  // For list/dot/others, leave type unset but do not hard fail unless already errored.
+  return InferResult{r, -1};
+}
+
 // Collect ranges covered by a referenced block (inclusive of the block node index).
 // Resolve an expression tree; sets ctx.err on failure.
 def resolve_expr(ctx ResolveCtx, idx int) ResolveCtx {
-  var r = ctx;
-  if (idx == -1) { return r; }
-  var n = nodearena_get(r.arena, idx);
-  var k = n.kind;
-  if (k == NODE_LITERAL) { return r; }
-  if (k == NODE_VARIABLE) {
-    var name = tok_str(r.tokens, n.a, r.src);
-    var found = scope_lookup_index_any(r.scope, name);
-    if (found == -1) { r.err = 1; return r; }
-    return r;
-  }
-  if (k == NODE_GROUP || k == NODE_LEN || k == NODE_DEREF) {
-    return resolve_expr(r, n.a);
-  }
-  if (k == NODE_UNARY || k == NODE_UPDATE) {
-    return resolve_expr(r, n.b);
-  }
-  if (k == NODE_BINARY || k == NODE_LOGICAL) {
-    r = resolve_expr(r, n.a);
-    if (r.err == 1) { return r; }
-    return resolve_expr(r, n.b);
-  }
-  if (k == NODE_TERNARY) {
-    r = resolve_expr(r, n.a);
-    if (r.err == 1) { return r; }
-    r = resolve_expr(r, n.b);
-    if (r.err == 1) { return r; }
-    return resolve_expr(r, n.c);
-  }
-  if (k == NODE_CALL) {
-    // resolve callee and args
-    r = resolve_expr(r, n.a);
-    if (r.err == 1) { return r; }
-    var calleeNode = nodearena_get(r.arena, n.a);
-    if (calleeNode.kind == NODE_VARIABLE) {
-      var name = tok_str(r.tokens, calleeNode.a, r.src);
-      var info = scope_lookup_info(r.scope, name);
-      if (info.kind == SYMKIND_FUNCTION || info.kind == SYMKIND_FUNCTION_OVERLOAD) {
-        var argc = n.c;
-        var ok = 0;
-        if (info.arityA == -1 && info.arityB == -1) { ok = 1; }
-        if (info.arityA == argc) { ok = 1; }
-        if (info.arityB == argc) { ok = 1; }
-        if (ok == 0) { r.err = 1; return r; }
-      } else if (info.kind == 0) {
-        r.err = 1;
-        return r;
-      }
-    }
-    var head = n.b;
-    while (head != -1 && r.err == 0) {
-      var argNode = nodearena_get(r.arena, head);
-      r = resolve_expr(r, argNode.a);
-      head = argNode.b;
-    }
-    return r;
-  }
-  if (k == NODE_INDEX) {
-    r = resolve_expr(r, n.a);
-    if (r.err == 1) { return r; }
-    return resolve_expr(r, n.b);
-  }
-  if (k == NODE_DOT) {
-    return resolve_expr(r, n.a);
-  }
-  if (k == NODE_LIST) {
-    r = resolve_expr(r, n.a);
-    if (r.err == 1) { return r; }
-    if (n.b != -1) { r = resolve_expr(r, n.b); }
-    return r;
-  }
-  if (k == NODE_ASSIGN) {
-    if (n.c != 0) {
-      // expression assignment: lhs is an expression node
-      r = resolve_expr(r, n.a);
-      if (r.err == 1) { return r; }
-      return resolve_expr(r, n.b);
-    }
-    // statement assignment: lhs is a token
-    var nameTok = n.a;
-    var name = tok_str(r.tokens, nameTok, r.src);
-    var foundIdx = scope_lookup_index_any(r.scope, name);
-    if (foundIdx == -1) { r.err = 1; return r; }
-    return resolve_expr(r, n.b);
-  }
-  return r;
+  var res = infer_expr(ctx, idx);
+  return res.ctx;
 }
 
 def is_statement_kind(k int) int {
@@ -358,34 +526,94 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
   var k = n.kind;
   if (k == NODE_VAR_STMT) {
     var name = tok_str(r.tokens, n.a, r.src);
-    var vtype = tm_var_type_by_node(r.tm, stmtIdx);
-    var res = scope_define_var(r.scope, name, vtype);
+    var initRes = infer_expr(r, n.b);
+    r = initRes.ctx;
+    if (r.err == 1) { return r; }
+    if (initRes.typeId == -1) { r.err = 1; return r; }
+    var declared = tm_var_type_by_node(r.tm, stmtIdx);
+    var finalType = declared;
+    if (finalType == -1) { finalType = initRes.typeId; }
+    if (finalType != -1 && initRes.typeId != -1) {
+      if (type_can_coerce(r.env.tt, initRes.typeId, finalType) == 0) {
+        r.err = 1; return r;
+      }
+    }
+    var res = scope_define_var(r.scope, name, finalType);
     if (res.err != 0) { r.err = 1; return r; }
     r.scope = res.scope;
-    r = resolve_expr(r, n.b);
+    r.arena = nodearena_set_type(r.arena, stmtIdx, finalType);
     return r;
   }
   if (k == NODE_ASSIGN) {
     var name = tok_str(r.tokens, n.a, r.src);
     var found = scope_lookup_index_any(r.scope, name);
     if (found == -1) { r.err = 1; return r; }
-    r = resolve_expr(r, n.b);
+    var rhs = infer_expr(r, n.b);
+    r = rhs.ctx;
+    if (r.err == 1) { return r; }
+    if (rhs.typeId == -1) { r.err = 1; return r; }
+    var info = scope_get_info(r.scope, found);
+    var targetType = info.typeId;
+    if (targetType == -1) {
+      targetType = rhs.typeId;
+      r.scope = scope_set_type_at(r.scope, found, targetType);
+    }
+    if (targetType != -1 && rhs.typeId != -1) {
+      if (type_can_coerce(r.env.tt, rhs.typeId, targetType) == 0) {
+        r.err = 1; return r;
+      }
+    }
+    r.arena = nodearena_set_type(r.arena, stmtIdx, targetType);
     return r;
   }
   if (k == NODE_RETURN) {
-    if (r.currentRetType != -1 && r.currentRetType != 8 && n.a == -1) {
-      r.err = 1; return r;
+    if (r.currentRetType != -1 && r.currentRetType != 8 && n.a == -1) { r.err = 1; return r; }
+    if (n.a != -1) {
+      var rv = infer_expr(r, n.a);
+      r = rv.ctx;
+      if (r.err == 1) { return r; }
+      if (rv.typeId == -1) { r.err = 1; return r; }
+      if (r.currentRetType != -1 && r.currentRetType != 8 && rv.typeId != -1) {
+        if (type_can_coerce(r.env.tt, rv.typeId, r.currentRetType) == 0) {
+          r.err = 1; return r;
+        }
+      }
+    } else {
+      if (r.currentRetType != -1 && r.currentRetType != 8) { r.err = 1; return r; }
     }
     r.hasReturn = 1;
-    if (n.a != -1) { r = resolve_expr(r, n.a); }
+    r.arena = nodearena_set_type(r.arena, stmtIdx, r.currentRetType);
     return r;
   }
-  if (k == NODE_PRINT || k == NODE_EXPR_STMT) { r = resolve_expr(r, n.a); return r; }
-  if (k == NODE_BREAK) { if (loopDepth <= 0) { r.err = 1; return r; } r = resolve_expr(r, n.a); return r; }
-  if (k == NODE_CONTINUE) { if (loopDepth <= 0) { r.err = 1; return r; } r = resolve_expr(r, n.a); return r; }
+  if (k == NODE_PRINT || k == NODE_EXPR_STMT) {
+    var e = infer_expr(r, n.a);
+    r = e.ctx;
+    return r;
+  }
+  if (k == NODE_BREAK) {
+    if (loopDepth <= 0) { r.err = 1; return r; }
+    if (n.a != -1) {
+      var be = infer_expr(r, n.a);
+      r = be.ctx;
+    }
+    return r;
+  }
+  if (k == NODE_CONTINUE) {
+    if (loopDepth <= 0) { r.err = 1; return r; }
+    if (n.a != -1) {
+      var ce = infer_expr(r, n.a);
+      r = ce.ctx;
+    }
+    return r;
+  }
   if (k == NODE_IF) {
-    r = resolve_expr(r, n.a);
+    var cond = infer_expr(r, n.a);
+    r = cond.ctx;
     if (r.err == 1) { return r; }
+    if (cond.typeId != -1) {
+      var cat = typetable_get(r.env.tt, cond.typeId).category;
+      if (cat != TYPECATEGORY_BOOL && type_is_numeric(r.env.tt, cond.typeId) == 0) { r.err = 1; return r; }
+    }
     if (n.b != -1) {
       var thenNode = nodearena_get(r.arena, n.b);
       if (thenNode.kind == NODE_BLOCK) { r = resolve_block_nodes(r, n.b, loopDepth); }
@@ -400,7 +628,8 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
     return r;
   }
   if (k == NODE_WHILE) {
-    r = resolve_expr(r, n.a);
+    var cond2 = infer_expr(r, n.a);
+    r = cond2.ctx;
     if (r.err == 1) { return r; }
     if (n.b != -1) {
       var body = nodearena_get(r.arena, n.b);
@@ -412,7 +641,7 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
   if (k == NODE_FOR) {
     if (n.a != -1) { r = resolve_expr(r, n.a); }
     if (r.err == 1) { return r; }
-    if (n.b != -1) { r = resolve_expr(r, n.b); }
+    if (n.b != -1) { var cond3 = infer_expr(r, n.b); r = cond3.ctx; }
     if (r.err == 1) { return r; }
     if (n.c != -1) { r = resolve_expr(r, n.c); }
     if (r.err == 1) { return r; }
@@ -503,7 +732,7 @@ def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
   var bodyIdx = fn.a;
   var retType = -1;
   if (fi != -1) { retType = tm_fn_return_type(r.tm, fi); }
-  var fnCtx = ResolveCtx{r.arena, r.tokens, r.src, fnScope, r.types, r.tm, fi, retType, 0, 0};
+  var fnCtx = ResolveCtx{r.arena, r.tokens, r.src, fnScope, r.env, r.tm, fi, retType, 0, 0};
   if (bodyIdx != -1) {
     fnCtx = resolve_block_nodes(fnCtx, bodyIdx, 0);
   }
@@ -545,7 +774,7 @@ def resolve_module_ast(src byte~, n int) int {
   }
 
   var scope = scope_new_root();
-  var types = tm.env.tt;
+  var env = tm.env;
 
   // First pass: define globals (vars, structs, functions) outside function bodies.
   i = 0;
@@ -580,18 +809,49 @@ def resolve_module_ast(src byte~, n int) int {
     i = i + 1;
   }
   // Resolve global initializers (outside function bodies).
-  var ctx = ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, types, tm, -1, -1, 0, 0};
+  var ctx = ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 0, 0};
   i = 0;
   while (i < pmr.arena.nodes.length && ctx.err == 0) {
     if (range_contains(fnStarts, fnEnds, i) == 1) { i = i + 1; continue; }
     var n1 = nodearena_get(pmr.arena, i);
     if (n1.kind == NODE_VAR_STMT) {
-      ctx = resolve_expr(ctx, n1.b);
+      var init = infer_expr(ctx, n1.b);
+      ctx = init.ctx;
+      if (ctx.err == 1) { i = i + 1; continue; }
+      if (init.typeId == -1) { ctx.err = 1; i = i + 1; continue; }
+      var gi = vecint_find(pmr.meta.varNodeIndex, i);
+      var declType = -1;
+      if (gi != -1 && gi < tm.varTypeIds.length) { declType = vecint_get(tm.varTypeIds, gi); }
+      var finalTypeG = declType;
+      if (finalTypeG == -1) { finalTypeG = init.typeId; }
+      if (finalTypeG != -1 && init.typeId != -1) {
+        if (type_can_coerce(ctx.env.tt, init.typeId, finalTypeG) == 0) {
+          ctx.err = 1; i = i + 1; continue;
+        }
+      }
+      // update scope entry
+      var nameG = tok_str(pmr.tokens, n1.a, pmr.src);
+      var symIdx = scope_lookup_index_any(ctx.scope, nameG);
+      if (symIdx != -1) {
+        ctx.scope = scope_set_type_at(ctx.scope, symIdx, finalTypeG);
+      }
+      ctx.arena = nodearena_set_type(ctx.arena, i, finalTypeG);
     } else if (n1.kind == NODE_ASSIGN) {
       var nameA = tok_str(pmr.tokens, n1.a, pmr.src);
       var idxFound = scope_lookup_index_any(ctx.scope, nameA);
-      if (idxFound == -1) { ctx.err = 1; }
-      ctx = resolve_expr(ctx, n1.b);
+      if (idxFound == -1) { ctx.err = 1; i = i + 1; continue; }
+      var rhs = infer_expr(ctx, n1.b);
+      ctx = rhs.ctx;
+      if (ctx.err == 1) { i = i + 1; continue; }
+      if (rhs.typeId == -1) { ctx.err = 1; i = i + 1; continue; }
+      var infoG = scope_get_info(ctx.scope, idxFound);
+      var target = infoG.typeId;
+      if (target == -1) { target = rhs.typeId; ctx.scope = scope_set_type_at(ctx.scope, idxFound, target); }
+      if (target != -1 && rhs.typeId != -1) {
+        if (type_can_coerce(ctx.env.tt, rhs.typeId, target) == 0) {
+          ctx.err = 1;
+        }
+      }
     }
     i = i + 1;
   }

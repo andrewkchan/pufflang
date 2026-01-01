@@ -142,6 +142,14 @@ def nodearena_get(arena NodeArena, idx int) Node {
   return Node{k, a, b, c, d, v, t};
 }
 
+// Mutate the typeId of a node in-place; returns updated arena.
+def nodearena_set_type(arena NodeArena, idx int, typeId int) NodeArena {
+  if (idx < 0 || idx >= arena.nodes.length) { return arena; }
+  var ptr = vec_get_ptr(arena.nodes, idx);
+  (int~(ptr + 24))~ = typeId;
+  return arena;
+}
+
 // ---- Node kinds (subset; expand as parser grows) ----
 var NODE_LITERAL int = 1;
 var NODE_VARIABLE int = 2;
@@ -377,6 +385,13 @@ def scope_struct_type(s Scope, name String) int {
   var kind = vecint_get(s.kinds, idx);
   if (kind != SYMKIND_STRUCT) { return -1; }
   return vecint_get(s.typeIds, idx);
+}
+
+// Update the typeId for an existing symbol index; returns updated scope.
+def scope_set_type_at(s Scope, idx int, typeId int) Scope {
+  if (idx < 0 || idx >= s.typeIds.length) { return s; }
+  vecint_set(s.typeIds, idx, typeId);
+  return s;
 }
 
 // ---- Mangling helper (arity-based) ----

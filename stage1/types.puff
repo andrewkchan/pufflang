@@ -74,6 +74,7 @@ def type_is_numeric(tt TypeTable, id int) int {
   if (t.category == TYPECATEGORY_INT) { return 1; }
   if (t.category == TYPECATEGORY_FLOAT) { return 1; }
   if (t.category == TYPECATEGORY_BYTE) { return 1; }
+  if (t.category == TYPECATEGORY_BOOL) { return 1; }
   return 0;
 }
 
@@ -150,6 +151,7 @@ def type_can_coerce(tt TypeTable, from int, to int) int {
   }
   if (tf.category == TYPECATEGORY_BOOL) {
     if (ttgt.category == TYPECATEGORY_BOOL) { return 1; }
+    if (ttgt.category == TYPECATEGORY_INT) { return 1; }
     return 0;
   }
   if (tf.category == TYPECATEGORY_POINTER && ttgt.category == TYPECATEGORY_POINTER) {

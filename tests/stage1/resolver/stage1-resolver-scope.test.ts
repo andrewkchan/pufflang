@@ -7,6 +7,8 @@ const astSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", 
 const typesSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "types.puff"), "utf8")
 const structLayoutSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "structlayout.puff"), "utf8")
 const typeEnvSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "typeenv.puff"), "utf8")
+const typerulesSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "typerules.puff"), "utf8")
+const literalTypesSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "literaltypes.puff"), "utf8")
 const parserExprSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "parser_expr.puff"), "utf8")
 const typeparseSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "typeparse.puff"), "utf8")
 const parserFullSrc = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "parser_full.puff"), "utf8")
@@ -26,6 +28,8 @@ function stage1Prelude() {
   ${scannerSrc}
   ${structLayoutSrc}
   ${typeEnvSrc}
+  ${typerulesSrc}
+  ${literalTypesSrc}
   ${parserExprSrc}
   ${typeparseSrc}
   ${parserFullSrc}

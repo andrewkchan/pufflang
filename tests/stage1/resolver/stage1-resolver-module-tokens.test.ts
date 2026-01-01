@@ -7,6 +7,8 @@ function runResolver(src: string): { status: number; stdout: string } {
   const types = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "types.puff"), "utf8")
   const structLayout = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "structlayout.puff"), "utf8")
   const typeEnv = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "typeenv.puff"), "utf8")
+  const typerules = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "typerules.puff"), "utf8")
+  const literalTypes = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "literaltypes.puff"), "utf8")
   const scanner = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "scanner.puff"), "utf8")
   const parserExpr = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "parser_expr.puff"), "utf8")
   const typeparse = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "typeparse.puff"), "utf8")
@@ -24,6 +26,8 @@ ${stripAstTypeSection(ast)}
 ${scanner}
 ${structLayout}
 ${typeEnv}
+${typerules}
+${literalTypes}
 ${parserExpr}
 ${typeparse}
 ${parserFull}

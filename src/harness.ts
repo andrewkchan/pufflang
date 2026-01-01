@@ -12,6 +12,8 @@ const stage1TypesPath = path.join(__dirname, "..", "stage1", "types.puff")
 const stage1StructLayoutPath = path.join(__dirname, "..", "stage1", "structlayout.puff")
 const stage1TypeEnvPath = path.join(__dirname, "..", "stage1", "typeenv.puff")
 const stage1TypeparsePath = path.join(__dirname, "..", "stage1", "typeparse.puff")
+const stage1TyperulesPath = path.join(__dirname, "..", "stage1", "typerules.puff")
+const stage1LiteralTypesPath = path.join(__dirname, "..", "stage1", "literaltypes.puff")
 const stage1ParserExprPath = path.join(__dirname, "..", "stage1", "parser_expr.puff")
 const stage1ParserFullPath = path.join(__dirname, "..", "stage1", "parser_full.puff")
 const stage1CodegenPath = path.join(__dirname, "..", "stage1", "codegen.puff")
@@ -22,6 +24,8 @@ let cachedStage1Types: string | null = null
 let cachedStage1StructLayout: string | null = null
 let cachedStage1TypeEnv: string | null = null
 let cachedStage1Typeparse: string | null = null
+let cachedStage1Typerules: string | null = null
+let cachedStage1LiteralTypes: string | null = null
 let cachedStage1ParserExpr: string | null = null
 let cachedStage1ParserFull: string | null = null
 let cachedStage1Codegen: string | null = null
@@ -68,6 +72,18 @@ function loadStage1TypeEnv(): string {
   if (cachedStage1TypeEnv !== null) return cachedStage1TypeEnv
   cachedStage1TypeEnv = fs.readFileSync(stage1TypeEnvPath, "utf8")
   return cachedStage1TypeEnv
+}
+
+function loadStage1Typerules(): string {
+  if (cachedStage1Typerules !== null) return cachedStage1Typerules
+  cachedStage1Typerules = fs.readFileSync(stage1TyperulesPath, "utf8")
+  return cachedStage1Typerules
+}
+
+function loadStage1LiteralTypes(): string {
+  if (cachedStage1LiteralTypes !== null) return cachedStage1LiteralTypes
+  cachedStage1LiteralTypes = fs.readFileSync(stage1LiteralTypesPath, "utf8")
+  return cachedStage1LiteralTypes
 }
 
 function loadStage1Typeparse(): string {
@@ -390,6 +406,8 @@ ${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
 ${loadStage1StructLayout()}
 ${loadStage1TypeEnv()}
+${loadStage1Typerules()}
+${loadStage1LiteralTypes()}
 ${loadStage1ParserExpr()}
 ${loadStage1Typeparse()}
 ${loadStage1ParserFull()}
@@ -434,6 +452,8 @@ ${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
 ${loadStage1StructLayout()}
 ${loadStage1TypeEnv()}
+${loadStage1Typerules()}
+${loadStage1LiteralTypes()}
 ${loadStage1ParserExpr()}
 ${loadStage1Typeparse()}
 ${loadStage1ParserFull()}
@@ -477,6 +497,8 @@ ${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
 ${loadStage1StructLayout()}
 ${loadStage1TypeEnv()}
+${loadStage1Typerules()}
+${loadStage1LiteralTypes()}
 ${loadStage1ParserExpr()}
 ${loadStage1Typeparse()}
 ${loadStage1ParserFull()}

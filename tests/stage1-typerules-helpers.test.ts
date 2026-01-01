@@ -74,6 +74,6 @@ describe("Stage1 type rules helpers", () => {
     const res = runRules()
     expect(res.status).toBe(0)
     expect(res.stderr).toBe("")
-    expect(res.stdout.trim()).toBe("5 4 9 9 -1 5 -1 1 1 1 -1 5 2 -1 5 2 -1 1 -1 1 5 -1 1 1 4 -1")
+    expect(res.stdout.trim()).toBe("5 4 9 9 -1 5 -1 1 1 1 -1 5 2 -1 5 2 -1 1 -1 1 5 1 1 1 4 -1")
   })
 })
