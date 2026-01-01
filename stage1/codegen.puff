@@ -388,6 +388,17 @@ def cg_expr(
     var tk = token_kind_at(pmr.tokens, n.a);
     if (tk == TOKEN_TRUE) { return ExprCodegenResult{String{pmr.src, 0}, String{byte~(&"1"[0]), 1}, String{byte~(&"i1"[0]), 2}, 0}; }
     if (tk == TOKEN_FALSE) { return ExprCodegenResult{String{pmr.src, 0}, String{byte~(&"0"[0]), 1}, String{byte~(&"i1"[0]), 2}, 0}; }
+    if (tk == TOKEN_SINGLE_QUOTE_STRING) {
+      var tlen = token_length_at(pmr.tokens, n.a);
+      if (tlen == 3) {
+        var start = token_start_at(pmr.tokens, n.a);
+        var ch = (pmr.src + start + 1)~;
+        var sbCh = sb_new();
+        sbCh = sb_append_int(sbCh, int(ch));
+        var lit = sb_to_string(sbCh);
+        return ExprCodegenResult{String{pmr.src, 0}, lit, String{byte~(&"i8"[0]), 2}, 0};
+      }
+    }
     if (tk == TOKEN_STRING) {
       var nameStr = cg_string_name(n.a);
       var tlen = token_length_at(pmr.tokens, n.a);
