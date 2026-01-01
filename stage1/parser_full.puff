@@ -327,6 +327,15 @@ def type_span_to_string(res ParseModuleResult, start int, lengthVal int) String 
   return parse_type_to_string(res.src + start, lengthVal);
 }
 
+def tm_vecint_find(v VecInt, target int) int {
+  var i = 0;
+  while (i < v.length) {
+    if (vecint_get(v, i) == target) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 struct ParseModuleResult { arena NodeArena, root int, err int, tokens Vec, src byte~, meta ModuleMeta }
 
 // Compare identifier tokens by lexeme equality (assumes both are identifiers).
@@ -982,6 +991,12 @@ def tm_fn_return_type(tm TypeModuleTypes, fnIdx int) int {
 def tm_var_type(tm TypeModuleTypes, varIdx int) int {
   if (varIdx < 0 || varIdx >= tm.varTypeIds.length) { return -1; }
   return vecint_get(tm.varTypeIds, varIdx);
+}
+
+def tm_var_type_by_node(tm TypeModuleTypes, nodeIdx int) int {
+  var vi = tm_vecint_find(tm.varNodeIndex, nodeIdx);
+  if (vi == -1) { return -1; }
+  return tm_var_type(tm, vi);
 }
 
 def tm_struct_type(tm TypeModuleTypes, structIdx int) int {

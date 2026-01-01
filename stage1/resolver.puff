@@ -358,7 +358,8 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
   var k = n.kind;
   if (k == NODE_VAR_STMT) {
     var name = tok_str(r.tokens, n.a, r.src);
-    var res = scope_define_var(r.scope, name, -1);
+    var vtype = tm_var_type_by_node(r.tm, stmtIdx);
+    var res = scope_define_var(r.scope, name, vtype);
     if (res.err != 0) { r.err = 1; return r; }
     r.scope = res.scope;
     r = resolve_expr(r, n.b);
