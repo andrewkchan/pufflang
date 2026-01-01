@@ -43,6 +43,42 @@ struct ParamTypesTokResult { env TypeEnv, ids VecInt, next int, err int }
 struct FnTypesResult { env TypeEnv, params VecInt, ret int, err int }
 struct FnTypesTokResult { env TypeEnv, params VecInt, ret int, next int, err int }
 
+// Convert a type id to a human-readable string (best-effort). Structs emit "(struct <id>)".
+def type_id_to_string(tt TypeTable, structSizes VecInt, id int) String {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_INT) { return String{byte~(&"int"[0]), 3}; }
+  if (t.category == TYPECATEGORY_FLOAT) { return String{byte~(&"float"[0]), 5}; }
+  if (t.category == TYPECATEGORY_BYTE) { return String{byte~(&"byte"[0]), 4}; }
+  if (t.category == TYPECATEGORY_BOOL) { return String{byte~(&"bool"[0]), 4}; }
+  if (t.category == TYPECATEGORY_VOID) { return String{byte~(&"void"[0]), 4}; }
+  if (t.category == TYPECATEGORY_POINTER) {
+    var inner = type_id_to_string(tt, structSizes, t.element);
+    var sb = sb_new();
+    sb = sb_append_cstr(sb, byte~(&"(ptr "[0]));
+    sb = sb_append_string(sb, inner);
+    sb = sb_append_byte(sb, byte(41));
+    return sb_to_string(sb);
+  }
+  if (t.category == TYPECATEGORY_ARRAY) {
+    var innerArr = type_id_to_string(tt, structSizes, t.element);
+    var sb2 = sb_new();
+    sb2 = sb_append_cstr(sb2, byte~(&"(array "[0]));
+    sb2 = sb_append_int(sb2, t.length);
+    sb2 = sb_append_byte(sb2, byte(32));
+    sb2 = sb_append_string(sb2, innerArr);
+    sb2 = sb_append_byte(sb2, byte(41));
+    return sb_to_string(sb2);
+  }
+  if (t.category == TYPECATEGORY_STRUCT) {
+    var sb3 = sb_new();
+    sb3 = sb_append_cstr(sb3, byte~(&"(struct "[0]));
+    sb3 = sb_append_int(sb3, t.structId);
+    sb3 = sb_append_byte(sb3, byte(41));
+    return sb_to_string(sb3);
+  }
+  return String{byte~(&"unknown"[0]), 7};
+}
+
 def wrap_ptr(inner String) String {
   var sb = sb_new();
   sb = sb_append_cstr(sb, byte~(&"(ptr "[0]));

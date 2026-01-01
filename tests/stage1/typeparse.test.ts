@@ -122,6 +122,11 @@ def main() {
   var fnBad = "(int)";
   var fnBadRes = parse_fn_types(env, byte~(&fnBad[0]), len(fnBad));
   print_int(fnBadRes.err); __putchar__(58); print_int(fnBadRes.ret); __putchar__(10);
+
+  // type id to string roundtrip (best-effort)
+  print_str(type_id_to_string(env.tt, env.structSizes, res0.typeId));
+  print_str(type_id_to_string(env.tt, env.structSizes, res1.typeId));
+  print_str(type_id_to_string(env.tt, env.structSizes, res2.typeId));
 }
 `
   return compileAndRunWithStdlib(body)
@@ -177,5 +182,12 @@ describe("Stage1 type parser", () => {
 
     const fnBadLine = lines[idStart + expectedIds.length + 3]
     expect(fnBadLine.trim()).toBe("0:8") // defaults to void
+
+    const roundtrip = lines.slice(idStart + expectedIds.length + 4, idStart + expectedIds.length + 7)
+    expect(roundtrip).toEqual([
+      "int",
+      "byte",
+      "(ptr int)"
+    ])
   })
 })
