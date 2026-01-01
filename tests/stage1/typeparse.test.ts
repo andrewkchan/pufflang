@@ -101,6 +101,12 @@ def main() {
   }
   print_int(pres.err);
   __putchar__(10);
+
+  // invalid param list (double comma)
+  var badSrc = "int, , byte";
+  var bad = parse_param_types(env, byte~(&badSrc[0]), len(badSrc));
+  print_int(bad.err);
+  __putchar__(10);
 }
 `
   return compileAndRunWithStdlib(body)
@@ -146,5 +152,8 @@ describe("Stage1 type parser", () => {
 
     const paramLine = lines[idStart + expectedIds.length]
     expect(paramLine.trim()).toMatch(/^5 5 [0-9]+ 4 0$/)
+
+    const badLine = lines[idStart + expectedIds.length + 1]
+    expect(badLine.trim()).toBe("1")
   })
 })
