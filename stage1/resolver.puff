@@ -215,7 +215,7 @@ def resolve_module_tokens(src byte~, n int) int {
 // AST-based resolver (parse_full + expression AST)
 // ------------------------------------------------------------
 
-struct ResolveCtx { arena NodeArena, tokens Vec, src byte~, scope Scope, types TypeTable, err int, hasReturn int }
+struct ResolveCtx { arena NodeArena, tokens Vec, src byte~, scope Scope, types TypeTable, tm TypeModuleTypes, err int, hasReturn int }
 
 def tok_str(tokens Vec, idx int, src byte~) String {
   if (idx < 0 || idx >= tokens.length) { return String{src, 0}; }
@@ -465,7 +465,7 @@ def resolve_block_nodes(ctx ResolveCtx, blockIdx int, loopDepth int) ResolveCtx 
 }
 
 // Resolve a function node: define params in a nested scope and resolve the body.
-def resolve_function(ctx ResolveCtx, fn Node) ResolveCtx {
+def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
   var r = ctx;
   var fnScope = scope_enter(r.scope);
   // parameters
@@ -476,7 +476,9 @@ def resolve_function(ctx ResolveCtx, fn Node) ResolveCtx {
     var k = token_kind_at(r.tokens, idx);
     if (k == TOKEN_IDENTIFIER) {
       var name = tok_str(r.tokens, idx, r.src);
-      var res = scope_define_var(fnScope, name, -1);
+      var paramType = -1;
+      if (fi != -1) { paramType = tm_fn_param_type(r.tm, fi, added); }
+      var res = scope_define_var(fnScope, name, paramType);
       if (res.err != 0) { r.err = 1; return r; }
       fnScope = res.scope;
       added = added + 1;
@@ -484,7 +486,7 @@ def resolve_function(ctx ResolveCtx, fn Node) ResolveCtx {
     idx = idx + 1;
   }
   var bodyIdx = fn.a;
-  var fnCtx = ResolveCtx{r.arena, r.tokens, r.src, fnScope, r.types, 0, 0};
+  var fnCtx = ResolveCtx{r.arena, r.tokens, r.src, fnScope, r.types, r.tm, 0, 0};
   if (bodyIdx != -1) {
     fnCtx = resolve_block_nodes(fnCtx, bodyIdx, 0);
   }
@@ -561,7 +563,7 @@ def resolve_module_ast(src byte~, n int) int {
     i = i + 1;
   }
   // Resolve global initializers (outside function bodies).
-  var ctx = ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, types, 0, 0};
+  var ctx = ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, types, tm, 0, 0};
   i = 0;
   while (i < pmr.arena.nodes.length && ctx.err == 0) {
     if (range_contains(fnStarts, fnEnds, i) == 1) { i = i + 1; continue; }
@@ -582,7 +584,8 @@ def resolve_module_ast(src byte~, n int) int {
   while (i < pmr.arena.nodes.length && ctx.err == 0) {
     var n2 = nodearena_get(pmr.arena, i);
     if (n2.kind == NODE_FUNCTION) {
-      ctx = resolve_function(ctx, n2);
+      var fi = vecint_find(tm.fnNodeIndex, i);
+      ctx = resolve_function(ctx, n2, fi);
     }
     i = i + 1;
   }

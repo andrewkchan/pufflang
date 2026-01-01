@@ -758,6 +758,10 @@ def module_summary(res ParseModuleResult) String {
 def module_type_summary(res ParseModuleResult) String {
   if (res.err != 0) { return String{byte~(&"err"[0]), 3}; }
   var sb = sb_new();
+  var fnIdxs = res.meta.fnNodeIndex;
+  var varIdxs = res.meta.varNodeIndex;
+  var structIdxs = res.meta.structNodeIndex;
+
   // functions
   var fi = 0;
   while (fi < res.meta.fnNodeIndex.length) {
@@ -851,6 +855,9 @@ struct TypeModuleTypes {
   structFieldCount VecInt,
   structFieldTypeIds VecInt,
   structTypeIds VecInt,
+  fnNodeIndex VecInt,
+  varNodeIndex VecInt,
+  structNodeIndex VecInt,
   err int
 }
 
@@ -866,6 +873,9 @@ def module_type_ids(res ParseModuleResult) TypeModuleTypes {
   var structFieldTypeStart = vecint_new(4);
   var structFieldCount = vecint_new(4);
   var err = 0;
+  var fnIdxs = res.meta.fnNodeIndex;
+  var varIdxs = res.meta.varNodeIndex;
+  var structIdxs = res.meta.structNodeIndex;
 
   // functions
   var fi = 0;
@@ -879,7 +889,7 @@ def module_type_ids(res ParseModuleResult) TypeModuleTypes {
       var tStart = vecint_get(res.meta.paramTypeStartByte, pStart + pj);
       var tLen = vecint_get(res.meta.paramTypeLen, pStart + pj);
       var tRes = parse_type_to_id(env, res.src + tStart, tLen);
-      if (tRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, err}; }
+      if (tRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, fnIdxs, varIdxs, structIdxs, err}; }
       env = tRes.env;
       paramTypeIds = vecint_push(paramTypeIds, tRes.typeId);
       pj = pj + 1;
@@ -889,7 +899,7 @@ def module_type_ids(res ParseModuleResult) TypeModuleTypes {
     var retId = 8; // default void
     if (rLen > 0) {
       var rRes = parse_type_to_id(env, res.src + rStart, rLen);
-      if (rRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, err}; }
+      if (rRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, fnIdxs, varIdxs, structIdxs, err}; }
       env = rRes.env;
       retId = rRes.typeId;
     }
@@ -906,7 +916,7 @@ def module_type_ids(res ParseModuleResult) TypeModuleTypes {
       varTypeIds = vecint_push(varTypeIds, -1);
     } else {
       var vtRes = parse_type_to_id(env, res.src + vtStart, vtLen);
-      if (vtRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, err}; }
+      if (vtRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, fnIdxs, varIdxs, structIdxs, err}; }
       env = vtRes.env;
       varTypeIds = vecint_push(varTypeIds, vtRes.typeId);
     }
@@ -926,14 +936,14 @@ def module_type_ids(res ParseModuleResult) TypeModuleTypes {
       var fs = vecint_get(res.meta.structFieldTypeStartByte, fStart + fj);
       var fl = vecint_get(res.meta.structFieldTypeLen, fStart + fj);
       var fRes = parse_type_to_id(env, res.src + fs, fl);
-      if (fRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, err}; }
+      if (fRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, fnIdxs, varIdxs, structIdxs, err}; }
       env = fRes.env;
       fieldTypes = vecint_push(fieldTypes, fRes.typeId);
       fj = fj + 1;
     }
     // define struct type to keep env aligned with structSizes; offsets ignored for now.
     var structRes = typeenv_define_struct(env, fieldTypes);
-    if (structRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, err}; }
+    if (structRes.err == 1) { err = 1; return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, fnIdxs, varIdxs, structIdxs, err}; }
     env = structRes.env;
     structTypeIds = vecint_push(structTypeIds, structRes.typeId);
     // append field types to flat vector
@@ -945,7 +955,14 @@ def module_type_ids(res ParseModuleResult) TypeModuleTypes {
     si = si + 1;
   }
 
-  return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, err};
+  return TypeModuleTypes{
+    env,
+    fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds,
+    varTypeIds,
+    structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds,
+    fnIdxs, varIdxs, structIdxs,
+    err
+  };
 }
 
 // Helpers to query ids with bounds checks (return -1 on invalid).
