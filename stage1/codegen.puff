@@ -1596,14 +1596,20 @@ def codegen_module(pmr ParseModuleResult, tm TypeModuleTypes) String {
     var gvIdx = vecint_get(pmr.meta.varNodeIndex, gi);
     var gvNode = nodearena_get(pmr.arena, gvIdx);
     var gname = tok_string(pmr.tokens, gvNode.a, pmr.src);
-    var gtid = vecint_get(tm.varTypeIds, gi);
-    var gty = cg_llvm_type(tm.env.tt, gtid);
-    if (gtid == -1) { gty = String{byte~(&"i32"[0]), 3}; }
     var initTok = -1;
     if (gvNode.b != -1) {
       var initNode = nodearena_get(pmr.arena, gvNode.b);
       if (initNode.kind == NODE_LITERAL) { initTok = initNode.a; }
     }
+    var gtid = vecint_get(tm.varTypeIds, gi);
+    if (gtid == -1 && initTok != -1) {
+      var tk0 = token_kind_at(pmr.tokens, initTok);
+      if (tk0 == TOKEN_TRUE || tk0 == TOKEN_FALSE) { gtid = 1; }
+      else if (tk0 == TOKEN_NUMBER) { gtid = 5; }
+      else if (tk0 == TOKEN_SINGLE_QUOTE_STRING) { gtid = 2; }
+    }
+    var gty = cg_llvm_type(tm.env.tt, gtid);
+    if (gtid == -1) { gty = String{byte~(&"i32"[0]), 3}; }
     var initStr = String{byte~(&"0"[0]), 1};
     if (initTok != -1) {
       var tk = token_kind_at(pmr.tokens, initTok);
@@ -1613,6 +1619,15 @@ def codegen_module(pmr ParseModuleResult, tm TypeModuleTypes) String {
         initStr = String{byte~(&"1"[0]), 1};
       } else if (tk == TOKEN_FALSE) {
         initStr = String{byte~(&"0"[0]), 1};
+      } else if (tk == TOKEN_SINGLE_QUOTE_STRING) {
+        var tlen = token_length_at(pmr.tokens, initTok);
+        if (tlen >= 3) {
+          var start = token_start_at(pmr.tokens, initTok);
+          var ch = (pmr.src + start + 1)~;
+          var sbCh = sb_new();
+          sbCh = sb_append_int(sbCh, int(ch));
+          initStr = sb_to_string(sbCh);
+        }
       }
     }
     sb = sb_append_byte(sb, byte(64)); // '@'
