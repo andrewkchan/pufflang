@@ -270,6 +270,24 @@ def find_fn_index_by_name_arity(tm TypeModuleTypes, arena NodeArena, tokens Vec,
   return -1;
 }
 
+def struct_index_for_type(tm TypeModuleTypes, typeId int) int {
+  return tm_struct_index_for_type(tm, typeId);
+}
+
+def struct_field_index_by_name(tm TypeModuleTypes, structIdx int, tokens Vec, src byte~, name String) int {
+  if (structIdx < 0 || structIdx >= tm.structFieldNameStart.length) { return -1; }
+  var start = vecint_get(tm.structFieldNameStart, structIdx);
+  var count = vecint_get(tm.structFieldCount, structIdx);
+  var i = 0;
+  while (i < count) {
+    var tokIdx = vecint_get(tm.structFieldNames, start + i);
+    var fname = tok_str(tokens, tokIdx, src);
+    if (str_eq(fname.data, fname.length, name.data, name.length) == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 // Type inference with scope + TypeEnv; annotates node.typeId and propagates env.
 def infer_expr(ctx ResolveCtx, idx int) InferResult {
   var r = ctx;
@@ -439,6 +457,27 @@ def infer_expr(ctx ResolveCtx, idx int) InferResult {
     if (tptr.category != TYPECATEGORY_POINTER) { r.err = 1; return InferResult{r, -1}; }
     r = ctx_set_type(r, idx, tptr.element);
     return InferResult{r, tptr.element};
+  }
+  if (k == NODE_DOT) {
+    var base = infer_expr(r, n.a);
+    r = base.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (base.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+    var baseType = typetable_get(r.env.tt, base.typeId);
+    var structTypeId = base.typeId;
+    if (baseType.category == TYPECATEGORY_POINTER) {
+      structTypeId = baseType.element;
+      baseType = typetable_get(r.env.tt, structTypeId);
+    }
+    if (baseType.category != TYPECATEGORY_STRUCT) { r.err = 1; return InferResult{r, -1}; }
+    var sIdx = struct_index_for_type(r.tm, structTypeId);
+    if (sIdx == -1) { r.err = 1; return InferResult{r, -1}; }
+    var fieldName = tok_str(r.tokens, n.b, r.src);
+    var fIdx = struct_field_index_by_name(r.tm, sIdx, r.tokens, r.src, fieldName);
+    if (fIdx == -1) { r.err = 1; return InferResult{r, -1}; }
+    var fType = tm_struct_field_type(r.tm, sIdx, fIdx);
+    r = ctx_set_type(r, idx, fType);
+    return InferResult{r, fType};
   }
 
   if (k == NODE_CALL) {

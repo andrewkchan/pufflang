@@ -1,16 +1,21 @@
 // Type environment helpers for Stage1: manage TypeTable and struct sizes.
 // Depends on types.puff and structlayout.puff.
 
-struct TypeEnv { tt TypeTable, structSizes VecInt }
+struct TypeEnv {
+  tt TypeTable,
+  structSizes VecInt,
+  structNames VecStr,
+  structTypeIds VecInt
+}
 struct TypeEnvStructResult { env TypeEnv, typeId int, offsets VecInt, size int, err int }
 
 def typeenv_new() TypeEnv {
-  return TypeEnv{typetable_new(), vecint_new(4)};
+  return TypeEnv{typetable_new(), vecint_new(4), vecstr_new(4), vecint_new(4)};
 }
 
 // Define a struct given its field type ids. Computes layout, records struct size,
 // and returns the struct type id plus offsets.
-def typeenv_define_struct(env TypeEnv, fieldTypes VecInt) TypeEnvStructResult {
+def typeenv_define_struct(env TypeEnv, fieldTypes VecInt, name String) TypeEnvStructResult {
   if (struct_validate_fields(env.tt, fieldTypes) == 0) {
     return TypeEnvStructResult{env, -1, vecint_new(0), -1, 1};
   }
@@ -18,6 +23,8 @@ def typeenv_define_struct(env TypeEnv, fieldTypes VecInt) TypeEnvStructResult {
   if (layout.err == 1) { return TypeEnvStructResult{env, -1, layout.offsets, -1, 1}; }
   var sizes = vecint_push(env.structSizes, layout.size);
   var tt2 = typetable_make_struct(env.tt, sizes.length - 1);
-  var outEnv = TypeEnv{tt2, sizes};
+  var names = vecstr_push(env.structNames, name);
+  var typeIds = vecint_push(env.structTypeIds, tt2.types.length - 1);
+  var outEnv = TypeEnv{tt2, sizes, names, typeIds};
   return TypeEnvStructResult{outEnv, tt2.types.length - 1, layout.offsets, layout.size, 0};
 }

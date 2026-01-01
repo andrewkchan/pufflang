@@ -27,7 +27,7 @@ def main() {
   var ptrInt = tt.types.length; tt = typetable_make_pointer(tt, idInt);
   var arrByte4 = tt.types.length; tt = typetable_make_array(tt, idByte, 4);
   // sync env.tt with new entries
-  env = TypeEnv{tt, env.structSizes};
+  env = TypeEnv{tt, env.structSizes, env.structNames, env.structTypeIds};
 
   var fields = vecint_new(4);
   fields = vecint_push(fields, idInt);     // 4 bytes
@@ -35,7 +35,8 @@ def main() {
   fields = vecint_push(fields, ptrInt);    // 4 bytes
   fields = vecint_push(fields, idByte);    // 1 byte
 
-  var res = typeenv_define_struct(env, fields);
+  var name0 = String{byte~(&"S"[0]), 1};
+  var res = typeenv_define_struct(env, fields, name0);
   env = res.env;
   print_int(res.err); __putchar__(32);          // 0
   print_int(res.typeId); __putchar__(32);       // struct type id
@@ -59,7 +60,7 @@ def main() {
   // invalid: void field
   var badFields = vecint_new(1);
   badFields = vecint_push(badFields, 8); // void
-  var res2 = typeenv_define_struct(env, badFields);
+  var res2 = typeenv_define_struct(env, badFields, name0);
   print_int(res2.err); __putchar__(32);
   print_int(res2.typeId); __putchar__(32);
   print_int(res2.size); __putchar__(10);

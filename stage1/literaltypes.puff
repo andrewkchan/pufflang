@@ -18,14 +18,14 @@ def literal_type(env TypeEnv, tokens Vec, tokIdx int, src byte~) LiteralTypeResu
     if (chLen < 0) { return LiteralTypeResult{env, -1, 1}; }
     var tt3 = typetable_make_array(env.tt, 2, chLen);
     var newId3 = tt3.types.length - 1;
-    return LiteralTypeResult{TypeEnv{tt3, env.structSizes}, newId3, 0};
+    return LiteralTypeResult{TypeEnv{tt3, env.structSizes, env.structNames, env.structTypeIds}, newId3, 0};
   }
   if (kind == TOKEN_STRING) {
     var strLen = token_length_at(tokens, tokIdx) - 2; // assumes no escapes
     if (strLen < 0) { return LiteralTypeResult{env, -1, 1}; }
     var tt2 = typetable_make_array(env.tt, 2, strLen);
     var newId = tt2.types.length - 1;
-    return LiteralTypeResult{TypeEnv{tt2, env.structSizes}, newId, 0};
+    return LiteralTypeResult{TypeEnv{tt2, env.structSizes, env.structNames, env.structTypeIds}, newId, 0};
   }
   return LiteralTypeResult{env, -1, 1};
 }
