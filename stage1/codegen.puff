@@ -336,6 +336,18 @@ def cg_find_fn_index(pmr ParseModuleResult, tm TypeModuleTypes, name String) int
   return -1;
 }
 
+def cg_find_global_index(pmr ParseModuleResult, name String) int {
+  var i = 0;
+  while (i < pmr.meta.varNodeIndex.length) {
+    var vi = vecint_get(pmr.meta.varNodeIndex, i);
+    var n = nodearena_get(pmr.arena, vi);
+    var gname = tok_string(pmr.tokens, n.a, pmr.src);
+    if (str_eq(gname.data, gname.length, name.data, name.length) == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 // Helper to find a name in VecStr (returns index or -1).
 def cg_find_name(v VecStr, name String) int {
   var i = 0;
@@ -456,7 +468,27 @@ def cg_expr(
       return ExprCodegenResult{sb_to_string(sbLd), tmpLd, lty, 0};
     }
     var idx = cg_match_param(paramNames, name);
-    if (idx == -1) { return ExprCodegenResult{String{pmr.src, 0}, name, String{pmr.src, 0}, 1}; }
+    if (idx == -1) {
+      var gi = cg_find_global_index(pmr, name);
+      if (gi != -1) {
+        var gtid = vecint_get(tm.varTypeIds, gi);
+        var gty = cg_llvm_type(tm.env.tt, gtid);
+        var tmpG = cg_fresh_tmp(tmp);
+        var sbG = sb_new();
+        sbG = sb_append_cstr(sbG, byte~(&"  "[0]));
+        sbG = sb_append_string(sbG, tmpG);
+        sbG = sb_append_cstr(sbG, byte~(&" = load "[0]));
+        sbG = sb_append_string(sbG, gty);
+        sbG = sb_append_cstr(sbG, byte~(&", "[0]));
+        sbG = sb_append_string(sbG, gty);
+        sbG = sb_append_cstr(sbG, byte~(&"* "[0]));
+        sbG = sb_append_byte(sbG, byte(64)); // '@'
+        sbG = sb_append_string(sbG, name);
+        sbG = sb_append_byte(sbG, byte(10));
+        return ExprCodegenResult{sb_to_string(sbG), tmpG, gty, 0};
+      }
+      return ExprCodegenResult{String{pmr.src, 0}, name, String{pmr.src, 0}, 1};
+    }
     var pty = String{byte~(&"i32"[0]), 3};
     if (idx < paramTypes.length) { pty = vecstr_get(paramTypes, idx); }
     var pslot = vecstr_get(paramSlots, idx);
@@ -1557,6 +1589,41 @@ def cg_function_decl(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int)
 // Module-level codegen entry.
 def codegen_module(pmr ParseModuleResult, tm TypeModuleTypes) String {
   var sb = sb_new();
+
+  // Emit globals with literal initializers (ints/bools/bytes).
+  var gi = 0;
+  while (gi < pmr.meta.varNodeIndex.length) {
+    var gvIdx = vecint_get(pmr.meta.varNodeIndex, gi);
+    var gvNode = nodearena_get(pmr.arena, gvIdx);
+    var gname = tok_string(pmr.tokens, gvNode.a, pmr.src);
+    var gtid = vecint_get(tm.varTypeIds, gi);
+    var gty = cg_llvm_type(tm.env.tt, gtid);
+    if (gtid == -1) { gty = String{byte~(&"i32"[0]), 3}; }
+    var initTok = -1;
+    if (gvNode.b != -1) {
+      var initNode = nodearena_get(pmr.arena, gvNode.b);
+      if (initNode.kind == NODE_LITERAL) { initTok = initNode.a; }
+    }
+    var initStr = String{byte~(&"0"[0]), 1};
+    if (initTok != -1) {
+      var tk = token_kind_at(pmr.tokens, initTok);
+      if (tk == TOKEN_NUMBER) {
+        initStr = tok_string(pmr.tokens, initTok, pmr.src);
+      } else if (tk == TOKEN_TRUE) {
+        initStr = String{byte~(&"1"[0]), 1};
+      } else if (tk == TOKEN_FALSE) {
+        initStr = String{byte~(&"0"[0]), 1};
+      }
+    }
+    sb = sb_append_byte(sb, byte(64)); // '@'
+    sb = sb_append_string(sb, gname);
+    sb = sb_append_cstr(sb, byte~(&" = global "[0]));
+    sb = sb_append_string(sb, gty);
+    sb = sb_append_byte(sb, byte(32));
+    sb = sb_append_string(sb, initStr);
+    sb = sb_append_byte(sb, byte(10));
+    gi = gi + 1;
+  }
 
   // Emit imported function declarations first.
   var fi = 0;
