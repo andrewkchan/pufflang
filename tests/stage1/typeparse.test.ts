@@ -133,6 +133,10 @@ def main() {
     p = p + 1;
   }
   print_int(fnRes.ret); __putchar__(32); print_int(fnRes.err); __putchar__(10);
+
+  var fnBad = "(int)";
+  var fnBadRes = parse_fn_types(env, byte~(&fnBad[0]), len(fnBad));
+  print_int(fnBadRes.err); __putchar__(58); print_int(fnBadRes.ret); __putchar__(10);
 }
 `
   return compileAndRunWithStdlib(body)
@@ -189,5 +193,8 @@ describe("Stage1 type parser", () => {
     const fnLine = lines[idStart + expectedIds.length + 3]
     // params int + byte, ret float, err 0
     expect(fnLine.trim()).toMatch(/^5 [0-9]+ 4 0$/)
+
+    const fnBadLine = lines[idStart + expectedIds.length + 4]
+    expect(fnBadLine.trim()).toBe("1:-1")
   })
 })
