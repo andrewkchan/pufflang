@@ -407,11 +407,14 @@ def cg_expr(
       var sbStr = sb_new();
       sbStr = sb_append_cstr(sbStr, byte~(&"  "[0]));
       sbStr = sb_append_string(sbStr, tmpStr);
-      sbStr = sb_append_cstr(sbStr, byte~(&" = getelementptr inbounds ["[0]));
+      sbStr = sb_append_cstr(sbStr, byte~(&" = getelementptr inbounds "[0]));
+      sbStr = sb_append_byte(sbStr, byte(91)); // '['
       sbStr = sb_append_int(sbStr, clen + 1);
-      sbStr = sb_append_cstr(sbStr, byte~(&" x i8, "[0]));
+      sbStr = sb_append_cstr(sbStr, byte~(&" x i8]"[0]));
+      sbStr = sb_append_cstr(sbStr, byte~(&", "[0]));
+      sbStr = sb_append_byte(sbStr, byte(91)); // '['
       sbStr = sb_append_int(sbStr, clen + 1);
-      sbStr = sb_append_cstr(sbStr, byte~(&" x i8* "[0]));
+      sbStr = sb_append_cstr(sbStr, byte~(&" x i8]* "[0]));
       sbStr = sb_append_byte(sbStr, byte(64)); // '@'
       sbStr = sb_append_string(sbStr, nameStr);
       sbStr = sb_append_cstr(sbStr, byte~(&", i32 0, i32 0"[0]));
@@ -1714,9 +1717,12 @@ def codegen_module(pmr ParseModuleResult, tm TypeModuleTypes) String {
         var tlenG = token_length_at(pmr.tokens, initTok);
         var clenG = tlenG - 2;
         var sbInit = sb_new();
-        sbInit = sb_append_cstr(sbInit, byte~(&"getelementptr inbounds ["[0]));
+        sbInit = sb_append_cstr(sbInit, byte~(&"getelementptr inbounds "[0]));
+        sbInit = sb_append_byte(sbInit, byte(91)); // '['
         sbInit = sb_append_int(sbInit, clenG + 1);
-        sbInit = sb_append_cstr(sbInit, byte~(&" x i8, ["[0]));
+        sbInit = sb_append_cstr(sbInit, byte~(&" x i8]"[0]));
+        sbInit = sb_append_cstr(sbInit, byte~(&", "[0]));
+        sbInit = sb_append_byte(sbInit, byte(91)); // '['
         sbInit = sb_append_int(sbInit, clenG + 1);
         sbInit = sb_append_cstr(sbInit, byte~(&" x i8]* "[0]));
         sbInit = sb_append_byte(sbInit, byte(64)); // '@'

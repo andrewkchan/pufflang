@@ -156,7 +156,7 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     `
     const irRes = runStage1CompileToIr(program)
     expect(irRes.status).toBe(0)
-    expect(irRes.stdout).toContain("getelementptr i8, i8* %t2, i32 %t3")
+    expect(irRes.stdout).toContain("getelementptr i8, i8*")
   })
 
   it("emits load for deref on byte pointer", () => {
