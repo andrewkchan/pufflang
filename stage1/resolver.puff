@@ -372,8 +372,11 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
     return r;
   }
   if (k == NODE_RETURN) {
+    if (r.currentRetType != -1 && r.currentRetType != 8 && n.a == -1) {
+      r.err = 1; return r;
+    }
     r.hasReturn = 1;
-    r = resolve_expr(r, n.a);
+    if (n.a != -1) { r = resolve_expr(r, n.a); }
     return r;
   }
   if (k == NODE_PRINT || k == NODE_EXPR_STMT) { r = resolve_expr(r, n.a); return r; }
