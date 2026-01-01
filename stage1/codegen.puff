@@ -264,8 +264,125 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     var lVal = left.value;
     var rVal = right.value;
     var opTok = cg_tok_string(pmr.tokens, pmr.src, n.c);
-    // Pointer ops unsupported beyond deref/index; bail if either side is pointer.
+    // Pointer-aware ops
     if (cg_is_pointer_type(lTy) == 1 || cg_is_pointer_type(rTy) == 1) {
+      // pointer + int or int + pointer
+      if (opTok.length == 1 && (opTok.data)~ == byte(43)) { // '+'
+        var ptrVal = lVal;
+        var idxVal = rVal;
+        var ptrTy = lTy;
+        var extra = String{pmr.src, 0};
+        if (cg_is_pointer_type(lTy) == 0 && cg_is_pointer_type(rTy) == 1) {
+          ptrVal = rVal;
+          idxVal = lVal;
+          ptrTy = rTy;
+        } else if (cg_is_pointer_type(lTy) == 1 && cg_is_pointer_type(rTy) == 0) {
+          // use as-is
+        } else {
+          return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
+        }
+        var sbp = sb_new();
+        sbp = sb_append_string(sbp, lInstr);
+        sbp = sb_append_string(sbp, rInstr);
+        var tmpGep = cg_fresh_tmp(tmp);
+        sbp = sb_append_cstr(sbp, byte~(&"  "[0]));
+        sbp = sb_append_string(sbp, tmpGep);
+        sbp = sb_append_cstr(sbp, byte~(&" = getelementptr i8, i8* "[0]));
+        sbp = sb_append_string(sbp, ptrVal);
+        sbp = sb_append_cstr(sbp, byte~(&", i32 "[0]));
+        sbp = sb_append_string(sbp, idxVal);
+        sbp = sb_append_byte(sbp, byte(10));
+        return ExprCodegenResult{sb_to_string(sbp), tmpGep, ptrTy, 0};
+      }
+      // pointer - int
+      if (opTok.length == 1 && (opTok.data)~ == byte(45) && cg_is_pointer_type(lTy) == 1 && cg_is_pointer_type(rTy) == 0) { // '-'
+        var sbm = sb_new();
+        sbm = sb_append_string(sbm, lInstr);
+        sbm = sb_append_string(sbm, rInstr);
+        var negIdx = cg_fresh_tmp(tmp);
+        sbm = sb_append_cstr(sbm, byte~(&"  "[0]));
+        sbm = sb_append_string(sbm, negIdx);
+        sbm = sb_append_cstr(sbm, byte~(&" = sub i32 0, "[0]));
+        sbm = sb_append_string(sbm, rVal);
+        sbm = sb_append_byte(sbm, byte(10));
+        var tmpGep2 = cg_fresh_tmp(tmp);
+        sbm = sb_append_cstr(sbm, byte~(&"  "[0]));
+        sbm = sb_append_string(sbm, tmpGep2);
+        sbm = sb_append_cstr(sbm, byte~(&" = getelementptr i8, i8* "[0]));
+        sbm = sb_append_string(sbm, lVal);
+        sbm = sb_append_cstr(sbm, byte~(&", i32 "[0]));
+        sbm = sb_append_string(sbm, negIdx);
+        sbm = sb_append_byte(sbm, byte(10));
+        return ExprCodegenResult{sb_to_string(sbm), tmpGep2, lTy, 0};
+      }
+      // pointer difference
+      if (opTok.length == 1 && (opTok.data)~ == byte(45) && cg_is_pointer_type(lTy) == 1 && cg_is_pointer_type(rTy) == 1) {
+        var sbDiff = sb_new();
+        sbDiff = sb_append_string(sbDiff, lInstr);
+        sbDiff = sb_append_string(sbDiff, rInstr);
+        var ptoiL = cg_fresh_tmp(tmp);
+        var ptoiR = cg_fresh_tmp(tmp);
+        var subTmp = cg_fresh_tmp(tmp);
+        var truncTmp = cg_fresh_tmp(tmp);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&"  "[0]));
+        sbDiff = sb_append_string(sbDiff, ptoiL);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" = ptrtoint "[0]));
+        sbDiff = sb_append_string(sbDiff, lTy);
+        sbDiff = sb_append_byte(sbDiff, byte(32));
+        sbDiff = sb_append_string(sbDiff, lVal);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" to i64"[0]));
+        sbDiff = sb_append_byte(sbDiff, byte(10));
+        sbDiff = sb_append_cstr(sbDiff, byte~(&"  "[0]));
+        sbDiff = sb_append_string(sbDiff, ptoiR);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" = ptrtoint "[0]));
+        sbDiff = sb_append_string(sbDiff, rTy);
+        sbDiff = sb_append_byte(sbDiff, byte(32));
+        sbDiff = sb_append_string(sbDiff, rVal);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" to i64"[0]));
+        sbDiff = sb_append_byte(sbDiff, byte(10));
+        sbDiff = sb_append_cstr(sbDiff, byte~(&"  "[0]));
+        sbDiff = sb_append_string(sbDiff, subTmp);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" = sub i64 "[0]));
+        sbDiff = sb_append_string(sbDiff, ptoiL);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&", "[0]));
+        sbDiff = sb_append_string(sbDiff, ptoiR);
+        sbDiff = sb_append_byte(sbDiff, byte(10));
+        sbDiff = sb_append_cstr(sbDiff, byte~(&"  "[0]));
+        sbDiff = sb_append_string(sbDiff, truncTmp);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" = trunc i64 "[0]));
+        sbDiff = sb_append_string(sbDiff, subTmp);
+        sbDiff = sb_append_cstr(sbDiff, byte~(&" to i32"[0]));
+        sbDiff = sb_append_byte(sbDiff, byte(10));
+        return ExprCodegenResult{sb_to_string(sbDiff), truncTmp, String{byte~(&"i32"[0]), 3}, 0};
+      }
+      // pointer comparisons (eq/ne/rel)
+      if (opTok.length >= 1) {
+        var cmpTy = lTy;
+        var cmpOp = String{pmr.src, 0};
+        if (opTok.length == 2 && (opTok.data)~ == byte(61) && (opTok.data + 1)~ == byte(61)) { cmpOp = String{byte~(&"eq"[0]), 2}; }
+        else if (opTok.length == 2 && (opTok.data)~ == byte(33) && (opTok.data + 1)~ == byte(61)) { cmpOp = String{byte~(&"ne"[0]), 2}; }
+        else if (opTok.length == 1 && (opTok.data)~ == byte(60)) { cmpOp = String{byte~(&"ult"[0]), 3}; }
+        else if (opTok.length == 2 && (opTok.data)~ == byte(60) && (opTok.data + 1)~ == byte(61)) { cmpOp = String{byte~(&"ule"[0]), 3}; }
+        else if (opTok.length == 1 && (opTok.data)~ == byte(62)) { cmpOp = String{byte~(&"ugt"[0]), 3}; }
+        else if (opTok.length == 2 && (opTok.data)~ == byte(62) && (opTok.data + 1)~ == byte(61)) { cmpOp = String{byte~(&"uge"[0]), 3}; }
+        if (cmpOp.length == 0) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
+        var sbCmp = sb_new();
+        sbCmp = sb_append_string(sbCmp, lInstr);
+        sbCmp = sb_append_string(sbCmp, rInstr);
+        var tmpCmp = cg_fresh_tmp(tmp);
+        sbCmp = sb_append_cstr(sbCmp, byte~(&"  "[0]));
+        sbCmp = sb_append_string(sbCmp, tmpCmp);
+        sbCmp = sb_append_cstr(sbCmp, byte~(&" = icmp "[0]));
+        sbCmp = sb_append_string(sbCmp, cmpOp);
+        sbCmp = sb_append_byte(sbCmp, byte(32));
+        sbCmp = sb_append_string(sbCmp, cmpTy);
+        sbCmp = sb_append_byte(sbCmp, byte(32));
+        sbCmp = sb_append_string(sbCmp, lVal);
+        sbCmp = sb_append_cstr(sbCmp, byte~(&", "[0]));
+        sbCmp = sb_append_string(sbCmp, rVal);
+        sbCmp = sb_append_byte(sbCmp, byte(10));
+        return ExprCodegenResult{sb_to_string(sbCmp), tmpCmp, String{byte~(&"i1"[0]), 2}, 0};
+      }
       return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
     }
     if (cg_str_eq(lTy, rTy) == 0) {
