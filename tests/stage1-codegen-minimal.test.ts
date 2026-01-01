@@ -51,4 +51,15 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     const bin = runRawIR(irRes.stdout)
     expect(bin.status).toBe(5)
   })
+
+  it("emits IR for calls with params and returns result", () => {
+    const program = `
+      def add(x int, y int) int { return x + y; }
+      def main() int { return add(2, 3); }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    const bin = runRawIR(irRes.stdout)
+    expect(bin.status).toBe(5)
+  })
 })

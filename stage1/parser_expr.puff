@@ -44,17 +44,20 @@ def n_dot(arena NodeArena, callee int, identTok int, off int) NodeArena { return
 def n_len(arena NodeArena, value int) NodeArena { return push_node(arena, Node{NODE_LEN, value, 0, 0, 0, 0, -1}); }
 def n_assign(arena NodeArena, left int, right int, opTok int, off int) NodeArena { return push_node(arena, Node{NODE_ASSIGN, left, right, opTok + off, 0, 0, -1}); }
 
-// Build linked list of arguments via NODE_LIST nodes: a=expr root, b=next, c=LIST_INIT_LIST
-def build_arg_list(arena NodeArena, args VecInt) int {
+// Build linked list of arguments via NODE_LIST nodes: a=expr root, b=next, c=LIST_INIT_LIST.
+// Returns the updated arena and writes the head index to outHead.
+def build_arg_list(arena NodeArena, args VecInt, outHead int~) NodeArena {
   var head = -1;
+  var a = arena;
   var i = args.length;
   while (i > 0) {
     i = i - 1;
     var exprIdx = vecint_get(args, i);
-    arena = push_node(arena, Node{NODE_LIST, exprIdx, head, LIST_INIT_LIST, 0, 0, -1});
-    head = arena.nodes.length - 1;
+    a = push_node(a, Node{NODE_LIST, exprIdx, head, LIST_INIT_LIST, 0, 0, -1});
+    head = a.nodes.length - 1;
   }
-  return head;
+  outHead~ = head;
+  return a;
 }
 
 // ---------- Parser primitives ----------
@@ -120,7 +123,8 @@ def parse_postfix(ctx ParseAstCtx, out ParseAstCtx~) int {
       }
       if (pa_kind(p) != TOKEN_RIGHT_PAREN) { p.err = 1; out~ = p; return lhs; }
       p = pa_advance(p);
-      var head = build_arg_list(p.arena, args);
+      var head = -1;
+      p.arena = build_arg_list(p.arena, args, &head);
       p.arena = n_call(p.arena, lhs, head, args.length);
       lhs = p.arena.nodes.length - 1;
       continue;

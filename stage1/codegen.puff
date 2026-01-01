@@ -159,6 +159,8 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     if (fi == -1) { return ExprCodegenResult{String{pmr.src, 0}, name, 1}; }
     var retId = tm_fn_return_type(tm, fi);
     var retTy = cg_llvm_type(tm.env.tt, retId);
+    var paramCount = tm_fn_param_count(tm, fi);
+    if (paramCount != n.c) { return ExprCodegenResult{String{pmr.src, 0}, name, 1}; }
     // Evaluate arguments
     var argInstr = sb_new();
     var argVals = sb_new();
