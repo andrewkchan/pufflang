@@ -89,6 +89,18 @@ def main() {
 `
     })
     .join("")}
+
+  // param list parsing: two ints, then int~, then float
+  var paramSrc = "int, int, int~, float";
+  var pres = parse_param_types(env, byte~(&paramSrc[0]), len(paramSrc));
+  var j = 0;
+  while (j < pres.ids.length) {
+    print_int(vecint_get(pres.ids, j));
+    __putchar__(32);
+    j = j + 1;
+  }
+  print_int(pres.err);
+  __putchar__(10);
 }
 `
   return compileAndRunWithStdlib(body)
@@ -128,7 +140,11 @@ describe("Stage1 type parser", () => {
       "0:8",  // void
       "1:-1"  // invalid
     ]
-    const idLines = lines.slice(expected.length, expected.length + expectedIds.length)
+    const idStart = expected.length
+    const idLines = lines.slice(idStart, idStart + expectedIds.length)
     expect(idLines).toEqual(expectedIds)
+
+    const paramLine = lines[idStart + expectedIds.length]
+    expect(paramLine.trim()).toMatch(/^5 5 [0-9]+ 4 0$/)
   })
 })
