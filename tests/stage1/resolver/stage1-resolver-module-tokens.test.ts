@@ -4,14 +4,28 @@ import path from "path"
 
 function runResolver(src: string): { status: number; stdout: string } {
   const ast = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "ast.puff"), "utf8")
+  const types = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "types.puff"), "utf8")
+  const structLayout = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "structlayout.puff"), "utf8")
+  const typeEnv = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "typeenv.puff"), "utf8")
   const scanner = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "scanner.puff"), "utf8")
   const parserExpr = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "parser_expr.puff"), "utf8")
+  const typeparse = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "typeparse.puff"), "utf8")
   const parserFull = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "parser_full.puff"), "utf8")
   const resolver = fs.readFileSync(path.join(__dirname, "..", "..", "..", "stage1", "resolver.puff"), "utf8")
+  const stripAstTypeSection = (src: string) => {
+    const marker = "// ---- Node arena ----"
+    const idx = src.indexOf(marker)
+    if (idx === -1) return src
+    return src.slice(idx)
+  }
   const code = `
-${ast}
+${types}
+${stripAstTypeSection(ast)}
 ${scanner}
+${structLayout}
+${typeEnv}
 ${parserExpr}
+${typeparse}
 ${parserFull}
 ${resolver}
 

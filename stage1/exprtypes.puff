@@ -3,13 +3,12 @@
 // typerules.puff (binary/unary typing), literaltypes.puff (literal typing), typeenv.puff.
 
 struct TypeInferResult { env TypeEnv, typeId int, err int }
-
-def tok_kind(tokens Vec, idx int) int { return token_kind_at(tokens, idx); }
 def infer_node(env TypeEnv, tokens Vec, src byte~, arena NodeArena, idx int) TypeInferResult {
   var n = nodearena_get(arena, idx);
   // literal
   if (n.kind == NODE_LITERAL) {
-    return literal_type(env, tokens, n.a, src);
+    var lit = literal_type(env, tokens, n.a, src);
+    return TypeInferResult{lit.env, lit.typeId, lit.err};
   }
   // group
   if (n.kind == NODE_GROUP) {
@@ -20,7 +19,7 @@ def infer_node(env TypeEnv, tokens Vec, src byte~, arena NodeArena, idx int) Typ
     var opTok = n.a;
     var operand = infer_node(env, tokens, src, arena, n.b);
     if (operand.err == 1) { return operand; }
-    var k = tok_kind(tokens, opTok);
+    var k = token_kind_at(tokens, opTok);
     var op = -1;
     if (k == TOKEN_MINUS) { op = UOP_NEG; }
     if (k == TOKEN_BANG) { op = UOP_NOT; }
@@ -45,7 +44,7 @@ def infer_node(env TypeEnv, tokens Vec, src byte~, arena NodeArena, idx int) Typ
     if (l.err == 1) { return l; }
     var r = infer_node(l.env, tokens, src, arena, n.b);
     if (r.err == 1) { return r; }
-    var k = tok_kind(tokens, n.c);
+    var k = token_kind_at(tokens, n.c);
     var opId = -1;
     var result = -1;
     // arithmetic / pointer / numeric
@@ -82,12 +81,60 @@ def infer_node(env TypeEnv, tokens Vec, src byte~, arena NodeArena, idx int) Typ
     if (type_equals(e.env.tt, t.typeId, e.typeId) == 0) { return TypeInferResult{e.env, -1, 1}; }
     return TypeInferResult{e.env, t.typeId, 0};
   }
+  // length
+  if (n.kind == NODE_LEN) {
+    var inner = infer_node(env, tokens, src, arena, n.a);
+    if (inner.err == 1) { return inner; }
+    var t = typetable_get(inner.env.tt, inner.typeId);
+    if (t.category != TYPECATEGORY_ARRAY) { return TypeInferResult{inner.env, -1, 1}; }
+    return TypeInferResult{inner.env, 5, 0}; // int id
+  }
+  // index
+  if (n.kind == NODE_INDEX) {
+    var arr = infer_node(env, tokens, src, arena, n.a);
+    if (arr.err == 1) { return arr; }
+    var idxRes = infer_node(arr.env, tokens, src, arena, n.b);
+    if (idxRes.err == 1) { return idxRes; }
+    var arrType = typetable_get(idxRes.env.tt, arr.typeId);
+    if (arrType.category != TYPECATEGORY_ARRAY) { return TypeInferResult{idxRes.env, -1, 1}; }
+    var idxType = typetable_get(idxRes.env.tt, idxRes.typeId);
+    if (idxType.category != TYPECATEGORY_INT && idxType.category != TYPECATEGORY_BYTE) { return TypeInferResult{idxRes.env, -1, 1}; }
+    return TypeInferResult{idxRes.env, arrType.element, 0};
+  }
+  // deref (~postfix)
+  if (n.kind == NODE_DEREF) {
+    var operand = infer_node(env, tokens, src, arena, n.a);
+    if (operand.err == 1) { return operand; }
+    var tptr = typetable_get(operand.env.tt, operand.typeId);
+    if (tptr.category != TYPECATEGORY_POINTER) { return TypeInferResult{operand.env, -1, 1}; }
+    return TypeInferResult{operand.env, tptr.element, 0};
+  }
+  // update (++/--)
+  if (n.kind == NODE_UPDATE) {
+    var opnd = infer_node(env, tokens, src, arena, n.b);
+    if (opnd.err == 1) { return opnd; }
+    var cat = typetable_get(opnd.env.tt, opnd.typeId).category;
+    if (cat != TYPECATEGORY_INT && cat != TYPECATEGORY_BYTE) { return TypeInferResult{opnd.env, -1, 1}; }
+    return TypeInferResult{opnd.env, opnd.typeId, 0};
+  }
+  // assignment (expression form only; statement assignment left token unsupported)
+  if (n.kind == NODE_ASSIGN) {
+    if (n.c == 0) { return TypeInferResult{env, -1, 1}; } // statement assignment (identifier token), skip
+    var lhs = infer_node(env, tokens, src, arena, n.a);
+    if (lhs.err == 1) { return lhs; }
+    var rhs = infer_node(lhs.env, tokens, src, arena, n.b);
+    if (rhs.err == 1) { return rhs; }
+    if (type_can_coerce(rhs.env.tt, rhs.typeId, lhs.typeId) == 0 && type_can_cast(rhs.env.tt, rhs.typeId, lhs.typeId) == 0) {
+      return TypeInferResult{rhs.env, -1, 1};
+    }
+    return TypeInferResult{rhs.env, lhs.typeId, 0};
+  }
   return TypeInferResult{env, -1, 1};
 }
 
 // Infer type for expression source; returns updated env to persist newly allocated types.
 def infer_expression_type(env TypeEnv, src byte~, n int) TypeInferResult {
-  var parsed = parse_expression_ast(src, n);
+  var parsed = parse_expr_ast(src, n);
   if (parsed.err == 1) { return TypeInferResult{env, -1, 1}; }
   return infer_node(env, parsed.tokens, parsed.src, parsed.arena, parsed.root);
 }

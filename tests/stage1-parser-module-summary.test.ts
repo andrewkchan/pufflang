@@ -3,7 +3,7 @@ import { runStage1ModuleSummary } from "../src/harness"
 describe("Stage1 parser_full module summary", () => {
   it("parses functions with vars, if/else, while, and return", () => {
     const program = `
-def main(a, b) {
+def main(a int, b int) int {
   var x = a + b;
   if (a) { print x; } else { print b; }
   x = x + 1;
@@ -58,8 +58,8 @@ def main(a, b) {
 
   it("parses multiple functions and tracks export flags", () => {
     const program = `
-export def foo(a) { return a; }
-def bar() { return 0; }
+export def foo(a int) int { return a; }
+def bar() int { return 0; }
 `
 
     const res = runStage1ModuleSummary(program)
@@ -81,8 +81,8 @@ def bar() { return 0; }
 
   it("emits parameter names in summary", () => {
     const program = `
-def alpha(a, b, c) { return a; }
-def beta() { return 0; }
+def alpha(a int, b int, c int) int { return a; }
+def beta() int { return 0; }
 `
     const res = runStage1ModuleSummary(program)
     expect(res.status).toBe(0)
@@ -98,8 +98,8 @@ def beta() { return 0; }
   it("parses imported functions", () => {
     const program = `
 import def ext0();
-import def ext1(a, b);
-def main() { return 0; }
+import def ext1(a int, b int);
+def main() int { return 0; }
 `
     const res = runStage1ModuleSummary(program)
     expect(res.status).toBe(0)
@@ -115,9 +115,9 @@ def main() { return 0; }
 
   it("parses struct declarations with field count", () => {
     const program = `
-export struct Point { x; y; z; }
+export struct Point { x int, y int, z int }
 struct Empty { }
-def main() { return 0; }
+def main() int { return 0; }
 `
     const res = runStage1ModuleSummary(program)
     expect(res.status).toBe(0)

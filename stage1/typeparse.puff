@@ -1,0 +1,318 @@
+// Stage1 type parser (standalone) that parses a type string into a simple
+// S-expression-like string representation without mutating TypeEnv/TypeTable.
+// Grammar (subset):
+//   type  := array | postfix_ptr
+//   array := '[' type ';' NUMBER ']'
+//   postfix_ptr := base ('~')*
+//   base  := int | float | byte | bool | void | IDENT
+//
+// Output format examples:
+//   int           -> "int"
+//   Foo           -> "(struct Foo)"
+//   int~          -> "(ptr int)"
+//   int~~         -> "(ptr (ptr int))"
+//   [int;3]       -> "(array 3 int)"
+//   [byte;4]~     -> "(ptr (array 4 byte))"
+//   [[int;2];3]   -> "(array 3 (array 2 int))"
+
+// -------- Helpers --------
+def tok_lex(tokens Vec, idx int, src byte~) String {
+  var st = token_start_at(tokens, idx);
+  var ln = token_length_at(tokens, idx);
+  return String{src + st, ln};
+}
+
+def tok_to_int(tokens Vec, idx int, src byte~) int {
+  var s = token_start_at(tokens, idx);
+  var ln = token_length_at(tokens, idx);
+  var i = 0;
+  var acc = 0;
+  while (i < ln) {
+    var c = int((src + s + i)~) - 48;
+    if (c < 0 || c > 9) { return -1; }
+    acc = acc * 10 + c;
+    i = i + 1;
+  }
+  return acc;
+}
+
+struct TypeParseResult { ok int, next int, out String }
+struct TypeParseIdResult { env TypeEnv, next int, typeId int, err int }
+struct ParamTypesResult { env TypeEnv, ids VecInt, err int }
+struct ParamTypesTokResult { env TypeEnv, ids VecInt, next int, err int }
+struct FnTypesResult { env TypeEnv, params VecInt, ret int, err int }
+struct FnTypesTokResult { env TypeEnv, params VecInt, ret int, next int, err int }
+
+// Convert a type id to a human-readable string (best-effort). Structs emit "(struct <id>)".
+def type_id_to_string(tt TypeTable, structSizes VecInt, id int) String {
+  var t = typetable_get(tt, id);
+  if (t.category == TYPECATEGORY_INT) { return String{byte~(&"int"[0]), 3}; }
+  if (t.category == TYPECATEGORY_FLOAT) { return String{byte~(&"float"[0]), 5}; }
+  if (t.category == TYPECATEGORY_BYTE) { return String{byte~(&"byte"[0]), 4}; }
+  if (t.category == TYPECATEGORY_BOOL) { return String{byte~(&"bool"[0]), 4}; }
+  if (t.category == TYPECATEGORY_VOID) { return String{byte~(&"void"[0]), 4}; }
+  if (t.category == TYPECATEGORY_POINTER) {
+    var inner = type_id_to_string(tt, structSizes, t.element);
+    var sb = sb_new();
+    sb = sb_append_cstr(sb, byte~(&"(ptr "[0]));
+    sb = sb_append_string(sb, inner);
+    sb = sb_append_byte(sb, byte(41));
+    return sb_to_string(sb);
+  }
+  if (t.category == TYPECATEGORY_ARRAY) {
+    var innerArr = type_id_to_string(tt, structSizes, t.element);
+    var sb2 = sb_new();
+    sb2 = sb_append_cstr(sb2, byte~(&"(array "[0]));
+    sb2 = sb_append_int(sb2, t.length);
+    sb2 = sb_append_byte(sb2, byte(32));
+    sb2 = sb_append_string(sb2, innerArr);
+    sb2 = sb_append_byte(sb2, byte(41));
+    return sb_to_string(sb2);
+  }
+  if (t.category == TYPECATEGORY_STRUCT) {
+    var sb3 = sb_new();
+    sb3 = sb_append_cstr(sb3, byte~(&"(struct "[0]));
+    sb3 = sb_append_int(sb3, t.structId);
+    sb3 = sb_append_byte(sb3, byte(41));
+    return sb_to_string(sb3);
+  }
+  return String{byte~(&"unknown"[0]), 7};
+}
+
+def wrap_ptr(inner String) String {
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"(ptr "[0]));
+  sb = sb_append_string(sb, inner);
+  sb = sb_append_byte(sb, byte(41)); // ')'
+  return sb_to_string(sb);
+}
+
+def wrap_array(lengthVal int, inner String) String {
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"(array "[0]));
+  sb = sb_append_int(sb, lengthVal);
+  sb = sb_append_byte(sb, byte(32));
+  sb = sb_append_string(sb, inner);
+  sb = sb_append_byte(sb, byte(41));
+  return sb_to_string(sb);
+}
+
+// -------- Parser --------
+def parse_base(tokens Vec, src byte~, idx int) TypeParseResult {
+  var k = token_kind_at(tokens, idx);
+  if (k == TOKEN_INT) { return TypeParseResult{1, idx + 1, String{byte~(&"int"[0]), 3}}; }
+  if (k == TOKEN_FLOAT) { return TypeParseResult{1, idx + 1, String{byte~(&"float"[0]), 5}}; }
+  if (k == TOKEN_BYTE) { return TypeParseResult{1, idx + 1, String{byte~(&"byte"[0]), 4}}; }
+  if (k == TOKEN_BOOL) { return TypeParseResult{1, idx + 1, String{byte~(&"bool"[0]), 4}}; }
+  if (k == TOKEN_VOID) { return TypeParseResult{1, idx + 1, String{byte~(&"void"[0]), 4}}; }
+  if (k == TOKEN_IDENTIFIER) {
+    var name = tok_lex(tokens, idx, src);
+    var sb = sb_new();
+    sb = sb_append_cstr(sb, byte~(&"(struct "[0]));
+    sb = sb_append_string(sb, name);
+    sb = sb_append_byte(sb, byte(41));
+    return TypeParseResult{1, idx + 1, sb_to_string(sb)};
+  }
+  return TypeParseResult{0, idx, String{src, 0}};
+}
+
+def parse_type(tokens Vec, src byte~, idx int) TypeParseResult {
+  var k = token_kind_at(tokens, idx);
+  // array
+  if (k == TOKEN_LEFT_BRACKET) {
+    var inner = parse_type(tokens, src, idx + 1);
+    if (inner.ok == 0) { return inner; }
+    if (token_kind_at(tokens, inner.next) != TOKEN_SEMICOLON) { return TypeParseResult{0, inner.next, inner.out}; }
+    var lenTok = inner.next + 1;
+    if (token_kind_at(tokens, lenTok) != TOKEN_NUMBER) { return TypeParseResult{0, lenTok, inner.out}; }
+    var arrLen = tok_to_int(tokens, lenTok, src);
+    if (arrLen < 0) { return TypeParseResult{0, lenTok, inner.out}; }
+    var closeTok = lenTok + 1;
+    if (token_kind_at(tokens, closeTok) != TOKEN_RIGHT_BRACKET) { return TypeParseResult{0, closeTok, inner.out}; }
+    var outArr = wrap_array(arrLen, inner.out);
+    var nextArr = closeTok + 1;
+    while (token_kind_at(tokens, nextArr) == TOKEN_TILDE) {
+      outArr = wrap_ptr(outArr);
+      nextArr = nextArr + 1;
+    }
+    return TypeParseResult{1, nextArr, outArr};
+  }
+  // base + postfix pointers
+  var base = parse_base(tokens, src, idx);
+  if (base.ok == 0) { return base; }
+  var next = base.next;
+  while (token_kind_at(tokens, next) == TOKEN_TILDE) {
+    var wrapped = wrap_ptr(base.out);
+    base = TypeParseResult{1, next + 1, wrapped};
+    next = base.next;
+  }
+  return base;
+}
+
+// Public API: parse a type literal string into S-expression string.
+// Returns empty string on error.
+def parse_type_to_string(src byte~, n int) String {
+  var toks = scan_tokens(src, n);
+  var res = parse_type(toks, src, 0);
+  if (res.ok == 0) { return String{src, 0}; }
+  if (token_kind_at(toks, res.next) != TOKEN_EOF) { return String{src, 0}; }
+  return res.out;
+}
+
+// --- Type parsing to TypeEnv/TypeTable ---
+// Maps primitive tokens to builtin ids in TypeTable.
+def base_type_id(env TypeEnv, tokens Vec, src byte~, idx int) TypeParseIdResult {
+  var k = token_kind_at(tokens, idx);
+  if (k == TOKEN_INT) { return TypeParseIdResult{env, idx + 1, 5, 0}; }
+  if (k == TOKEN_FLOAT) { return TypeParseIdResult{env, idx + 1, 4, 0}; }
+  if (k == TOKEN_BYTE) { return TypeParseIdResult{env, idx + 1, 2, 0}; }
+  if (k == TOKEN_BOOL) { return TypeParseIdResult{env, idx + 1, 1, 0}; }
+  if (k == TOKEN_VOID) { return TypeParseIdResult{env, idx + 1, 8, 0}; }
+  // Struct names require resolver lookup; treat as error here.
+  return TypeParseIdResult{env, idx, -1, 1};
+}
+
+def parse_type_id(env TypeEnv, tokens Vec, src byte~, idx int) TypeParseIdResult {
+  var k = token_kind_at(tokens, idx);
+  // array
+  if (k == TOKEN_LEFT_BRACKET) {
+    var inner = parse_type_id(env, tokens, src, idx + 1);
+    if (inner.err == 1) { return inner; }
+    if (token_kind_at(tokens, inner.next) != TOKEN_SEMICOLON) { return TypeParseIdResult{inner.env, inner.next, -1, 1}; }
+    var lenTok = inner.next + 1;
+    if (token_kind_at(tokens, lenTok) != TOKEN_NUMBER) { return TypeParseIdResult{inner.env, lenTok, -1, 1}; }
+    var arrLen = tok_to_int(tokens, lenTok, src);
+    if (arrLen < 0) { return TypeParseIdResult{inner.env, lenTok, -1, 1}; }
+    var closeTok = lenTok + 1;
+    if (token_kind_at(tokens, closeTok) != TOKEN_RIGHT_BRACKET) { return TypeParseIdResult{inner.env, closeTok, -1, 1}; }
+    var ttArr = typetable_make_array(inner.env.tt, inner.typeId, arrLen);
+    var envArr = TypeEnv{ttArr, inner.env.structSizes};
+    var nextIdx = closeTok + 1;
+    // postfix pointers after array
+    while (token_kind_at(tokens, nextIdx) == TOKEN_TILDE) {
+      var ttPtr = typetable_make_pointer(envArr.tt, envArr.tt.types.length - 1);
+      envArr = TypeEnv{ttPtr, envArr.structSizes};
+      nextIdx = nextIdx + 1;
+    }
+    return TypeParseIdResult{envArr, nextIdx, envArr.tt.types.length - 1, 0};
+  }
+  // base + postfix ptr
+  var base = base_type_id(env, tokens, src, idx);
+  if (base.err == 1) { return base; }
+  var outEnv = base.env;
+  var outId = base.typeId;
+  var next = base.next;
+  while (token_kind_at(tokens, next) == TOKEN_TILDE) {
+    var tt2 = typetable_make_pointer(outEnv.tt, outId);
+    outEnv = TypeEnv{tt2, outEnv.structSizes};
+    outId = outEnv.tt.types.length - 1;
+    next = next + 1;
+  }
+  return TypeParseIdResult{outEnv, next, outId, 0};
+}
+
+// Parse a type literal into a TypeEnv/TypeTable and return type id (err=1 on failure).
+def parse_type_to_id(env TypeEnv, src byte~, n int) TypeParseIdResult {
+  var toks = scan_tokens(src, n);
+  var res = parse_type_id(env, toks, src, 0);
+  if (res.err == 1) { return res; }
+  if (token_kind_at(toks, res.next) != TOKEN_EOF) { return TypeParseIdResult{res.env, res.next, -1, 1}; }
+  return res;
+}
+
+// Parse a comma-separated list of type literals into ids. Example input:
+//   "int, byte~, [int;3]"
+// Returns err=1 on failure; ids length matches number of types parsed.
+def parse_param_types(env TypeEnv, src byte~, n int) ParamTypesResult {
+  var toks = scan_tokens(src, n);
+  var ids = vecint_new(4);
+  var idx = 0;
+  var curEnv = env;
+  while (idx < toks.length) {
+    if (token_kind_at(toks, idx) == TOKEN_EOF) { break; }
+    var typeRes = parse_type_id(curEnv, toks, src, idx);
+    if (typeRes.err == 1) { return ParamTypesResult{curEnv, ids, 1}; }
+    curEnv = typeRes.env;
+    ids = vecint_push(ids, typeRes.typeId);
+    idx = typeRes.next;
+    if (token_kind_at(toks, idx) == TOKEN_COMMA) {
+      idx = idx + 1;
+      continue;
+    }
+    if (token_kind_at(toks, idx) == TOKEN_EOF) { break; }
+    // Unexpected token
+    return ParamTypesResult{curEnv, ids, 1};
+  }
+  return ParamTypesResult{curEnv, ids, 0};
+}
+
+// Parse comma-separated types from an existing token stream starting at idx,
+// stopping at the provided terminator (e.g., TOKEN_RIGHT_PAREN). Returns next
+// index positioned at the terminator token (not consumed).
+def parse_param_types_tokens(env TypeEnv, tokens Vec, src byte~, idx int, terminator int) ParamTypesTokResult {
+  var ids = vecint_new(4);
+  var curEnv = env;
+  var i = idx;
+  while (i < tokens.length) {
+    var k = token_kind_at(tokens, i);
+    if (k == terminator) {
+      return ParamTypesTokResult{curEnv, ids, i, 0};
+    }
+    var typeRes = parse_type_id(curEnv, tokens, src, i);
+    if (typeRes.err == 1) { return ParamTypesTokResult{curEnv, ids, typeRes.next, 1}; }
+    curEnv = typeRes.env;
+    ids = vecint_push(ids, typeRes.typeId);
+    i = typeRes.next;
+    var sep = token_kind_at(tokens, i);
+    if (sep == TOKEN_COMMA) {
+      i = i + 1;
+      continue;
+    }
+    if (sep == terminator) {
+      return ParamTypesTokResult{curEnv, ids, i, 0};
+    }
+    return ParamTypesTokResult{curEnv, ids, i, 1};
+  }
+  return ParamTypesTokResult{curEnv, ids, i, 1};
+}
+
+// Parse a function type signature of the form "(<params>) <returnType>" where
+// params are comma-separated type literals. Return type is optional; when
+// absent, ret = -1 and err = 1.
+def parse_fn_types(env TypeEnv, src byte~, n int) FnTypesResult {
+  var toks = scan_tokens(src, n);
+  if (token_kind_at(toks, 0) != TOKEN_LEFT_PAREN) { return FnTypesResult{env, vecint_new(0), -1, 1}; }
+  var params = parse_param_types_tokens(env, toks, src, 1, TOKEN_RIGHT_PAREN);
+  if (params.err == 1) { return FnTypesResult{params.env, params.ids, -1, 1}; }
+  var idx = params.next;
+  if (token_kind_at(toks, idx) != TOKEN_RIGHT_PAREN) { return FnTypesResult{params.env, params.ids, -1, 1}; }
+  idx = idx + 1;
+  // optional return type
+  if (token_kind_at(toks, idx) == TOKEN_EOF) {
+    return FnTypesResult{params.env, params.ids, 8, 0}; // default void
+  }
+  var retRes = parse_type_id(params.env, toks, src, idx);
+  if (retRes.err == 1) { return FnTypesResult{retRes.env, params.ids, -1, 1}; }
+  if (token_kind_at(toks, retRes.next) != TOKEN_EOF) { return FnTypesResult{retRes.env, params.ids, -1, 1}; }
+  return FnTypesResult{retRes.env, params.ids, retRes.typeId, 0};
+}
+
+// Token-based variant: parse "(params) rettype" from existing tokens starting at idx,
+// returning next index (after rettype) and type ids. Expects terminator TOKEN_RIGHT_PAREN
+// for params and consumes rettype after it. If return type missing or invalid, err=1.
+def parse_fn_types_tokens(env TypeEnv, tokens Vec, src byte~, idx int) FnTypesTokResult {
+  if (token_kind_at(tokens, idx) != TOKEN_LEFT_PAREN) { return FnTypesTokResult{env, vecint_new(0), -1, idx, 1}; }
+  var params = parse_param_types_tokens(env, tokens, src, idx + 1, TOKEN_RIGHT_PAREN);
+  if (params.err == 1) { return FnTypesTokResult{params.env, params.ids, -1, params.next, 1}; }
+  var i = params.next;
+  if (token_kind_at(tokens, i) != TOKEN_RIGHT_PAREN) { return FnTypesTokResult{params.env, params.ids, -1, i, 1}; }
+  i = i + 1;
+  if (token_kind_at(tokens, i) == TOKEN_EOF) {
+    return FnTypesTokResult{params.env, params.ids, 8, i, 0}; // default void
+  }
+  var retRes = parse_type_id(params.env, tokens, src, i);
+  if (retRes.err == 1) { return FnTypesTokResult{retRes.env, params.ids, -1, retRes.next, 1}; }
+  i = retRes.next;
+  return FnTypesTokResult{retRes.env, params.ids, retRes.typeId, i, 0};
+}
+
