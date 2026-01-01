@@ -3,13 +3,13 @@ import { runStage1ModuleCounts } from "../src/harness"
 describe("Stage1 parser_full module counts", () => {
   it("counts funcs/imports/exports/structs", () => {
     const program = `
-export def foo(a) { return a; }
-def bar() { return 0; }
+export def foo(a int) int { return a; }
+def bar() int { return 0; }
 import def ext0();
-import def ext1(a, b);
-export struct P { x; y; }
-struct Q { z; }
-var g = 1;
+import def ext1(a int, b int);
+export struct P { x int, y int }
+struct Q { z int }
+var g int = 1;
 `
     const res = runStage1ModuleCounts(program)
     expect(res.status).toBe(0)

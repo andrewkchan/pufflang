@@ -4,9 +4,11 @@
 struct ParseCtx {
   tokens Vec,
   src byte~,
+  srcLen int,
   idx int,
   err int,
-  arena NodeArena
+  arena NodeArena,
+  meta ModuleMeta
 }
 
 struct Span { start int, end int, err int }
@@ -15,7 +17,7 @@ def p_kind(p ParseCtx) int {
   if (p.idx >= p.tokens.length) { return TOKEN_EOF; }
   return token_kind_at(p.tokens, p.idx);
 }
-def p_advance(p ParseCtx) ParseCtx { return ParseCtx{p.tokens, p.src, p.idx + 1, p.err, p.arena}; }
+def p_advance(p ParseCtx) ParseCtx { return ParseCtx{p.tokens, p.src, p.srcLen, p.idx + 1, p.err, p.arena, p.meta}; }
 
 // Merge nodes from exprArena into target arena; return root adjusted index.
 // Parse expression from current position until a terminator (semicolon/right brace/right paren).
@@ -79,6 +81,8 @@ def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
   return rootIdx;
 }
 
+// Variant that stops on either terminatorA or terminatorB (if non-negative).
+
 def parse_block(p ParseCtx, out ParseCtx~) int {
   var ctx = p;
   if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 901; out~ = ctx; return -1; }
@@ -105,6 +109,17 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 201; out~ = ctx; return -1; }
     var nameTok = ctx.idx;
     ctx = p_advance(ctx);
+    var vtypeStartByte = -1;
+    var vtypeLen = 0;
+    if (p_kind(ctx) != TOKEN_EQUAL) {
+      var typeTokStart = ctx.idx;
+      var tRes = parse_type(ctx.tokens, ctx.src, ctx.idx);
+      if (tRes.ok == 0) { ctx.err = 202; out~ = ctx; return -1; }
+      vtypeStartByte = token_start_at(ctx.tokens, typeTokStart);
+      var tEndByte = span_end_byte(ctx, tRes.next);
+      vtypeLen = tEndByte - vtypeStartByte;
+      ctx.idx = tRes.next;
+    }
     if (p_kind(ctx) != TOKEN_EQUAL) { ctx.err = 202; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
     var exprRoot = p_parse_expr_root(ctx, TOKEN_SEMICOLON, &ctx);
@@ -112,6 +127,10 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
     if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 203; out~ = ctx; return -1; }
     ctx = p_advance(ctx);
     ctx.arena = nodearena_push(ctx.arena, Node{NODE_VAR_STMT, nameTok, exprRoot, 0, 0, 0, -1});
+    var varIdx = ctx.arena.nodes.length - 1;
+    ctx.meta.varNodeIndex = vecint_push(ctx.meta.varNodeIndex, varIdx);
+    ctx.meta.varTypeStartByte = vecint_push(ctx.meta.varTypeStartByte, vtypeStartByte);
+    ctx.meta.varTypeLen = vecint_push(ctx.meta.varTypeLen, vtypeLen);
     out~ = ctx;
     return ctx.arena.nodes.length - 1;
   }
@@ -261,7 +280,54 @@ def parse_statement(p ParseCtx, out ParseCtx~) int {
   return ctx.arena.nodes.length - 1;
 }
 
-struct ParseModuleResult { arena NodeArena, root int, err int, tokens Vec, src byte~ }
+struct ModuleMeta {
+  // Function params: parallel arrays over all params in parse order.
+  paramTypeStartByte VecInt,
+  paramTypeLen VecInt,
+  paramDefaultRoot VecInt,
+  // Function-level: aligned with encountered function nodes.
+  fnParamMetaStart VecInt,
+  fnParamCount VecInt,
+  fnReturnTypeStartByte VecInt,
+  fnReturnTypeLen VecInt,
+  fnNodeIndex VecInt,
+  // Var statements: optional type annotations.
+  varNodeIndex VecInt,
+  varTypeStartByte VecInt,
+  varTypeLen VecInt,
+  // Struct fields: parallel arrays over all fields in parse order.
+  structNodeIndex VecInt,
+  structFieldMetaStart VecInt,
+  structFieldCount VecInt,
+  structFieldTypeStartByte VecInt,
+  structFieldTypeLen VecInt
+}
+
+def modulemeta_new() ModuleMeta {
+  return ModuleMeta{
+    vecint_new(8), vecint_new(8), vecint_new(8),
+    vecint_new(4), vecint_new(4), vecint_new(4), vecint_new(4), vecint_new(4),
+    vecint_new(8), vecint_new(8), vecint_new(8),
+    vecint_new(4), vecint_new(4), vecint_new(4), vecint_new(8), vecint_new(8)
+  };
+}
+
+def span_end_byte(p ParseCtx, nextTok int) int {
+  if (nextTok < p.tokens.length) { return token_start_at(p.tokens, nextTok); }
+  return p.srcLen;
+}
+
+def span_string(src byte~, start int, lengthVal int) String {
+  if (start < 0 || lengthVal <= 0) { return String{src, 0}; }
+  return String{src + start, lengthVal};
+}
+
+def type_span_to_string(res ParseModuleResult, start int, lengthVal int) String {
+  if (start < 0 || lengthVal <= 0) { return String{res.src, 0}; }
+  return parse_type_to_string(res.src + start, lengthVal);
+}
+
+struct ParseModuleResult { arena NodeArena, root int, err int, tokens Vec, src byte~, meta ModuleMeta }
 
 // Compare identifier tokens by lexeme equality (assumes both are identifiers).
 def tok_eq(tokens Vec, src byte~, a int, b int) int {
@@ -305,7 +371,7 @@ def precheck_fn_dups(tokens Vec, src byte~) int {
 }
 
 def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
-  var ctx = ParseCtx{tokens, src, 0, 0, nodearena_new(128)};
+  var ctx = ParseCtx{tokens, src, n, 0, 0, nodearena_new(128), modulemeta_new()};
   var rootStart = ctx.arena.nodes.length;
   while (p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
     var isExport = 0;
@@ -325,6 +391,17 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
         if (p_kind(vctx) != TOKEN_IDENTIFIER) { ctx.err = 4010; break; }
         var nameTok = vctx.idx;
         vctx = p_advance(vctx);
+        var vtypeStartByte = -1;
+        var vtypeLen = 0;
+        if (p_kind(vctx) != TOKEN_EQUAL) {
+          var vtStartTok = vctx.idx;
+          var vtRes = parse_type(vctx.tokens, vctx.src, vctx.idx);
+          if (vtRes.ok == 0) { ctx.err = 4011; break; }
+          vtypeStartByte = token_start_at(vctx.tokens, vtStartTok);
+          var vtEndByte = span_end_byte(vctx, vtRes.next);
+          vtypeLen = vtEndByte - vtypeStartByte;
+          vctx.idx = vtRes.next;
+        }
         if (p_kind(vctx) != TOKEN_EQUAL) { ctx.err = 4011; break; }
         vctx = p_advance(vctx);
         var vroot = p_parse_expr_root(vctx, TOKEN_SEMICOLON, &vctx);
@@ -332,6 +409,10 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
         if (p_kind(vctx) != TOKEN_SEMICOLON) { ctx.err = 4012; break; }
         vctx = p_advance(vctx);
         vctx.arena = nodearena_push(vctx.arena, Node{NODE_VAR_STMT, nameTok, vroot, 0, 0, 0, -1});
+        var vIdx = vctx.arena.nodes.length - 1;
+        vctx.meta.varNodeIndex = vecint_push(vctx.meta.varNodeIndex, vIdx);
+        vctx.meta.varTypeStartByte = vecint_push(vctx.meta.varTypeStartByte, vtypeStartByte);
+        vctx.meta.varTypeLen = vecint_push(vctx.meta.varTypeLen, vtypeLen);
         ctx = vctx;
         continue;
       }
@@ -343,14 +424,35 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
         if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 3011; break; }
         ctx = p_advance(ctx);
         var fieldCount = 0;
-        var fieldStart = ctx.idx;
+        var fieldStartTok = -1;
+        var fieldMetaStart = ctx.meta.structFieldTypeStartByte.length;
         while (p_kind(ctx) != TOKEN_RIGHT_BRACE && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
-          if (p_kind(ctx) == TOKEN_IDENTIFIER) { fieldCount = fieldCount + 1; }
+          if (fieldCount > 0) {
+            if (p_kind(ctx) != TOKEN_COMMA) { ctx.err = 3012; break; }
+            ctx = p_advance(ctx);
+          }
+          if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 3010; break; }
+          if (fieldStartTok == -1) { fieldStartTok = ctx.idx; }
           ctx = p_advance(ctx);
+          var fTypeStartTok = ctx.idx;
+          var fTypeRes = parse_type(ctx.tokens, ctx.src, ctx.idx);
+          if (fTypeRes.ok == 0) { ctx.err = 3010; break; }
+          var fStartByte = token_start_at(ctx.tokens, fTypeStartTok);
+          var fEndByte = span_end_byte(ctx, fTypeRes.next);
+          var fLen = fEndByte - fStartByte;
+          ctx.idx = fTypeRes.next;
+          ctx.meta.structFieldTypeStartByte = vecint_push(ctx.meta.structFieldTypeStartByte, fStartByte);
+          ctx.meta.structFieldTypeLen = vecint_push(ctx.meta.structFieldTypeLen, fLen);
+          fieldCount = fieldCount + 1;
         }
+        if (ctx.err != 0) { break; }
         if (p_kind(ctx) != TOKEN_RIGHT_BRACE) { ctx.err = 3012; break; }
         ctx = p_advance(ctx);
-        ctx.arena = nodearena_push(ctx.arena, Node{NODE_STRUCT_DECL, fieldCount, isExport, nameTok, fieldStart, 0, -1});
+        ctx.arena = nodearena_push(ctx.arena, Node{NODE_STRUCT_DECL, fieldCount, isExport, nameTok, fieldStartTok, 0, -1});
+        var structIdx = ctx.arena.nodes.length - 1;
+        ctx.meta.structNodeIndex = vecint_push(ctx.meta.structNodeIndex, structIdx);
+        ctx.meta.structFieldMetaStart = vecint_push(ctx.meta.structFieldMetaStart, fieldMetaStart);
+        ctx.meta.structFieldCount = vecint_push(ctx.meta.structFieldCount, fieldCount);
         continue;
       }
       ctx = p_advance(ctx);
@@ -362,45 +464,88 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
     ctx = p_advance(ctx);
     if (p_kind(ctx) != TOKEN_LEFT_PAREN) { ctx.err = 103; break; }
     ctx = p_advance(ctx);
-    var paramsStart = -1;
-    var paramCount = 0;
-    while (p_kind(ctx) != TOKEN_RIGHT_PAREN && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
-      if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 104; break; }
-      if (paramsStart == -1) { paramsStart = ctx.idx; }
-      paramCount = paramCount + 1;
+  var paramsStart = ctx.idx;
+  var paramCount = 0;
+  var paramMetaStart = ctx.meta.paramTypeStartByte.length;
+  while (p_kind(ctx) != TOKEN_RIGHT_PAREN && p_kind(ctx) != TOKEN_EOF && ctx.err == 0) {
+    if (p_kind(ctx) != TOKEN_IDENTIFIER) { ctx.err = 104; break; }
+    ctx = p_advance(ctx);
+    // type is required for parameters
+    var typeTokStart = ctx.idx;
+    var tRes = parse_type(ctx.tokens, ctx.src, ctx.idx);
+    if (tRes.ok == 0) { ctx.err = 104; break; }
+    var tStartByte = token_start_at(ctx.tokens, typeTokStart);
+    var tEndByte = span_end_byte(ctx, tRes.next);
+    var tLen = tEndByte - tStartByte;
+    ctx.idx = tRes.next;
+    // optional default value
+    var defRoot = -1;
+    if (p_kind(ctx) == TOKEN_EQUAL) {
       ctx = p_advance(ctx);
-      if (p_kind(ctx) == TOKEN_COMMA) {
+      defRoot = -2; // sentinel indicating default exists
+      while (p_kind(ctx) != TOKEN_COMMA && p_kind(ctx) != TOKEN_RIGHT_PAREN && p_kind(ctx) != TOKEN_EOF && p_kind(ctx) != TOKEN_RIGHT_BRACE) {
         ctx = p_advance(ctx);
-        continue;
       }
-      if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 105; break; }
     }
+    ctx.meta.paramTypeStartByte = vecint_push(ctx.meta.paramTypeStartByte, tStartByte);
+    ctx.meta.paramTypeLen = vecint_push(ctx.meta.paramTypeLen, tLen);
+    ctx.meta.paramDefaultRoot = vecint_push(ctx.meta.paramDefaultRoot, defRoot);
+    paramCount = paramCount + 1;
+    if (p_kind(ctx) == TOKEN_COMMA) {
+      ctx = p_advance(ctx);
+      continue;
+    }
+    if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 105; break; }
+  }
     if (ctx.err != 0) { break; }
     if (p_kind(ctx) != TOKEN_RIGHT_PAREN) { ctx.err = 105; break; }
     ctx = p_advance(ctx);
+  var retStartByte = -1;
+  var retLen = 0;
+  if (p_kind(ctx) != TOKEN_LEFT_BRACE && p_kind(ctx) != TOKEN_SEMICOLON) {
+    var retTokStart = ctx.idx;
+    var retRes = parse_type(ctx.tokens, ctx.src, ctx.idx);
+    if (retRes.ok == 0) { ctx.err = 108; break; }
+    retStartByte = token_start_at(ctx.tokens, retTokStart);
+    var retEndByte = span_end_byte(ctx, retRes.next);
+    retLen = retEndByte - retStartByte;
+    ctx.idx = retRes.next;
+  }
     if (isImport == 1) {
       if (p_kind(ctx) != TOKEN_SEMICOLON) { ctx.err = 107; break; }
       ctx = p_advance(ctx);
       ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, -1, paramsStart, nameTok, paramCount, isExport, 1});
+    var fnIdxImp = ctx.arena.nodes.length - 1;
+    ctx.meta.fnParamMetaStart = vecint_push(ctx.meta.fnParamMetaStart, paramMetaStart);
+    ctx.meta.fnParamCount = vecint_push(ctx.meta.fnParamCount, paramCount);
+    ctx.meta.fnReturnTypeStartByte = vecint_push(ctx.meta.fnReturnTypeStartByte, retStartByte);
+    ctx.meta.fnReturnTypeLen = vecint_push(ctx.meta.fnReturnTypeLen, retLen);
+    ctx.meta.fnNodeIndex = vecint_push(ctx.meta.fnNodeIndex, fnIdxImp);
       continue;
     }
     if (p_kind(ctx) != TOKEN_LEFT_BRACE) { ctx.err = 106; break; }
     var bodyIdx = parse_block(ctx, &ctx);
     if (ctx.err != 0) { break; }
     ctx.arena = nodearena_push(ctx.arena, Node{NODE_FUNCTION, bodyIdx, paramsStart, nameTok, paramCount, isExport, 0});
+  var fnIdx = ctx.arena.nodes.length - 1;
+  ctx.meta.fnParamMetaStart = vecint_push(ctx.meta.fnParamMetaStart, paramMetaStart);
+  ctx.meta.fnParamCount = vecint_push(ctx.meta.fnParamCount, paramCount);
+  ctx.meta.fnReturnTypeStartByte = vecint_push(ctx.meta.fnReturnTypeStartByte, retStartByte);
+  ctx.meta.fnReturnTypeLen = vecint_push(ctx.meta.fnReturnTypeLen, retLen);
+  ctx.meta.fnNodeIndex = vecint_push(ctx.meta.fnNodeIndex, fnIdx);
   }
-  if (ctx.err != 0) { return ParseModuleResult{ctx.arena, -1, ctx.err, ctx.tokens, src}; }
+  if (ctx.err != 0) { return ParseModuleResult{ctx.arena, -1, ctx.err, ctx.tokens, src, ctx.meta}; }
   var rootCount = ctx.arena.nodes.length - rootStart;
   ctx.arena = nodearena_push(ctx.arena, Node{NODE_BLOCK, rootStart, rootCount, 0, 0, 0, -1});
   var rootIdx = ctx.arena.nodes.length - 1;
-  return ParseModuleResult{ctx.arena, rootIdx, ctx.err, ctx.tokens, src};
+  return ParseModuleResult{ctx.arena, rootIdx, ctx.err, ctx.tokens, src, ctx.meta};
 }
 
 // Convenience: parse directly from source.
 def parse_module_source(src byte~, n int) ParseModuleResult {
   var toks = scan_tokens(src, n);
   var ok = precheck_fn_dups(toks, src);
-  if (ok == 0) { return ParseModuleResult{nodearena_new(0), -1, 9100, toks, src}; }
+  if (ok == 0) { return ParseModuleResult{nodearena_new(0), -1, 9100, toks, src, modulemeta_new()}; }
   return parse_module(toks, src, n);
 }
 
@@ -605,6 +750,91 @@ def module_summary(res ParseModuleResult) String {
     }
     sb = sb_append_byte(sb, byte(10));
     i = i + 1;
+  }
+  return sb_to_string(sb);
+}
+
+// Emit a compact type-oriented summary for testing parser metadata.
+def module_type_summary(res ParseModuleResult) String {
+  if (res.err != 0) { return String{byte~(&"err"[0]), 3}; }
+  var sb = sb_new();
+  // functions
+  var fi = 0;
+  while (fi < res.meta.fnNodeIndex.length) {
+    var fnIdx = vecint_get(res.meta.fnNodeIndex, fi);
+    var fnNode = nodearena_get(res.arena, fnIdx);
+    var name = tok_string(res.tokens, fnNode.c, res.src);
+    sb = sb_append_cstr(sb, byte~(&"fn "[0]));
+    sb = sb_append_string(sb, name);
+    sb = sb_append_cstr(sb, byte~(&" params="[0]));
+    var pStart = vecint_get(res.meta.fnParamMetaStart, fi);
+    var pCount = vecint_get(res.meta.fnParamCount, fi);
+    var pj = 0;
+    while (pj < pCount) {
+      if (pj > 0) { sb = sb_append_byte(sb, byte(44)); } // ','
+      var tStart = vecint_get(res.meta.paramTypeStartByte, pStart + pj);
+      var tLen = vecint_get(res.meta.paramTypeLen, pStart + pj);
+      var tStr = type_span_to_string(res, tStart, tLen);
+      sb = sb_append_string(sb, tStr);
+      var dRoot = vecint_get(res.meta.paramDefaultRoot, pStart + pj);
+      if (dRoot != -1) { sb = sb_append_cstr(sb, byte~(&"=default"[0])); }
+      pj = pj + 1;
+    }
+    sb = sb_append_cstr(sb, byte~(&" ret="[0]));
+    var rStart = vecint_get(res.meta.fnReturnTypeStartByte, fi);
+    var rLen = vecint_get(res.meta.fnReturnTypeLen, fi);
+    var rStr = type_span_to_string(res, rStart, rLen);
+    if (rStr.length == 0) { rStr = String{byte~(&"void"[0]), 4}; }
+    sb = sb_append_string(sb, rStr);
+    sb = sb_append_cstr(sb, byte~(&" export="[0]));
+    sb = sb_append_int(sb, fnNode.value);
+    sb = sb_append_cstr(sb, byte~(&" import="[0]));
+    sb = sb_append_int(sb, fnNode.typeId);
+    sb = sb_append_byte(sb, byte(10));
+    fi = fi + 1;
+  }
+  // vars
+  var vi = 0;
+  while (vi < res.meta.varNodeIndex.length) {
+    var vIdx = vecint_get(res.meta.varNodeIndex, vi);
+    var vNode = nodearena_get(res.arena, vIdx);
+    var vname = tok_string(res.tokens, vNode.a, res.src);
+    sb = sb_append_cstr(sb, byte~(&"var "[0]));
+    sb = sb_append_string(sb, vname);
+    sb = sb_append_cstr(sb, byte~(&" type="[0]));
+    var vtStart = vecint_get(res.meta.varTypeStartByte, vi);
+    var vtLen = vecint_get(res.meta.varTypeLen, vi);
+    if (vtStart == -1 || vtLen == 0) {
+      sb = sb_append_cstr(sb, byte~(&"infer"[0]));
+    } else {
+      var vtStr = type_span_to_string(res, vtStart, vtLen);
+      sb = sb_append_string(sb, vtStr);
+    }
+    sb = sb_append_byte(sb, byte(10));
+    vi = vi + 1;
+  }
+  // structs
+  var si = 0;
+  while (si < res.meta.structNodeIndex.length) {
+    var sIdx = vecint_get(res.meta.structNodeIndex, si);
+    var sNode = nodearena_get(res.arena, sIdx);
+    var sname = tok_string(res.tokens, sNode.c, res.src);
+    sb = sb_append_cstr(sb, byte~(&"struct "[0]));
+    sb = sb_append_string(sb, sname);
+    sb = sb_append_cstr(sb, byte~(&" fields="[0]));
+    var fStart = vecint_get(res.meta.structFieldMetaStart, si);
+    var fCount = vecint_get(res.meta.structFieldCount, si);
+    var fj = 0;
+    while (fj < fCount) {
+      if (fj > 0) { sb = sb_append_byte(sb, byte(44)); }
+      var fs = vecint_get(res.meta.structFieldTypeStartByte, fStart + fj);
+      var fl = vecint_get(res.meta.structFieldTypeLen, fStart + fj);
+      var fStr = type_span_to_string(res, fs, fl);
+      sb = sb_append_string(sb, fStr);
+      fj = fj + 1;
+    }
+    sb = sb_append_byte(sb, byte(10));
+    si = si + 1;
   }
   return sb_to_string(sb);
 }

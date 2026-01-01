@@ -13,8 +13,8 @@ describe("Stage1 AST resolver undefined function handling", () => {
 
   it("accepts call to defined function", () => {
     const res = runStage1ResolverAst(`
-      def foo(x) { return x; }
-      def main() { return foo(3); }
+      def foo(x int) int { return x; }
+      def main() int { return foo(3); }
     `)
     expect(res.status).toBe(0)
     expect(res.stdout.trim()).toBe("1")

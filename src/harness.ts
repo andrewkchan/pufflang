@@ -8,10 +8,18 @@ const stdlibBasePath = path.join(__dirname, "..", "stdlib", "base.puff")
 let cachedStdlibBase: string | null = null
 const stage1AstPath = path.join(__dirname, "..", "stage1", "ast.puff")
 const stage1ScannerPath = path.join(__dirname, "..", "stage1", "scanner.puff")
+const stage1TypesPath = path.join(__dirname, "..", "stage1", "types.puff")
+const stage1StructLayoutPath = path.join(__dirname, "..", "stage1", "structlayout.puff")
+const stage1TypeEnvPath = path.join(__dirname, "..", "stage1", "typeenv.puff")
+const stage1TypeparsePath = path.join(__dirname, "..", "stage1", "typeparse.puff")
 const stage1ParserExprPath = path.join(__dirname, "..", "stage1", "parser_expr.puff")
 const stage1ParserFullPath = path.join(__dirname, "..", "stage1", "parser_full.puff")
 let cachedStage1Ast: string | null = null
 let cachedStage1Scanner: string | null = null
+let cachedStage1Types: string | null = null
+let cachedStage1StructLayout: string | null = null
+let cachedStage1TypeEnv: string | null = null
+let cachedStage1Typeparse: string | null = null
 let cachedStage1ParserExpr: string | null = null
 let cachedStage1ParserFull: string | null = null
 
@@ -27,10 +35,41 @@ function loadStage1Ast(): string {
   return cachedStage1Ast
 }
 
+function stripAstTypeSection(src: string): string {
+  const marker = "// ---- Node arena ----"
+  const idx = src.indexOf(marker)
+  if (idx === -1) return src
+  return src.slice(idx)
+}
+
 function loadStage1Scanner(): string {
   if (cachedStage1Scanner !== null) return cachedStage1Scanner
   cachedStage1Scanner = fs.readFileSync(stage1ScannerPath, "utf8")
   return cachedStage1Scanner
+}
+
+function loadStage1Types(): string {
+  if (cachedStage1Types !== null) return cachedStage1Types
+  cachedStage1Types = fs.readFileSync(stage1TypesPath, "utf8")
+  return cachedStage1Types
+}
+
+function loadStage1StructLayout(): string {
+  if (cachedStage1StructLayout !== null) return cachedStage1StructLayout
+  cachedStage1StructLayout = fs.readFileSync(stage1StructLayoutPath, "utf8")
+  return cachedStage1StructLayout
+}
+
+function loadStage1TypeEnv(): string {
+  if (cachedStage1TypeEnv !== null) return cachedStage1TypeEnv
+  cachedStage1TypeEnv = fs.readFileSync(stage1TypeEnvPath, "utf8")
+  return cachedStage1TypeEnv
+}
+
+function loadStage1Typeparse(): string {
+  if (cachedStage1Typeparse !== null) return cachedStage1Typeparse
+  cachedStage1Typeparse = fs.readFileSync(stage1TypeparsePath, "utf8")
+  return cachedStage1Typeparse
 }
 
 function loadStage1ParserExpr(): string {
@@ -242,9 +281,13 @@ export function runStage1ModuleSummary(program: string): RunResult {
   const normalized = program.trim().replace(/\r?\n/g, " ")
   const programLiteral = JSON.stringify(normalized)
   const source = `
-${loadStage1Ast()}
+${loadStage1Types()}
+${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
+${loadStage1StructLayout()}
+${loadStage1TypeEnv()}
 ${loadStage1ParserExpr()}
+${loadStage1Typeparse()}
 ${loadStage1ParserFull()}
 
 def print_int(x int) {
@@ -290,9 +333,13 @@ export function runStage1ModuleCounts(program: string): RunResult {
   const normalized = program.trim().replace(/\r?\n/g, " ")
   const programLiteral = JSON.stringify(normalized)
   const source = `
-${loadStage1Ast()}
+${loadStage1Types()}
+${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
+${loadStage1StructLayout()}
+${loadStage1TypeEnv()}
 ${loadStage1ParserExpr()}
+${loadStage1Typeparse()}
 ${loadStage1ParserFull()}
 
 def print_str(s String) {
@@ -322,9 +369,13 @@ export function runStage1ResolverModule(src: string): RunResult {
   const normalized = src.trim().replace(/\r?\n/g, " ")
   const programLiteral = JSON.stringify(normalized)
   const source = `
-${loadStage1Ast()}
+${loadStage1Types()}
+${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
+${loadStage1StructLayout()}
+${loadStage1TypeEnv()}
 ${loadStage1ParserExpr()}
+${loadStage1Typeparse()}
 ${loadStage1ParserFull()}
 ${fs.readFileSync(path.join(__dirname, "..", "stage1", "resolver.puff"), "utf8")}
 
@@ -362,9 +413,13 @@ export function runStage1ResolverAst(src: string): RunResult {
   const normalized = src.trim().replace(/\r?\n/g, " ")
   const programLiteral = JSON.stringify(normalized)
   const source = `
-${loadStage1Ast()}
+${loadStage1Types()}
+${stripAstTypeSection(loadStage1Ast())}
 ${loadStage1Scanner()}
+${loadStage1StructLayout()}
+${loadStage1TypeEnv()}
 ${loadStage1ParserExpr()}
+${loadStage1Typeparse()}
 ${loadStage1ParserFull()}
 ${fs.readFileSync(path.join(__dirname, "..", "stage1", "resolver.puff"), "utf8")}
 
