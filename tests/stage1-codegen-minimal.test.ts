@@ -136,4 +136,16 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     const bin = runRawIR(irRes.stdout)
     expect(bin.status).toBe(5)
   })
+
+  it("emits pointer LLVM types for byte~ params/returns", () => {
+    const program = `
+      def id(p byte~) byte~ { return p; }
+      def main() int { return 0; }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    expect(irRes.stdout).toContain("define i8* @id(i8* %p0)")
+    const bin = runRawIR(irRes.stdout)
+    expect(bin.status).toBe(0)
+  })
 })

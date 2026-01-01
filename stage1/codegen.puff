@@ -17,6 +17,7 @@ def cg_llvm_type(tt TypeTable, typeId int) String {
   if (t.category == TYPECATEGORY_BOOL) { return String{byte~(&"i1"[0]), 2}; }
   if (t.category == TYPECATEGORY_VOID) { return String{byte~(&"void"[0]), 4}; }
   if (t.category == TYPECATEGORY_FLOAT) { return String{byte~(&"float"[0]), 5}; }
+  if (t.category == TYPECATEGORY_POINTER) { return String{byte~(&"i8*"[0]), 3}; }
   // Fallback to i32 for unknown/unsupported types.
   return String{byte~(&"i32"[0]), 3};
 }
