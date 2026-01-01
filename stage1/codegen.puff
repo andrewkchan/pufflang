@@ -1,6 +1,217 @@
-// Stage1 Puffscript codegen stub.
-// Emits success (1) if resolver passed.
+// Stage1 Puffscript LLVM IR codegen (initial, minimal subset).
+// Generates textual LLVM IR for:
+// - function definitions (non-import) with simple return statements
+// - return expressions composed of literals, groups, and unary minus
+// - integer/byte/bool/void/float return types (float is mapped to 'float')
+//
+// Structured to expand over time with more statement/expression support.
 
+struct FnCodegenResult { text String, err int }
+struct ExprCodegenResult { text String, err int }
+
+// Map a type id from TypeTable to LLVM IR textual type.
+def cg_llvm_type(tt TypeTable, typeId int) String {
+  var t = typetable_get(tt, typeId);
+  if (t.category == TYPECATEGORY_INT) { return String{byte~(&"i32"[0]), 3}; }
+  if (t.category == TYPECATEGORY_BYTE) { return String{byte~(&"i8"[0]), 2}; }
+  if (t.category == TYPECATEGORY_BOOL) { return String{byte~(&"i1"[0]), 2}; }
+  if (t.category == TYPECATEGORY_VOID) { return String{byte~(&"void"[0]), 4}; }
+  if (t.category == TYPECATEGORY_FLOAT) { return String{byte~(&"float"[0]), 5}; }
+  // Fallback to i32 for unknown/unsupported types.
+  return String{byte~(&"i32"[0]), 3};
+}
+
+// Render a token's lexeme to string.
+def cg_tok_string(tokens Vec, src byte~, tokIdx int) String {
+  return tok_string(tokens, tokIdx, src);
+}
+
+// Emit simple expressions (literal, group, unary -).
+def cg_expr(pmr ParseModuleResult, exprIdx int) ExprCodegenResult {
+  if (exprIdx < 0 || exprIdx >= pmr.arena.nodes.length) { return ExprCodegenResult{String{pmr.src, 0}, 1}; }
+  var n = nodearena_get(pmr.arena, exprIdx);
+  if (n.kind == NODE_LITERAL) {
+    var lex = cg_tok_string(pmr.tokens, pmr.src, n.a);
+    return ExprCodegenResult{lex, 0};
+  }
+  if (n.kind == NODE_GROUP) {
+    return cg_expr(pmr, n.a);
+  }
+  if (n.kind == NODE_UNARY) {
+    var op = cg_tok_string(pmr.tokens, pmr.src, n.a);
+    var inner = cg_expr(pmr, n.b);
+    if (inner.err == 1) { return ExprCodegenResult{inner.text, 1}; }
+    var sb = sb_new();
+    sb = sb_append_string(sb, op);
+    sb = sb_append_string(sb, inner.text);
+    return ExprCodegenResult{sb_to_string(sb), 0};
+  }
+  // Unsupported expression kinds for now.
+  return ExprCodegenResult{String{pmr.src, 0}, 1};
+}
+
+// Generate LLVM IR for a single function node.
+// Supports bodies with return statements containing simple expressions.
+def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCodegenResult {
+  var retId = tm_fn_return_type(tm, fi);
+  var retTy = cg_llvm_type(tm.env.tt, retId);
+  var name = tok_string(pmr.tokens, fn.c, pmr.src);
+
+  var sb = sb_new();
+  // Function header
+  sb = sb_append_cstr(sb, byte~(&"define "[0]));
+  sb = sb_append_string(sb, retTy);
+  sb = sb_append_byte(sb, byte(32)); // space
+  sb = sb_append_byte(sb, byte(64)); // '@'
+  sb = sb_append_string(sb, name);
+  sb = sb_append_byte(sb, byte(40)); // '('
+
+  var paramStart = tm_fn_param_type_start(tm, fi);
+  var paramCount = tm_fn_param_count(tm, fi);
+  var pi = 0;
+  while (pi < paramCount) {
+    var pid = vecint_get(tm.paramTypeIds, paramStart + pi);
+    var pty = cg_llvm_type(tm.env.tt, pid);
+    if (pi > 0) { sb = sb_append_cstr(sb, byte~(&", "[0])); }
+    sb = sb_append_string(sb, pty);
+    // Name parameters as %pN
+    sb = sb_append_byte(sb, byte(32));
+    sb = sb_append_byte(sb, byte(37)); // '%'
+    sb = sb_append_cstr(sb, byte~(&"p"[0]));
+    sb = sb_append_int(sb, pi);
+    pi = pi + 1;
+  }
+  sb = sb_append_byte(sb, byte(41)); // ')'
+  sb = sb_append_byte(sb, byte(32));
+  sb = sb_append_byte(sb, byte(123)); // '{'
+  sb = sb_append_byte(sb, byte(10));
+  sb = sb_append_cstr(sb, byte~(&"entry:"[0]));
+  sb = sb_append_byte(sb, byte(10));
+
+  // Imported functions: emit a minimal body returning zero/void.
+  if (fn.typeId == 1 || fn.a == -1) {
+    if (retTy.length == 4 && (retTy.data)~ == byte(118)) { // "void"
+      sb = sb_append_cstr(sb, byte~(&"  ret void"[0]));
+    } else {
+      sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
+      sb = sb_append_string(sb, retTy);
+      sb = sb_append_byte(sb, byte(32));
+      sb = sb_append_byte(sb, byte(48)); // '0'
+    }
+    sb = sb_append_byte(sb, byte(10));
+    sb = sb_append_byte(sb, byte(125));
+    sb = sb_append_byte(sb, byte(10));
+    return FnCodegenResult{sb_to_string(sb), 0};
+  }
+
+  // Body: expect a block node at fn.a
+  var body = nodearena_get(pmr.arena, fn.a);
+  var start = body.a;
+  var end = body.a + body.b;
+  var emittedRet = 0;
+  var i = start;
+  while (i < end) {
+    var stmt = nodearena_get(pmr.arena, i);
+    if (stmt.kind == NODE_RETURN) {
+      if (retTy.length == 4 && (retTy.data)~ == byte(118)) { // "void"
+        sb = sb_append_cstr(sb, byte~(&"  ret void"[0]));
+        sb = sb_append_byte(sb, byte(10));
+        emittedRet = 1;
+        break;
+      }
+      var exprRes = cg_expr(pmr, stmt.a);
+      if (exprRes.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
+      sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
+      sb = sb_append_string(sb, retTy);
+      sb = sb_append_byte(sb, byte(32));
+      sb = sb_append_string(sb, exprRes.text);
+      sb = sb_append_byte(sb, byte(10));
+      emittedRet = 1;
+      break;
+    }
+    // For now, ignore other statement kinds gracefully.
+    i = i + 1;
+  }
+  if (emittedRet == 0) {
+    if (retTy.length == 4 && (retTy.data)~ == byte(118)) {
+      sb = sb_append_cstr(sb, byte~(&"  ret void"[0]));
+    } else {
+      sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
+      sb = sb_append_string(sb, retTy);
+      sb = sb_append_byte(sb, byte(32));
+      sb = sb_append_byte(sb, byte(48)); // '0'
+    }
+    sb = sb_append_byte(sb, byte(10));
+  }
+
+  sb = sb_append_byte(sb, byte(125)); // '}'
+  sb = sb_append_byte(sb, byte(10));
+  return FnCodegenResult{sb_to_string(sb), 0};
+}
+
+// Emit declarations for imported functions.
+def cg_function_decl(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCodegenResult {
+  var retId = tm_fn_return_type(tm, fi);
+  var retTy = cg_llvm_type(tm.env.tt, retId);
+  var name = tok_string(pmr.tokens, fn.c, pmr.src);
+  var sb = sb_new();
+  sb = sb_append_cstr(sb, byte~(&"declare "[0]));
+  sb = sb_append_string(sb, retTy);
+  sb = sb_append_byte(sb, byte(32));
+  sb = sb_append_byte(sb, byte(64));
+  sb = sb_append_string(sb, name);
+  sb = sb_append_byte(sb, byte(40)); // '('
+  var paramStart = tm_fn_param_type_start(tm, fi);
+  var paramCount = tm_fn_param_count(tm, fi);
+  var pi = 0;
+  while (pi < paramCount) {
+    var pid = vecint_get(tm.paramTypeIds, paramStart + pi);
+    var pty = cg_llvm_type(tm.env.tt, pid);
+    if (pi > 0) { sb = sb_append_cstr(sb, byte~(&", "[0])); }
+    sb = sb_append_string(sb, pty);
+    pi = pi + 1;
+  }
+  sb = sb_append_byte(sb, byte(41)); // ')'
+  sb = sb_append_byte(sb, byte(10));
+  return FnCodegenResult{sb_to_string(sb), 0};
+}
+
+// Module-level codegen entry.
+def codegen_module(pmr ParseModuleResult, tm TypeModuleTypes) String {
+  var sb = sb_new();
+
+  // Emit imported function declarations first.
+  var fi = 0;
+  while (fi < pmr.meta.fnNodeIndex.length) {
+    var fnIdx = vecint_get(pmr.meta.fnNodeIndex, fi);
+    var fn = nodearena_get(pmr.arena, fnIdx);
+    if (fn.typeId == 1 || fn.a == -1) {
+      var decl = cg_function_decl(pmr, tm, fn, fi);
+      if (decl.err == 1) { return String{pmr.src, 0}; }
+      sb = sb_append_string(sb, decl.text);
+    }
+    fi = fi + 1;
+  }
+
+  // Emit definitions.
+  fi = 0;
+  while (fi < pmr.meta.fnNodeIndex.length) {
+    var fnIdx2 = vecint_get(pmr.meta.fnNodeIndex, fi);
+    var fn2 = nodearena_get(pmr.arena, fnIdx2);
+    if (fn2.typeId == 1 || fn2.a == -1) {
+      fi = fi + 1;
+      continue;
+    }
+    var fnDef = cg_function(pmr, tm, fn2, fi);
+    if (fnDef.err == 1) { return String{pmr.src, 0}; }
+    sb = sb_append_string(sb, fnDef.text);
+    fi = fi + 1;
+  }
+
+  return sb_to_string(sb);
+}
+
+// Legacy stub preserved for compatibility with existing call sites.
 def codegen_simple(ok int) int {
   if (ok == 1) { return 1; }
   return 0;

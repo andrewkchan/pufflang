@@ -14,6 +14,8 @@ const stage1TypeEnvPath = path.join(__dirname, "..", "stage1", "typeenv.puff")
 const stage1TypeparsePath = path.join(__dirname, "..", "stage1", "typeparse.puff")
 const stage1ParserExprPath = path.join(__dirname, "..", "stage1", "parser_expr.puff")
 const stage1ParserFullPath = path.join(__dirname, "..", "stage1", "parser_full.puff")
+const stage1CodegenPath = path.join(__dirname, "..", "stage1", "codegen.puff")
+const stage1DriverPath = path.join(__dirname, "..", "stage1", "driver.puff")
 let cachedStage1Ast: string | null = null
 let cachedStage1Scanner: string | null = null
 let cachedStage1Types: string | null = null
@@ -22,6 +24,8 @@ let cachedStage1TypeEnv: string | null = null
 let cachedStage1Typeparse: string | null = null
 let cachedStage1ParserExpr: string | null = null
 let cachedStage1ParserFull: string | null = null
+let cachedStage1Codegen: string | null = null
+let cachedStage1Driver: string | null = null
 
 function loadStdlibBase(): string {
   if (cachedStdlibBase !== null) return cachedStdlibBase
@@ -82,6 +86,18 @@ function loadStage1ParserFull(): string {
   if (cachedStage1ParserFull !== null) return cachedStage1ParserFull
   cachedStage1ParserFull = fs.readFileSync(stage1ParserFullPath, "utf8")
   return cachedStage1ParserFull
+}
+
+function loadStage1Codegen(): string {
+  if (cachedStage1Codegen !== null) return cachedStage1Codegen
+  cachedStage1Codegen = fs.readFileSync(stage1CodegenPath, "utf8")
+  return cachedStage1Codegen
+}
+
+function loadStage1Driver(): string {
+  if (cachedStage1Driver !== null) return cachedStage1Driver
+  cachedStage1Driver = fs.readFileSync(stage1DriverPath, "utf8")
+  return cachedStage1Driver
 }
 
 export interface RunResult {
@@ -444,6 +460,43 @@ def main() {
   var ok = resolve_module_ast(byte~(&src[0]), len(src));
   print_int(ok);
   __putchar__(10);
+}
+`
+  return compileAndRunWithStdlib(source)
+}
+
+/**
+ * Compile Puff source to LLVM IR using the Stage1 (Puff) compiler and return the IR via stdout.
+ */
+export function runStage1CompileToIr(program: string): RunResult {
+  const normalized = program.trim().replace(/\r?\n/g, " ")
+  const programLiteral = JSON.stringify(normalized)
+  const source = `
+${loadStage1Types()}
+${stripAstTypeSection(loadStage1Ast())}
+${loadStage1Scanner()}
+${loadStage1StructLayout()}
+${loadStage1TypeEnv()}
+${loadStage1ParserExpr()}
+${loadStage1Typeparse()}
+${loadStage1ParserFull()}
+${fs.readFileSync(path.join(__dirname, "..", "stage1", "resolver.puff"), "utf8")}
+${loadStage1Codegen()}
+${loadStage1Driver()}
+
+def print_str(s String) {
+  var i = 0;
+  while (i < s.length) {
+    __putchar__(int((s.data + i)~));
+    i = i + 1;
+  }
+  __putchar__(10);
+}
+
+def main() {
+  var src = ${programLiteral};
+  var ir = compile_to_ir(byte~(&src[0]), len(src));
+  print_str(ir);
 }
 `
   return compileAndRunWithStdlib(source)
