@@ -7,7 +7,7 @@
 // Structured to expand over time with more statement/expression support.
 
 struct FnCodegenResult { text String, err int }
-struct ExprCodegenResult { text String, err int }
+struct ExprCodegenResult { instr String, value String, err int }
 
 // Map a type id from TypeTable to LLVM IR textual type.
 def cg_llvm_type(tt TypeTable, typeId int) String {
@@ -54,38 +54,91 @@ def cg_match_param(params VecStr, name String) int {
   return -1;
 }
 
-// Emit simple expressions (literal, group, unary -, parameter variable).
-def cg_expr(pmr ParseModuleResult, exprIdx int, paramNames VecStr) ExprCodegenResult {
-  if (exprIdx < 0 || exprIdx >= pmr.arena.nodes.length) { return ExprCodegenResult{String{pmr.src, 0}, 1}; }
+def cg_fresh_tmp(counter int~) String {
+  var sb = sb_new();
+  sb = sb_append_byte(sb, byte(37)); // '%'
+  sb = sb_append_cstr(sb, byte~(&"t"[0]));
+  sb = sb_append_int(sb, counter~);
+  counter~ = counter~ + 1;
+  return sb_to_string(sb);
+}
+
+// Emit simple expressions (literal, group, unary -, parameter variable, binary +,-,*,/).
+// Returns accumulated instructions (in order) and the SSA value to use.
+def cg_expr(pmr ParseModuleResult, exprIdx int, paramNames VecStr, tmp int~) ExprCodegenResult {
+  if (exprIdx < 0 || exprIdx >= pmr.arena.nodes.length) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
   var n = nodearena_get(pmr.arena, exprIdx);
   if (n.kind == NODE_LITERAL) {
     var lex = cg_tok_string(pmr.tokens, pmr.src, n.a);
-    return ExprCodegenResult{lex, 0};
+    return ExprCodegenResult{String{pmr.src, 0}, lex, 0};
   }
   if (n.kind == NODE_GROUP) {
-    return cg_expr(pmr, n.a, paramNames);
+    return cg_expr(pmr, n.a, paramNames, tmp);
   }
   if (n.kind == NODE_UNARY) {
     var op = cg_tok_string(pmr.tokens, pmr.src, n.a);
-    var inner = cg_expr(pmr, n.b, paramNames);
-    if (inner.err == 1) { return ExprCodegenResult{inner.text, 1}; }
-    var sb = sb_new();
-    sb = sb_append_string(sb, op);
-    sb = sb_append_string(sb, inner.text);
-    return ExprCodegenResult{sb_to_string(sb), 0};
+    var inner = cg_expr(pmr, n.b, paramNames, tmp);
+    if (inner.err == 1) { return ExprCodegenResult{inner.instr, inner.value, 1}; }
+    // If operand is a literal constant, inline.
+    if (inner.instr.length == 0 && (inner.value.length > 0)) {
+      var sbLit = sb_new();
+      sbLit = sb_append_string(sbLit, op);
+      sbLit = sb_append_string(sbLit, inner.value);
+      return ExprCodegenResult{inner.instr, sb_to_string(sbLit), 0};
+    }
+    var tmpName = cg_fresh_tmp(tmp);
+    var sbInstr = sb_new();
+    sbInstr = sb_append_string(sbInstr, inner.instr);
+    sbInstr = sb_append_cstr(sbInstr, byte~(&"  "[0]));
+    sbInstr = sb_append_string(sbInstr, tmpName);
+    sbInstr = sb_append_cstr(sbInstr, byte~(&" = sub i32 0, "[0]));
+    sbInstr = sb_append_string(sbInstr, inner.value);
+    sbInstr = sb_append_byte(sbInstr, byte(10));
+    return ExprCodegenResult{sb_to_string(sbInstr), tmpName, 0};
   }
   if (n.kind == NODE_VARIABLE) {
     var name = cg_tok_string(pmr.tokens, pmr.src, n.a);
     var idx = cg_match_param(paramNames, name);
-    if (idx == -1) { return ExprCodegenResult{name, 1}; }
+    if (idx == -1) { return ExprCodegenResult{String{pmr.src, 0}, name, 1}; }
     var sbVar = sb_new();
     sbVar = sb_append_byte(sbVar, byte(37)); // '%'
     sbVar = sb_append_cstr(sbVar, byte~(&"p"[0]));
     sbVar = sb_append_int(sbVar, idx);
-    return ExprCodegenResult{sb_to_string(sbVar), 0};
+    return ExprCodegenResult{String{pmr.src, 0}, sb_to_string(sbVar), 0};
+  }
+  if (n.kind == NODE_BINARY) {
+    var left = cg_expr(pmr, n.a, paramNames, tmp);
+    if (left.err == 1) { return left; }
+    var right = cg_expr(pmr, n.b, paramNames, tmp);
+    if (right.err == 1) { return right; }
+    var opTok = cg_tok_string(pmr.tokens, pmr.src, n.c);
+    var op = opTok;
+    var tmpName2 = cg_fresh_tmp(tmp);
+    var sbInstr2 = sb_new();
+    sbInstr2 = sb_append_string(sbInstr2, left.instr);
+    sbInstr2 = sb_append_string(sbInstr2, right.instr);
+    sbInstr2 = sb_append_cstr(sbInstr2, byte~(&"  "[0]));
+    sbInstr2 = sb_append_string(sbInstr2, tmpName2);
+    // Map operator to LLVM mnemonic (limited set)
+    if (op.length == 1 && (op.data)~ == byte(43)) { // '+'
+      sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = add i32 "[0]));
+    } else if (op.length == 1 && (op.data)~ == byte(45)) { // '-'
+      sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = sub i32 "[0]));
+    } else if (op.length == 1 && (op.data)~ == byte(42)) { // '*'
+      sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = mul i32 "[0]));
+    } else if (op.length == 1 && (op.data)~ == byte(47)) { // '/'
+      sbInstr2 = sb_append_cstr(sbInstr2, byte~(&" = sdiv i32 "[0]));
+    } else {
+      return ExprCodegenResult{sb_to_string(sbInstr2), tmpName2, 1};
+    }
+    sbInstr2 = sb_append_string(sbInstr2, left.value);
+    sbInstr2 = sb_append_cstr(sbInstr2, byte~(&", "[0]));
+    sbInstr2 = sb_append_string(sbInstr2, right.value);
+    sbInstr2 = sb_append_byte(sbInstr2, byte(10));
+    return ExprCodegenResult{sb_to_string(sbInstr2), tmpName2, 0};
   }
   // Unsupported expression kinds for now.
-  return ExprCodegenResult{String{pmr.src, 0}, 1};
+  return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, 1};
 }
 
 // Generate LLVM IR for a single function node.
@@ -96,6 +149,7 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
   var name = tok_string(pmr.tokens, fn.c, pmr.src);
 
   var paramNames = cg_collect_param_names(pmr, fn);
+  var tmp int = 0;
 
   var sb = sb_new();
   // Function header
@@ -159,12 +213,13 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
         emittedRet = 1;
         break;
       }
-      var exprRes = cg_expr(pmr, stmt.a, paramNames);
+      var exprRes = cg_expr(pmr, stmt.a, paramNames, &tmp);
       if (exprRes.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
+      sb = sb_append_string(sb, exprRes.instr);
       sb = sb_append_cstr(sb, byte~(&"  ret "[0]));
       sb = sb_append_string(sb, retTy);
       sb = sb_append_byte(sb, byte(32));
-      sb = sb_append_string(sb, exprRes.text);
+      sb = sb_append_string(sb, exprRes.value);
       sb = sb_append_byte(sb, byte(10));
       emittedRet = 1;
       break;
