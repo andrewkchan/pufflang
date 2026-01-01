@@ -7,8 +7,8 @@
   - Language/features: bitwise ops, ++/--, unary ops, ternary, switch, function overloading (arity, defaults), default args, UTF-8 strings, pointer differencing (Stage0), import/export parsing, internal linkage for non-exported symbols.
   - Runtime/I/O: libc-backed builtins (__malloc__/__free__/__exit__/__putchar__/__write__/__read__/__open__/__close__/__sqrt__) with stdin/stdout/file round-trip tests; harness can feed stdin.
   - Stdlib growth: generic Vec/VecInt/VecByte, String helpers (eq/starts_with/clone/index_of/contains/slice/trim), StringBuilder helpers (clear/append cstr/int/hex), argv/env/time wrappers, Map<int,int>, MapStr (string->int), VecStr, String interner utilities, file helpers; new regression suites cover these.
-  - Stage1 progress: expression ASTs merge into `parser_full` arenas; added typed metadata (type spans + TypeEnv-backed ids) via `module_type_ids` and accessors. Resolver now consumes parsed type metadata to seed scopes (functions/vars/structs) while keeping return enforcement relaxed for void functions. Driver and parser_full tests validate typed summaries. Initial Stage1 LLVM IR codegen supports literals, unary/binary arithmetic (incl. bitwise/shift/comparison), calls, parameter SSA, len() on string literals, deref/index for byte pointers, boolean/byte widening to i32, and pointer mapping to i8* for params/returns. Helper modules (`types.puff`, `typeenv.puff`, `structlayout.puff`, `typerules.puff`, `literaltypes.puff`, `exprtypes.puff`, `typeparse.puff`) remain the basis for fuller type-aware resolution/codegen. Pointer arithmetic/equality is intentionally not yet emitted to keep the bundle stable.
-- Remaining (Phases 3 tail/4–6): enable true overload support + types/defaults/import/export resolution in Stage1, extend Stage1 LLVM codegen (globals, structs, string/array literals, pointer arithmetic/equality) and CLI, then wire the bootstrap pipeline (Stage0 → Stage1 → Stage2).
+  - Stage1 progress: expression ASTs merge into `parser_full` arenas; typed metadata (type spans + TypeEnv-backed ids) via `module_type_ids`. Resolver seeds scopes with typed functions/vars/structs and enforces returns; harnesses fixed to pass raw bytes (no JSON escaping) and proper lengths. Stage1 LLVM IR codegen now covers literals (int/bool/byte, char), string literal constant pool (@.str.*) with GEP accessors, unary/binary arithmetic incl. bitwise/shift/comparison, logical short-circuit (phi), ternary (phi), calls, parameter allocas/SSA, locals/assignments, if/while/for with break/continue, pointer arithmetic/equality, deref/index for byte pointers returning GEP pointers, len() on string literals, and globals (int/bool/byte/string) with correct types. Helper modules (`types.puff`, `typeenv.puff`, `structlayout.puff`, `typerules.puff`, `literaltypes.puff`, `exprtypes.puff`, `typeparse.puff`) remain the basis for fuller type-aware resolution/codegen.
+- Remaining (Phases 3 tail/4–6): complete struct/array literal codegen, dot field loads/stores, full import/export/defaults/overload resolution in Stage1, CLI, then bootstrap pipeline (Stage0 → Stage1 → Stage2) and documentation polish.
 
 ## Language extensions and semantics notes
 - Overloading & defaults: Functions overload by arity/types; arity is mangled (`foo__2`); default args supported. Exports with a single overload keep the unmangled name; overloads stay mangled but are `external`.
@@ -36,7 +36,7 @@
 - Scanner tokens: Added support for commas, `=`, arithmetic ops (+, -, *, /) to enable richer Stage1 parsing paths.
 
 ## How to run tests
-- Full suite: `npm test` (currently 132 suites / 275 tests)
+- Full suite: `npm test` (currently 143 suites / 300 tests)
 
 ## Notes
 - Builtin names are double-underscore prefixed and map to libc where relevant.
