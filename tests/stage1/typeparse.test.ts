@@ -122,6 +122,17 @@ def main() {
   __putchar__(32);
   print_int(tokRes.next);
   __putchar__(10);
+
+  // function type parsing
+  var fnSrc = "(int, byte) float";
+  var fnRes = parse_fn_types(env, byte~(&fnSrc[0]), len(fnSrc));
+  var p = 0;
+  while (p < fnRes.params.length) {
+    print_int(vecint_get(fnRes.params, p));
+    __putchar__(32);
+    p = p + 1;
+  }
+  print_int(fnRes.ret); __putchar__(32); print_int(fnRes.err); __putchar__(10);
 }
 `
   return compileAndRunWithStdlib(body)
@@ -174,5 +185,9 @@ describe("Stage1 type parser", () => {
     const tokLine = lines[idStart + expectedIds.length + 2]
     // expect: "5 <ptr_or_byte_id> 0 <terminator_idx>" (ids int, ptr/byte, err=0, next index of ')')
     expect(tokLine.trim()).toMatch(/^5 [0-9]+ 0 [0-9]+$/)
+
+    const fnLine = lines[idStart + expectedIds.length + 3]
+    // params int + byte, ret float, err 0
+    expect(fnLine.trim()).toMatch(/^5 [0-9]+ 4 0$/)
   })
 })

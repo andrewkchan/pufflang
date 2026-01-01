@@ -40,6 +40,7 @@ struct TypeParseResult { ok int, next int, out String }
 struct TypeParseIdResult { env TypeEnv, next int, typeId int, err int }
 struct ParamTypesResult { env TypeEnv, ids VecInt, err int }
 struct ParamTypesTokResult { env TypeEnv, ids VecInt, next int, err int }
+struct FnTypesResult { env TypeEnv, params VecInt, ret int, err int }
 
 def wrap_ptr(inner String) String {
   var sb = sb_new();
@@ -236,5 +237,26 @@ def parse_param_types_tokens(env TypeEnv, tokens Vec, src byte~, idx int, termin
     return ParamTypesTokResult{curEnv, ids, i, 1};
   }
   return ParamTypesTokResult{curEnv, ids, i, 1};
+}
+
+// Parse a function type signature of the form "(<params>) <returnType>" where
+// params are comma-separated type literals. Return type is optional; when
+// absent, ret = -1 and err = 1.
+def parse_fn_types(env TypeEnv, src byte~, n int) FnTypesResult {
+  var toks = scan_tokens(src, n);
+  if (token_kind_at(toks, 0) != TOKEN_LEFT_PAREN) { return FnTypesResult{env, vecint_new(0), -1, 1}; }
+  var params = parse_param_types_tokens(env, toks, src, 1, TOKEN_RIGHT_PAREN);
+  if (params.err == 1) { return FnTypesResult{params.env, params.ids, -1, 1}; }
+  var idx = params.next;
+  if (token_kind_at(toks, idx) != TOKEN_RIGHT_PAREN) { return FnTypesResult{params.env, params.ids, -1, 1}; }
+  idx = idx + 1;
+  // optional return type
+  if (token_kind_at(toks, idx) == TOKEN_EOF) {
+    return FnTypesResult{params.env, params.ids, -1, 1};
+  }
+  var retRes = parse_type_id(params.env, toks, src, idx);
+  if (retRes.err == 1) { return FnTypesResult{retRes.env, params.ids, -1, 1}; }
+  if (token_kind_at(toks, retRes.next) != TOKEN_EOF) { return FnTypesResult{retRes.env, params.ids, -1, 1}; }
+  return FnTypesResult{retRes.env, params.ids, retRes.typeId, 0};
 }
 
