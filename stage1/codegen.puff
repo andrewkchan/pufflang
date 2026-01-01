@@ -263,6 +263,11 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     var rInstr = right.instr;
     var lVal = left.value;
     var rVal = right.value;
+    var opTok = cg_tok_string(pmr.tokens, pmr.src, n.c);
+    // Pointer ops unsupported beyond deref/index; bail if either side is pointer.
+    if (cg_is_pointer_type(lTy) == 1 || cg_is_pointer_type(rTy) == 1) {
+      return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
+    }
     if (cg_str_eq(lTy, rTy) == 0) {
       // widen i1 to i32 when mixed with ints
       if (cg_str_eq(lTy, String{byte~(&"i1"[0]), 2}) == 1 && cg_str_eq(rTy, String{byte~(&"i32"[0]), 3}) == 1) {
@@ -295,7 +300,6 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
         return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
       }
     }
-    var opTok = cg_tok_string(pmr.tokens, pmr.src, n.c);
     var op = opTok;
     var tmpName2 = cg_fresh_tmp(tmp);
     var sbInstr2 = sb_new();
