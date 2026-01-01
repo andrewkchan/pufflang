@@ -494,10 +494,22 @@ def resolve_function(ctx ResolveCtx, fn Node) ResolveCtx {
   return r;
 }
 
+def vecint_find(v VecInt, target int) int {
+  var i = 0;
+  while (i < v.length) {
+    if (vecint_get(v, i) == target) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 // Main AST-based module resolver.
 def resolve_module_ast(src byte~, n int) int {
   var pmr = parse_module_source(src, n);
   if (pmr.err != 0) { return 0; }
+
+  var tm = module_type_ids(pmr);
+  if (tm.err == 1) { return 0; }
 
   // Precompute ranges for function bodies to separate global scope definitions.
   var fnStarts = vecint_new(4);
@@ -514,7 +526,7 @@ def resolve_module_ast(src byte~, n int) int {
   }
 
   var scope = scope_new_root();
-  var types = typetable_new();
+  var types = tm.env.tt;
 
   // First pass: define globals (vars, structs, functions) outside function bodies.
   i = 0;
@@ -523,17 +535,26 @@ def resolve_module_ast(src byte~, n int) int {
     var n0 = nodearena_get(pmr.arena, i);
     if (n0.kind == NODE_VAR_STMT) {
       var name = tok_str(pmr.tokens, n0.a, pmr.src);
-      var resVar = scope_define_var(scope, name, -1);
+      var vi = vecint_find(pmr.meta.varNodeIndex, i);
+      var vtid = -1;
+      if (vi != -1 && vi < tm.varTypeIds.length) { vtid = vecint_get(tm.varTypeIds, vi); }
+      var resVar = scope_define_var(scope, name, vtid);
       if (resVar.err != 0) { return 0; }
       scope = resVar.scope;
     } else if (n0.kind == NODE_STRUCT_DECL) {
       var nameS = tok_str(pmr.tokens, n0.c, pmr.src);
-      var resS = scope_define_struct(scope, nameS, -1);
+      var si = vecint_find(pmr.meta.structNodeIndex, i);
+      var stid = -1;
+      if (si != -1 && si < tm.structTypeIds.length) { stid = vecint_get(tm.structTypeIds, si); }
+      var resS = scope_define_struct(scope, nameS, stid);
       if (resS.err != 0) { return 0; }
       scope = resS.scope;
     } else if (n0.kind == NODE_FUNCTION) {
       var nameF = tok_str(pmr.tokens, n0.c, pmr.src);
-      var resF = scope_define_function(scope, nameF, n0.d, -1, n0.value, n0.typeId);
+      var fi = vecint_find(pmr.meta.fnNodeIndex, i);
+      var retId = -1;
+      if (fi != -1 && fi < tm.fnReturnTypeId.length) { retId = vecint_get(tm.fnReturnTypeId, fi); }
+      var resF = scope_define_function(scope, nameF, n0.d, retId, n0.value, n0.typeId);
       if (resF.err != 0) { return 0; }
       scope = resF.scope;
     }
