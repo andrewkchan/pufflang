@@ -168,4 +168,16 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     expect(irRes.status).toBe(0)
     expect(irRes.stdout).toContain("load i8, i8* %p0")
   })
+
+  it("emits i8 arithmetic for byte parameters and widens on return", () => {
+    const program = `
+      def addb(a byte, b byte) byte { return a + b; }
+      def main() int { return addb(1, 2); }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    expect(irRes.stdout).toContain("add i8 %p0, %p1")
+    const bin = runRawIR(irRes.stdout)
+    expect(bin.status).toBe(3)
+  })
 })
