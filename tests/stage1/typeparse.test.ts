@@ -4,9 +4,12 @@ import { compileAndRunWithStdlib } from "../../src/harness"
 
 const typeparseSrc = fs.readFileSync(path.join(__dirname, "..", "..", "stage1", "typeparse.puff"), "utf8")
 const scannerSrc = fs.readFileSync(path.join(__dirname, "..", "..", "stage1", "scanner.puff"), "utf8")
+const typesSrc = fs.readFileSync(path.join(__dirname, "..", "..", "stage1", "types.puff"), "utf8")
+const structLayoutSrc = fs.readFileSync(path.join(__dirname, "..", "..", "stage1", "structlayout.puff"), "utf8")
+const typeEnvSrc = fs.readFileSync(path.join(__dirname, "..", "..", "stage1", "typeenv.puff"), "utf8")
 
 function run() {
-  const samples = [
+  const samplesStr = [
     "int",
     "byte",
     "Foo",
@@ -19,9 +22,39 @@ function run() {
     "len", // invalid
     "[int;x]" // invalid
   ]
+  const samplesId = [
+    "int",
+    "byte",
+    "int~",
+    "int~~",
+    "[byte;2]",
+    "[int;3]~",
+    "float",
+    "void",
+    "len" // invalid
+  ]
   const body = `
 ${scannerSrc}
+${typesSrc}
+${structLayoutSrc}
+${typeEnvSrc}
 ${typeparseSrc}
+
+def print_int(x int) {
+  if (x == 0) { __putchar__(48); return; }
+  var n = x;
+  var buf = vecbyte_new(16);
+  if (n < 0) { __putchar__(45); n = 0 - n; }
+  while (n > 0) {
+    buf = vecbyte_push(buf, byte(48 + (n % 10)));
+    n = n / 10;
+  }
+  var i = buf.length - 1;
+  while (i >= 0) {
+    __putchar__(int((buf.data + i)~));
+    i = i - 1;
+  }
+}
 
 def print_str(s String) {
   var i = 0;
@@ -33,12 +66,26 @@ def print_str(s String) {
 }
 
 def main() {
-  ${samples
+  ${samplesStr
     .map((s, i) => {
       const lit = JSON.stringify(s)
       return `
   var s${i} = ${lit};
   print_str(parse_type_to_string(byte~(&s${i}[0]), len(s${i})));
+`
+    })
+    .join("")}
+
+  // type ids
+  var env = typeenv_new();
+  ${samplesId
+    .map((s, i) => {
+      const lit = JSON.stringify(s)
+      return `
+  var t${i} = ${lit};
+  var res${i} = parse_type_to_id(env, byte~(&t${i}[0]), len(t${i}));
+  env = res${i}.env;
+  print_int(res${i}.err); __putchar__(58); print_int(res${i}.typeId); __putchar__(10);
 `
     })
     .join("")}
@@ -66,7 +113,22 @@ describe("Stage1 type parser", () => {
       "" // invalid
     ]
     const lines = res.stdout.split("\n")
-    if (lines.length > 0 && lines[lines.length - 1] === "") { lines.pop() }
-    expect(lines).toEqual(expected)
+    // first block: strings (11 lines including two invalid blanks)
+    const typeStrLines = lines.slice(0, expected.length)
+    expect(typeStrLines).toEqual(expected)
+
+    const expectedIds = [
+      "0:5",  // int
+      "0:2",  // byte
+      "0:9",  // int pointer (ids grow as we allocate)
+      "0:11", // ptr to ptr
+      "0:12", // array byte[2]
+      "0:14", // ptr to array
+      "0:4",  // float
+      "0:8",  // void
+      "1:-1"  // invalid
+    ]
+    const idLines = lines.slice(expected.length, expected.length + expectedIds.length)
+    expect(idLines).toEqual(expectedIds)
   })
 })
