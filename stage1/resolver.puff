@@ -215,7 +215,18 @@ def resolve_module_tokens(src byte~, n int) int {
 // AST-based resolver (parse_full + expression AST)
 // ------------------------------------------------------------
 
-struct ResolveCtx { arena NodeArena, tokens Vec, src byte~, scope Scope, types TypeTable, tm TypeModuleTypes, err int, hasReturn int }
+struct ResolveCtx {
+  arena NodeArena,
+  tokens Vec,
+  src byte~,
+  scope Scope,
+  types TypeTable,
+  tm TypeModuleTypes,
+  currentFnIdx int,
+  currentRetType int,
+  err int,
+  hasReturn int
+}
 
 def tok_str(tokens Vec, idx int, src byte~) String {
   if (idx < 0 || idx >= tokens.length) { return String{src, 0}; }
@@ -486,7 +497,9 @@ def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
     idx = idx + 1;
   }
   var bodyIdx = fn.a;
-  var fnCtx = ResolveCtx{r.arena, r.tokens, r.src, fnScope, r.types, r.tm, 0, 0};
+  var retType = -1;
+  if (fi != -1) { retType = tm_fn_return_type(r.tm, fi); }
+  var fnCtx = ResolveCtx{r.arena, r.tokens, r.src, fnScope, r.types, r.tm, fi, retType, 0, 0};
   if (bodyIdx != -1) {
     fnCtx = resolve_block_nodes(fnCtx, bodyIdx, 0);
   }
@@ -563,7 +576,7 @@ def resolve_module_ast(src byte~, n int) int {
     i = i + 1;
   }
   // Resolve global initializers (outside function bodies).
-  var ctx = ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, types, tm, 0, 0};
+  var ctx = ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, types, tm, -1, -1, 0, 0};
   i = 0;
   while (i < pmr.arena.nodes.length && ctx.err == 0) {
     if (range_contains(fnStarts, fnEnds, i) == 1) { i = i + 1; continue; }
