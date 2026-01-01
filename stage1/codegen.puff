@@ -20,8 +20,6 @@ def cg_llvm_type(tt TypeTable, typeId int) String {
   if (t.category == TYPECATEGORY_VOID) { return String{byte~(&"void"[0]), 4}; }
   if (t.category == TYPECATEGORY_FLOAT) { return String{byte~(&"float"[0]), 5}; }
   if (t.category == TYPECATEGORY_POINTER) { return String{byte~(&"i8*"[0]), 3}; }
-  if (t.category == TYPECATEGORY_ARRAY) { return String{byte~(&"i8*"[0]), 3}; }
-  if (t.category == TYPECATEGORY_STRUCT) { return String{byte~(&"i8*"[0]), 3}; }
   // Fallback to i32 for unknown/unsupported types.
   return String{byte~(&"i32"[0]), 3};
 }
@@ -340,25 +338,6 @@ def cg_find_fn_index(pmr ParseModuleResult, tm TypeModuleTypes, name String) int
     var fnNode = nodearena_get(pmr.arena, fnIdx);
     var fnName = tok_string(pmr.tokens, fnNode.c, pmr.src);
     if (str_eq(fnName.data, fnName.length, name.data, name.length) == 1) { return i; }
-    i = i + 1;
-  }
-  return -1;
-}
-
-def cg_struct_index_for_type(tm TypeModuleTypes, typeId int) int {
-  return tm_struct_index_for_type(tm, typeId);
-}
-
-def cg_struct_field_index_by_name(tm TypeModuleTypes, structIdx int, tokens Vec, src byte~, nameTok int) int {
-  if (structIdx < 0 || structIdx >= tm.structFieldNameStart.length) { return -1; }
-  var start = vecint_get(tm.structFieldNameStart, structIdx);
-  var count = vecint_get(tm.structFieldCount, structIdx);
-  var i = 0;
-  while (i < count) {
-    var tokIdx = vecint_get(tm.structFieldNames, start + i);
-    var fname = tok_string(tokens, tokIdx, src);
-    var target = tok_string(tokens, nameTok, src);
-    if (str_eq(fname.data, fname.length, target.data, target.length) == 1) { return i; }
     i = i + 1;
   }
   return -1;
@@ -1089,73 +1068,6 @@ def cg_expr(
     sbGep = sb_append_string(sbGep, idx32.value);
     sbGep = sb_append_byte(sbGep, byte(10));
     return ExprCodegenResult{sb_to_string(sbGep), tmpGep, basePtrTy, 0};
-  }
-  if (n.kind == NODE_DOT) {
-    var base = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
-    if (base.err == 1) { return base; }
-    if (cg_is_pointer_type(base.valTy) == 0) { return ExprCodegenResult{base.instr, base.value, base.valTy, 1}; }
-    var structTypeId = nodearena_get(pmr.arena, n.a).typeId;
-    var baseType = typetable_get(tm.env.tt, structTypeId);
-    if (baseType.category == TYPECATEGORY_POINTER) {
-      structTypeId = baseType.element;
-      baseType = typetable_get(tm.env.tt, structTypeId);
-    }
-    if (baseType.category != TYPECATEGORY_STRUCT) { structTypeId = -1; }
-    var sIdx = cg_struct_index_for_type(tm, structTypeId);
-    if (sIdx == -1) { sIdx = 0; }
-    var fIdx = cg_struct_field_index_by_name(tm, sIdx, pmr.tokens, pmr.src, n.b);
-    if (fIdx == -1) { fIdx = 0; }
-    var fTypeId = tm_struct_field_type(tm, sIdx, fIdx);
-    if (fTypeId == -1) { fTypeId = 5; } // default int
-    var fTy = cg_llvm_type(tm.env.tt, fTypeId);
-    var offset = tm_struct_field_offset(tm, sIdx, fIdx);
-    if (offset == -1) { offset = 0; }
-    var sb = sb_new();
-    sb = sb_append_string(sb, base.instr);
-    var ptrVal = base.value;
-    var ptrTy = base.valTy;
-    if (!(ptrTy.length == 3 && (ptrTy.data)~ == byte(105) && (ptrTy.data + 1)~ == byte(56) && (ptrTy.data + 2)~ == byte(42))) {
-      var tmpCast = cg_fresh_tmp(tmp);
-      sb = sb_append_cstr(sb, byte~(&"  "[0]));
-      sb = sb_append_string(sb, tmpCast);
-      sb = sb_append_cstr(sb, byte~(&" = bitcast "[0]));
-      sb = sb_append_string(sb, ptrTy);
-      sb = sb_append_byte(sb, byte(32));
-      sb = sb_append_string(sb, ptrVal);
-      sb = sb_append_cstr(sb, byte~(&" to i8*"[0]));
-      sb = sb_append_byte(sb, byte(10));
-      ptrVal = tmpCast;
-      ptrTy = String{byte~(&"i8*"[0]), 3};
-    }
-    var tmpGep = cg_fresh_tmp(tmp);
-    sb = sb_append_cstr(sb, byte~(&"  "[0]));
-    sb = sb_append_string(sb, tmpGep);
-    sb = sb_append_cstr(sb, byte~(&" = getelementptr i8, i8* "[0]));
-    sb = sb_append_string(sb, ptrVal);
-    sb = sb_append_cstr(sb, byte~(&", i32 "[0]));
-    sb = sb_append_int(sb, offset);
-    sb = sb_append_byte(sb, byte(10));
-    var tmpCastPtr = cg_fresh_tmp(tmp);
-    sb = sb_append_cstr(sb, byte~(&"  "[0]));
-    sb = sb_append_string(sb, tmpCastPtr);
-    sb = sb_append_cstr(sb, byte~(&" = bitcast i8* "[0]));
-    sb = sb_append_string(sb, tmpGep);
-    sb = sb_append_cstr(sb, byte~(&" to "[0]));
-    sb = sb_append_string(sb, fTy);
-    sb = sb_append_byte(sb, byte(42));
-    sb = sb_append_byte(sb, byte(10));
-    var tmpLoad = cg_fresh_tmp(tmp);
-    sb = sb_append_cstr(sb, byte~(&"  "[0]));
-    sb = sb_append_string(sb, tmpLoad);
-    sb = sb_append_cstr(sb, byte~(&" = load "[0]));
-    sb = sb_append_string(sb, fTy);
-    sb = sb_append_cstr(sb, byte~(&", "[0]));
-    sb = sb_append_string(sb, fTy);
-    sb = sb_append_byte(sb, byte(42));
-    sb = sb_append_byte(sb, byte(32));
-    sb = sb_append_string(sb, tmpCastPtr);
-    sb = sb_append_byte(sb, byte(10));
-    return ExprCodegenResult{sb_to_string(sb), tmpLoad, fTy, 0};
   }
   if (n.kind == NODE_LEN) {
     var target = nodearena_get(pmr.arena, n.a);
