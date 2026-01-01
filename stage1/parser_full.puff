@@ -983,6 +983,18 @@ def tm_fn_param_type(tm TypeModuleTypes, fnIdx int, paramIdx int) int {
   return vecint_get(tm.paramTypeIds, start + paramIdx);
 }
 
+// Return the param start offset for a function (or -1 if invalid).
+def tm_fn_param_type_start(tm TypeModuleTypes, fnIdx int) int {
+  if (fnIdx < 0 || fnIdx >= tm.fnParamTypeStart.length) { return -1; }
+  return vecint_get(tm.fnParamTypeStart, fnIdx);
+}
+
+// Return the parameter count for a function (or -1 if invalid).
+def tm_fn_param_count(tm TypeModuleTypes, fnIdx int) int {
+  if (fnIdx < 0 || fnIdx >= tm.fnParamCount.length) { return -1; }
+  return vecint_get(tm.fnParamCount, fnIdx);
+}
+
 def tm_fn_return_type(tm TypeModuleTypes, fnIdx int) int {
   if (fnIdx < 0 || fnIdx >= tm.fnReturnTypeId.length) { return -1; }
   return vecint_get(tm.fnReturnTypeId, fnIdx);

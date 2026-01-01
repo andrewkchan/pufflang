@@ -17,3 +17,15 @@ def compile_simple2(src byte~, n int) int {
   if (resolved == 0) { return 0; }
   return codegen_simple(resolved);
 }
+
+// Full compile that returns textual LLVM IR (minimal subset for now).
+// On error, returns empty string.
+def compile_to_ir(src byte~, n int) String {
+  var pmr = parse_module_source(src, n);
+  if (pmr.err != 0) { return String{src, 0}; }
+  var resolved = resolve_module_ast(src, n);
+  if (resolved == 0) { return String{src, 0}; }
+  var tm = module_type_ids(pmr);
+  if (tm.err == 1) { return String{src, 0}; }
+  return codegen_module(pmr, tm);
+}
