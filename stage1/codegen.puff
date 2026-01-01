@@ -173,6 +173,29 @@ def cg_coerce(val ExprCodegenResult, targetTy String, tmp int~) ExprCodegenResul
   return ExprCodegenResult{val.instr, val.value, val.valTy, 1};
 }
 
+// Store a value into a slot of given element type.
+def cg_store(ptr String, elemTy String, val ExprCodegenResult, tmp int~) ExprCodegenResult {
+  var et = elemTy;
+  if (et.length == 0) {
+    if (val.valTy.length > 0) { et = val.valTy; }
+    else { et = String{byte~(&"i32"[0]), 3}; }
+  }
+  var coerced = cg_coerce(val, elemTy, tmp);
+  if (coerced.err == 1) { return coerced; }
+  var sb = sb_new();
+  sb = sb_append_string(sb, coerced.instr);
+  sb = sb_append_cstr(sb, byte~(&"  store "[0]));
+  sb = sb_append_string(sb, et);
+  sb = sb_append_byte(sb, byte(32));
+  sb = sb_append_string(sb, coerced.value);
+  sb = sb_append_cstr(sb, byte~(&", "[0]));
+  sb = sb_append_string(sb, et);
+  sb = sb_append_cstr(sb, byte~(&"* "[0]));
+  sb = sb_append_string(sb, ptr);
+  sb = sb_append_byte(sb, byte(10));
+  return ExprCodegenResult{sb_to_string(sb), coerced.value, et, 0};
+}
+
 // Collect parameter names from function tokens (best-effort).
 def cg_collect_param_names(pmr ParseModuleResult, fn Node) VecStr {
   var names = vecstr_new(4);
@@ -935,7 +958,49 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
   var i = start;
   while (i < end) {
     var stmt = nodearena_get(pmr.arena, i);
-    if (stmt.kind == NODE_RETURN) {
+    if (stmt.kind == NODE_VAR_STMT) {
+      var vname = tok_string(pmr.tokens, stmt.a, pmr.src);
+      var vtid = tm_var_type_by_node(tm, i);
+      var vty = String{byte~(&"i32"[0]), 3};
+      if (vtid != -1) { vty = cg_llvm_type(tm.env.tt, vtid); }
+      var initRes = cg_expr(pmr, tm, stmt.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, &tmp);
+      if (initRes.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
+      var slot = cg_fresh_tmp(&tmp);
+      // alloca
+      sbBody = sb_append_cstr(sbBody, byte~(&"  "[0]));
+      sbBody = sb_append_string(sbBody, slot);
+      sbBody = sb_append_cstr(sbBody, byte~(&" = alloca "[0]));
+      sbBody = sb_append_string(sbBody, vty);
+      sbBody = sb_append_byte(sbBody, byte(10));
+      // store init
+      var storeRes = cg_store(slot, vty, initRes, &tmp);
+      if (storeRes.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
+      sbBody = sb_append_string(sbBody, storeRes.instr);
+      localNames = vecstr_push(localNames, vname);
+      localPtrs = vecstr_push(localPtrs, slot);
+      localTypes = vecstr_push(localTypes, vty);
+    } else if (stmt.kind == NODE_ASSIGN) {
+      var aname = tok_string(pmr.tokens, stmt.a, pmr.src);
+      var slotPtr = String{pmr.src, 0};
+      var slotTy = String{pmr.src, 0};
+      var li2 = cg_find_name(localNames, aname);
+      if (li2 != -1) {
+        slotPtr = vecstr_get(localPtrs, li2);
+        slotTy = vecstr_get(localTypes, li2);
+      } else {
+        var pi2 = cg_match_param(paramNames, aname);
+        if (pi2 != -1) {
+          slotPtr = vecstr_get(paramSlots, pi2);
+          slotTy = vecstr_get(paramSlotTypes, pi2);
+        }
+      }
+      if (slotPtr.length == 0 || slotTy.length == 0) { return FnCodegenResult{sb_to_string(sb), 1}; }
+      var rhs = cg_expr(pmr, tm, stmt.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, &tmp);
+      if (rhs.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
+      var storeRes2 = cg_store(slotPtr, slotTy, rhs, &tmp);
+      if (storeRes2.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
+      sbBody = sb_append_string(sbBody, storeRes2.instr);
+    } else if (stmt.kind == NODE_RETURN) {
       if (retTy.length == 4 && (retTy.data)~ == byte(118)) { // "void"
         sbBody = sb_append_cstr(sbBody, byte~(&"  ret void"[0]));
         sbBody = sb_append_byte(sbBody, byte(10));
