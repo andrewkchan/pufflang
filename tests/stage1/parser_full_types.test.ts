@@ -155,6 +155,14 @@ def main() {
   print_str(type_id_to_string(typed.env.tt, typed.env.structSizes, vecint_get(typed.structFieldTypeIds, pairStart)));
   print_str(type_id_to_string(typed.env.tt, typed.env.structSizes, vecint_get(typed.structFieldTypeIds, pairStart + 1)));
 
+  // helper accessors
+  print_str(type_id_to_string(typed.env.tt, typed.env.structSizes, tm_fn_param_type(typed, 0, 0)));
+  print_str(type_id_to_string(typed.env.tt, typed.env.structSizes, tm_fn_param_type(typed, 0, 1)));
+  print_str(type_id_to_string(typed.env.tt, typed.env.structSizes, tm_fn_return_type(typed, 0)));
+  print_str(type_id_to_string(typed.env.tt, typed.env.structSizes, tm_var_type(typed, 0)));
+  print_str(type_id_to_string(typed.env.tt, typed.env.structSizes, tm_struct_type(typed, 0)));
+  print_str(type_id_to_string(typed.env.tt, typed.env.structSizes, tm_struct_field_type(typed, 0, 1)));
+
   print_str(module_counts(res));
   print_str(module_type_summary(res));
 }
@@ -189,7 +197,7 @@ describe("Stage1 parser_full types and defaults", () => {
       "1:-1",
       expect.stringMatching(/^5 5 [0-9]+ 4 0$/),
       "1",
-      expect.stringMatching(/^5 [0-9]+ 4 0$/),
+      expect.stringMatching(/^5 2 4 0$/),
       "0:8",
       "int",
       "byte",
@@ -204,6 +212,12 @@ describe("Stage1 parser_full types and defaults", () => {
       "byte",
       "int",
       "int",
+      "(array 4 byte)",
+      "int",
+      "(array 2 byte)",
+      "float",
+      "byte",
+      "(struct 0)",
       "(array 4 byte)",
       "funcs=3 imports=1 exports=1 structs=1 vars=2",
       "fn foo params=int,(array 2 byte)=default ret=float export=1 import=0",

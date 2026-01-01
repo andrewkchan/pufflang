@@ -948,6 +948,38 @@ def module_type_ids(res ParseModuleResult) TypeModuleTypes {
   return TypeModuleTypes{env, fnParamTypeStart, fnParamCount, fnReturnTypeId, paramTypeIds, varTypeIds, structFieldTypeStart, structFieldCount, structFieldTypeIds, structTypeIds, err};
 }
 
+// Helpers to query ids with bounds checks (return -1 on invalid).
+def tm_fn_param_type(tm TypeModuleTypes, fnIdx int, paramIdx int) int {
+  if (fnIdx < 0 || fnIdx >= tm.fnParamTypeStart.length) { return -1; }
+  var start = vecint_get(tm.fnParamTypeStart, fnIdx);
+  var count = vecint_get(tm.fnParamCount, fnIdx);
+  if (paramIdx < 0 || paramIdx >= count) { return -1; }
+  return vecint_get(tm.paramTypeIds, start + paramIdx);
+}
+
+def tm_fn_return_type(tm TypeModuleTypes, fnIdx int) int {
+  if (fnIdx < 0 || fnIdx >= tm.fnReturnTypeId.length) { return -1; }
+  return vecint_get(tm.fnReturnTypeId, fnIdx);
+}
+
+def tm_var_type(tm TypeModuleTypes, varIdx int) int {
+  if (varIdx < 0 || varIdx >= tm.varTypeIds.length) { return -1; }
+  return vecint_get(tm.varTypeIds, varIdx);
+}
+
+def tm_struct_type(tm TypeModuleTypes, structIdx int) int {
+  if (structIdx < 0 || structIdx >= tm.structTypeIds.length) { return -1; }
+  return vecint_get(tm.structTypeIds, structIdx);
+}
+
+def tm_struct_field_type(tm TypeModuleTypes, structIdx int, fieldIdx int) int {
+  if (structIdx < 0 || structIdx >= tm.structFieldTypeStart.length) { return -1; }
+  var start = vecint_get(tm.structFieldTypeStart, structIdx);
+  var count = vecint_get(tm.structFieldCount, structIdx);
+  if (fieldIdx < 0 || fieldIdx >= count) { return -1; }
+  return vecint_get(tm.structFieldTypeIds, start + fieldIdx);
+}
+
 // ---- Count helpers ----
 def count_nodes(arena NodeArena, kind int) int {
   var i = 0;
