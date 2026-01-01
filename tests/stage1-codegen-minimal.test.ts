@@ -62,4 +62,25 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     const bin = runRawIR(irRes.stdout)
     expect(bin.status).toBe(5)
   })
+
+  it("supports modulo and bitwise/shift operations", () => {
+    const program = `
+      def main() int { return (5 % 3) + ((5 & 3) << 1); }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    const bin = runRawIR(irRes.stdout)
+    // (5 % 3) = 2, (5&3)=1, <<1 =>2, total 4
+    expect(bin.status).toBe(4)
+  })
+
+  it("widens boolean comparison results when returning int", () => {
+    const program = `
+      def main() int { return 2 == 2; }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    const bin = runRawIR(irRes.stdout)
+    expect(bin.status).toBe(1)
+  })
 })
