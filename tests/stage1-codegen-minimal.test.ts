@@ -148,4 +148,24 @@ describe("Stage1 codegen (minimal LLVM IR)", () => {
     const bin = runRawIR(irRes.stdout)
     expect(bin.status).toBe(0)
   })
+
+  it("emits getelementptr for index on byte pointer", () => {
+    const program = `
+      def idx(p byte~, i int) byte~ { return p[i]; }
+      def main() int { return 0; }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    expect(irRes.stdout).toContain("getelementptr i8, i8* %p0, i32 %p1")
+  })
+
+  it("emits load for deref on byte pointer", () => {
+    const program = `
+      def first(p byte~) byte { return p~; }
+      def main() int { return 0; }
+    `
+    const irRes = runStage1CompileToIr(program)
+    expect(irRes.status).toBe(0)
+    expect(irRes.stdout).toContain("load i8, i8* %p0")
+  })
 })

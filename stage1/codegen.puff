@@ -38,6 +38,56 @@ def cg_str_eq(a String, b String) int {
   return 1;
 }
 
+// Does string end with '*' (pointer type)?
+def cg_is_pointer_type(ty String) int {
+  if (ty.length < 2) { return 0; }
+  if ((ty.data + ty.length - 1)~ == byte(42)) { return 1; }
+  return 0;
+}
+
+// Remove trailing '*' from type string; returns empty on invalid.
+def cg_pointer_elem_ty(ptrTy String) String {
+  if (cg_is_pointer_type(ptrTy) == 0) { return String{ptrTy.data, 0}; }
+  var sb = sb_new();
+  var i = 0;
+  while (i < ptrTy.length - 1) {
+    sb = sb_append_byte(sb, (ptrTy.data + i)~);
+    i = i + 1;
+  }
+  return sb_to_string(sb);
+}
+
+// Ensure an expression is i32; zext from i1/i8.
+def cg_to_i32(res ExprCodegenResult, tmp int~) ExprCodegenResult {
+  if (res.err == 1) { return res; }
+  if (res.valTy.length == 3 && (res.valTy.data)~ == byte(105) && (res.valTy.data + 1)~ == byte(51)) { return res; }
+  if (res.valTy.length == 2 && (res.valTy.data)~ == byte(105) && (res.valTy.data + 1)~ == byte(49)) {
+    var tmpName = cg_fresh_tmp(tmp);
+    var sb = sb_new();
+    sb = sb_append_string(sb, res.instr);
+    sb = sb_append_cstr(sb, byte~(&"  "[0]));
+    sb = sb_append_string(sb, tmpName);
+    sb = sb_append_cstr(sb, byte~(&" = zext i1 "[0]));
+    sb = sb_append_string(sb, res.value);
+    sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
+    sb = sb_append_byte(sb, byte(10));
+    return ExprCodegenResult{sb_to_string(sb), tmpName, String{byte~(&"i32"[0]), 3}, 0};
+  }
+  if (res.valTy.length == 2 && (res.valTy.data)~ == byte(105) && (res.valTy.data + 1)~ == byte(56)) { // i8
+    var tmpName2 = cg_fresh_tmp(tmp);
+    var sb2 = sb_new();
+    sb2 = sb_append_string(sb2, res.instr);
+    sb2 = sb_append_cstr(sb2, byte~(&"  "[0]));
+    sb2 = sb_append_string(sb2, tmpName2);
+    sb2 = sb_append_cstr(sb2, byte~(&" = zext i8 "[0]));
+    sb2 = sb_append_string(sb2, res.value);
+    sb2 = sb_append_cstr(sb2, byte~(&" to i32"[0]));
+    sb2 = sb_append_byte(sb2, byte(10));
+    return ExprCodegenResult{sb_to_string(sb2), tmpName2, String{byte~(&"i32"[0]), 3}, 0};
+  }
+  return res;
+}
+
 // Convert an expression result to i1 (non-short-circuit); appends icmp if needed.
 def cg_to_bool(res ExprCodegenResult, tmp int~) ExprCodegenResult {
   if (res.err == 1) { return res; }
@@ -395,6 +445,75 @@ def cg_expr(pmr ParseModuleResult, tm TypeModuleTypes, exprIdx int, paramNames V
     sbTern = sb_append_byte(sbTern, byte(10));
     return ExprCodegenResult{sb_to_string(sbTern), tmpTern, tyThen, 0};
   }
+  if (n.kind == NODE_DEREF) {
+    var baseRes = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    if (baseRes.err == 1) { return baseRes; }
+    if (cg_is_pointer_type(baseRes.valTy) == 0) { return ExprCodegenResult{baseRes.instr, baseRes.value, String{pmr.src, 0}, 1}; }
+    var elemTy = cg_pointer_elem_ty(baseRes.valTy);
+    if (elemTy.length == 0) { elemTy = String{byte~(&"i8"[0]), 2}; }
+    var tmpLoad = cg_fresh_tmp(tmp);
+    var sbLd = sb_new();
+    sbLd = sb_append_string(sbLd, baseRes.instr);
+    sbLd = sb_append_cstr(sbLd, byte~(&"  "[0]));
+    sbLd = sb_append_string(sbLd, tmpLoad);
+    sbLd = sb_append_cstr(sbLd, byte~(&" = load "[0]));
+    sbLd = sb_append_string(sbLd, elemTy);
+    sbLd = sb_append_cstr(sbLd, byte~(&", "[0]));
+    sbLd = sb_append_string(sbLd, baseRes.valTy);
+    sbLd = sb_append_byte(sbLd, byte(32));
+    sbLd = sb_append_string(sbLd, baseRes.value);
+    sbLd = sb_append_byte(sbLd, byte(10));
+    return ExprCodegenResult{sb_to_string(sbLd), tmpLoad, elemTy, 0};
+  }
+  if (n.kind == NODE_INDEX) {
+    var baseResIdx = cg_expr(pmr, tm, n.a, paramNames, paramTypes, tmp);
+    if (baseResIdx.err == 1) { return baseResIdx; }
+    var idxRes = cg_expr(pmr, tm, n.b, paramNames, paramTypes, tmp);
+    if (idxRes.err == 1) { return idxRes; }
+    if (cg_is_pointer_type(baseResIdx.valTy) == 0) { return ExprCodegenResult{baseResIdx.instr, baseResIdx.value, String{pmr.src, 0}, 1}; }
+    var elemTyIdx = cg_pointer_elem_ty(baseResIdx.valTy);
+    if (elemTyIdx.length == 0) { elemTyIdx = String{byte~(&"i8"[0]), 2}; }
+    var basePtrTy = baseResIdx.valTy;
+    // Ensure index is i32
+    var idx32 = cg_to_i32(idxRes, tmp);
+    if (idx32.err == 1) { return idx32; }
+    // If pointer is not i8*, bitcast to i8* for pointer arithmetic
+    var ptrVal = baseResIdx.value;
+    var ptrInstr = baseResIdx.instr;
+    if (!(basePtrTy.length == 3 && (basePtrTy.data)~ == byte(105) && (basePtrTy.data + 1)~ == byte(56) && (basePtrTy.data + 2)~ == byte(42))) {
+      var tmpCast = cg_fresh_tmp(tmp);
+      var sbCast = sb_new();
+      sbCast = sb_append_string(sbCast, ptrInstr);
+      sbCast = sb_append_cstr(sbCast, byte~(&"  "[0]));
+      sbCast = sb_append_string(sbCast, tmpCast);
+      sbCast = sb_append_cstr(sbCast, byte~(&" = bitcast "[0]));
+      sbCast = sb_append_string(sbCast, basePtrTy);
+      sbCast = sb_append_byte(sbCast, byte(32));
+      sbCast = sb_append_string(sbCast, baseResIdx.value);
+      sbCast = sb_append_cstr(sbCast, byte~(&" to i8*"[0]));
+      sbCast = sb_append_byte(sbCast, byte(10));
+      ptrInstr = sb_to_string(sbCast);
+      ptrVal = tmpCast;
+      basePtrTy = String{byte~(&"i8*"[0]), 3};
+      elemTyIdx = String{byte~(&"i8"[0]), 2};
+    }
+    var tmpGep = cg_fresh_tmp(tmp);
+    var sbGep = sb_new();
+    sbGep = sb_append_string(sbGep, ptrInstr);
+    sbGep = sb_append_string(sbGep, idx32.instr);
+    sbGep = sb_append_cstr(sbGep, byte~(&"  "[0]));
+    sbGep = sb_append_string(sbGep, tmpGep);
+    sbGep = sb_append_cstr(sbGep, byte~(&" = getelementptr "[0]));
+    sbGep = sb_append_string(sbGep, elemTyIdx);
+    sbGep = sb_append_cstr(sbGep, byte~(&", "[0]));
+    sbGep = sb_append_string(sbGep, basePtrTy);
+    sbGep = sb_append_byte(sbGep, byte(32));
+    sbGep = sb_append_string(sbGep, ptrVal);
+    sbGep = sb_append_cstr(sbGep, byte~(&", i32 "[0]));
+    sbGep = sb_append_string(sbGep, idx32.value);
+    sbGep = sb_append_byte(sbGep, byte(10));
+    return ExprCodegenResult{sb_to_string(sbGep), tmpGep, basePtrTy, 0};
+  }
   if (n.kind == NODE_LEN) {
     var target = nodearena_get(pmr.arena, n.a);
     if (target.kind == NODE_LITERAL) {
@@ -561,20 +680,34 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
       if (exprRes.err == 1) { return FnCodegenResult{sb_to_string(sb), 1}; }
       var retValName = exprRes.value;
       var retValTy = exprRes.valTy;
-      // Insert widening i1 -> i32 if needed.
       if (cg_str_eq(retValTy, retTy) == 0 && retValTy.length > 0 && retTy.length > 0) {
-        // Only handle i1 -> i32 conversion for now.
-        if (retValTy.length == 2 && (retValTy.data)~ == byte(105) && (retValTy.data + 1)~ == byte(49) && retTy.length == 3 && (retTy.data)~ == byte(105) && (retTy.data + 1)~ == byte(51)) {
-          var convTmp = cg_fresh_tmp(&tmp);
-          sb = sb_append_string(sb, exprRes.instr);
-          sb = sb_append_cstr(sb, byte~(&"  "[0]));
-          sb = sb_append_string(sb, convTmp);
-          sb = sb_append_cstr(sb, byte~(&" = zext i1 "[0]));
-          sb = sb_append_string(sb, retValName);
-          sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
-          sb = sb_append_byte(sb, byte(10));
-          retValName = convTmp;
-          retValTy = retTy;
+        // widen i1/i8 -> i32
+        if (retTy.length == 3 && (retTy.data)~ == byte(105) && (retTy.data + 1)~ == byte(51)) {
+          if (retValTy.length == 2 && (retValTy.data)~ == byte(105) && (retValTy.data + 1)~ == byte(49)) {
+            var convTmp = cg_fresh_tmp(&tmp);
+            sb = sb_append_string(sb, exprRes.instr);
+            sb = sb_append_cstr(sb, byte~(&"  "[0]));
+            sb = sb_append_string(sb, convTmp);
+            sb = sb_append_cstr(sb, byte~(&" = zext i1 "[0]));
+            sb = sb_append_string(sb, retValName);
+            sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
+            sb = sb_append_byte(sb, byte(10));
+            retValName = convTmp;
+            retValTy = retTy;
+          } else if (retValTy.length == 2 && (retValTy.data)~ == byte(105) && (retValTy.data + 1)~ == byte(56)) {
+            var convTmp2 = cg_fresh_tmp(&tmp);
+            sb = sb_append_string(sb, exprRes.instr);
+            sb = sb_append_cstr(sb, byte~(&"  "[0]));
+            sb = sb_append_string(sb, convTmp2);
+            sb = sb_append_cstr(sb, byte~(&" = zext i8 "[0]));
+            sb = sb_append_string(sb, retValName);
+            sb = sb_append_cstr(sb, byte~(&" to i32"[0]));
+            sb = sb_append_byte(sb, byte(10));
+            retValName = convTmp2;
+            retValTy = retTy;
+          } else {
+            return FnCodegenResult{sb_to_string(sb), 1};
+          }
         } else {
           return FnCodegenResult{sb_to_string(sb), 1};
         }
