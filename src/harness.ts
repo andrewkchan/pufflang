@@ -182,10 +182,25 @@ export function compileAndRun(source: string, input?: string, env?: NodeJS.Proce
 }
 
 const STAGE1_STRICT = process.env.PUFF_STAGE1_STRICT === "1"
+const STAGE1_VERIFY = process.env.PUFF_STAGE1_VERIFY === "1"
+const OPT_BIN = "/usr/lib/llvm-18/bin/opt"
+
+function verifyLlvmIr(irPath: string, strict: boolean) {
+  if (!STAGE1_VERIFY) return
+  if (!fs.existsSync(OPT_BIN)) return
+  const res = spawnSync(OPT_BIN, ["-passes=verify", "-disable-output", irPath], { encoding: "utf8" })
+  if (res.status !== 0) {
+    const msg = `opt verify failed for ${irPath}: ${res.stderr || res.stdout}`
+    if (strict) throw new Error(msg)
+    // eslint-disable-next-line no-console
+    console.warn(msg)
+  }
+}
 
 export function compileAndRunWithStdlib(source: string, input?: string, env?: NodeJS.ProcessEnv, args?: string[]): RunResult {
   const irPath = compileWithStdlib(source)
   try {
+    verifyLlvmIr(irPath, STAGE1_STRICT)
     const binPath = buildWithClang(irPath)
     return runBinary(binPath, input, env, args)
   } catch (e) {
@@ -579,6 +594,10 @@ ${srcBuilder}
     const trimmed = res.stdout.trim()
     if (trimmed.length === 0 || !trimmed.includes("@main")) {
       throw new Error("Stage1 produced empty/invalid IR")
+    }
+    if (STAGE1_VERIFY) {
+      const irPathTmp = writeTempFile("verify-stage1", ".ll", res.stdout)
+      verifyLlvmIr(irPathTmp, STAGE1_STRICT)
     }
     return res
   } catch (err) {
