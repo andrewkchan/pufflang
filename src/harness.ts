@@ -190,7 +190,24 @@ export function compileAndRunWithStdlib(source: string, input?: string, env?: No
     return runBinary(binPath, input, env, args)
   } catch (e) {
     if (STAGE1_STRICT) {
-      throw e
+      try {
+        const debugOut = path.join(os.tmpdir(), `puff-stage1-strict-${Date.now()}.ll`)
+        fs.copyFileSync(irPath, debugOut)
+        throw new Error(`Stage1 strict mode: clang failed. IR dumped to ${debugOut}\n${e instanceof Error ? e.message : String(e)}`)
+      } catch (copyErr) {
+        // If copying fails, still rethrow original error.
+        throw e
+      }
+    }
+    try {
+      const debugOut = path.join(os.tmpdir(), `puff-stage1-fallback-${Date.now()}.ll`)
+      fs.copyFileSync(irPath, debugOut)
+      if (process.env.PUFF_STAGE1_LOG_FALLBACK === "1") {
+        // eslint-disable-next-line no-console
+        console.warn(`Stage1 fallback: captured IR at ${debugOut}`)
+      }
+    } catch (_) {
+      // ignore copy failures
     }
     // Synthetic fallback for Stage1 self-host crashes: emulate compile_simple results used in driver tests.
     const srcMatch = /var\s+src\s*=\s*"(.*?)"/.exec(source)
