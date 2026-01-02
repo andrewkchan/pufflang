@@ -216,6 +216,7 @@ def resolve_module_tokens(src byte~, n int) int {
 // ------------------------------------------------------------
 
 struct ResolveCtx {
+  pmr ParseModuleResult,
   arena NodeArena,
   tokens Vec,
   src byte~,
@@ -256,15 +257,41 @@ def ctx_set_type(ctx ResolveCtx, nodeIdx int, typeId int) ResolveCtx {
 }
 
 // Find a function index in tm by name and arity.
-def find_fn_index_by_name_arity(tm TypeModuleTypes, arena NodeArena, tokens Vec, src byte~, name String, argc int) int {
+def find_fn_index_by_name_args(pmr ParseModuleResult, tm TypeModuleTypes, arena NodeArena, tokens Vec, src byte~, name String, argc int) int {
+  var best = -1;
+  var bestParams = 0;
   var i = 0;
   while (i < tm.fnNodeIndex.length) {
     var fnIdx = vecint_get(tm.fnNodeIndex, i);
     var fnNode = nodearena_get(arena, fnIdx);
     var fnName = tok_str(tokens, fnNode.c, src);
     if (str_eq(fnName.data, fnName.length, name.data, name.length) == 1) {
-      if (fnNode.d == argc) { return i; }
+      var paramCount = tm_fn_param_count(tm, i);
+      var start = vecint_get(pmr.meta.fnParamMetaStart, i);
+      var j = 0;
+      var minArgs = 0;
+      while (j < paramCount) {
+        var defRoot = vecint_get(pmr.meta.paramDefaultRoot, start + j);
+        if (defRoot == -1) { minArgs = minArgs + 1; }
+        j = j + 1;
+      }
+      if (argc >= minArgs && argc <= paramCount) {
+        if (argc == paramCount) { return i; }
+        if (best == -1 || paramCount < bestParams) { best = i; bestParams = paramCount; }
+      }
     }
+    i = i + 1;
+  }
+  return best;
+}
+
+def find_struct_index_by_name(tm TypeModuleTypes, arena NodeArena, tokens Vec, src byte~, name String) int {
+  var i = 0;
+  while (i < tm.structNodeIndex.length) {
+    var si = vecint_get(tm.structNodeIndex, i);
+    var snode = nodearena_get(arena, si);
+    var sname = tok_str(tokens, snode.c, src);
+    if (str_eq(sname.data, sname.length, name.data, name.length) == 1) { return i; }
     i = i + 1;
   }
   return -1;
@@ -480,18 +507,91 @@ def infer_expr(ctx ResolveCtx, idx int) InferResult {
     return InferResult{r, fType};
   }
 
+  if (k == NODE_LIST_LITERAL) {
+    if (n.c == LIST_INIT_LIST) {
+      if (n.b == 0) { r.err = 1; return InferResult{r, -1}; }
+      var headLit = n.a;
+      var first = infer_expr(r, nodearena_get(r.arena, headLit).a);
+      r = first.ctx;
+      if (r.err == 1) { return InferResult{r, -1}; }
+      var elemType = first.typeId;
+      var cur = nodearena_get(r.arena, headLit).b;
+      var count = 1;
+      while (cur != -1 && r.err == 0) {
+        var nodeLit = nodearena_get(r.arena, cur);
+        var resLit = infer_expr(r, nodeLit.a);
+        r = resLit.ctx;
+        if (r.err == 1) { break; }
+        if (type_equals(r.env.tt, elemType, resLit.typeId) == 0) { r.err = 1; break; }
+        cur = nodeLit.b;
+        count = count + 1;
+      }
+      if (r.err == 1) { return InferResult{r, -1}; }
+      var ttArr = typetable_make_array(r.env.tt, elemType, count);
+      r.env = TypeEnv{ttArr, r.env.structSizes, r.env.structNames, r.env.structTypeIds};
+      var arrId = ttArr.types.length - 1;
+      r = ctx_set_type(r, idx, arrId);
+      return InferResult{r, arrId};
+    } else if (n.c == LIST_INIT_REPEAT) {
+      var valRes = infer_expr(r, n.a);
+      r = valRes.ctx;
+      if (r.err == 1) { return InferResult{r, -1}; }
+      if (valRes.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+      if (n.b <= 0) { r.err = 1; return InferResult{r, -1}; }
+      var ttArrR = typetable_make_array(r.env.tt, valRes.typeId, n.b);
+      r.env = TypeEnv{ttArrR, r.env.structSizes, r.env.structNames, r.env.structTypeIds};
+      var arrIdR = ttArrR.types.length - 1;
+      r = ctx_set_type(r, idx, arrIdR);
+      return InferResult{r, arrIdR};
+    }
+    r.err = 1;
+    return InferResult{r, -1};
+  }
+
   if (k == NODE_CALL) {
-    // infer callee (for validation) and arguments
+    var callKind = n.d;
     var calleeRes = infer_expr(r, n.a);
     r = calleeRes.ctx;
     if (r.err == 1) { return InferResult{r, -1}; }
     var calleeNode = nodearena_get(r.arena, n.a);
     if (calleeNode.kind != NODE_VARIABLE) { r.err = 1; return InferResult{r, -1}; }
     var name = tok_str(r.tokens, calleeNode.a, r.src);
-    var fi = find_fn_index_by_name_arity(r.tm, r.arena, r.tokens, r.src, name, n.c);
+
+    // Struct construction (brace call)
+    if (callKind == 1) {
+      var si = find_struct_index_by_name(r.tm, r.arena, r.tokens, r.src, name);
+      if (si == -1) { r.err = 1; return InferResult{r, -1}; }
+      var fieldCount = tm_struct_field_count(r.tm, si);
+      if (fieldCount != n.c) { r.err = 1; return InferResult{r, -1}; }
+      var headS = n.b;
+      var fj = 0;
+      while (headS != -1 && r.err == 0) {
+        var argNodeS = nodearena_get(r.arena, headS);
+        var argResS = infer_expr(r, argNodeS.a);
+        r = argResS.ctx;
+        if (r.err == 1) { break; }
+        var expectedField = tm_struct_field_type(r.tm, si, fj);
+        if (expectedField != -1) {
+          if (type_can_coerce(r.env.tt, argResS.typeId, expectedField) == 0 && type_can_cast(r.env.tt, argResS.typeId, expectedField) == 0) {
+            r.err = 1; break;
+          }
+        }
+        fj = fj + 1;
+        headS = argNodeS.b;
+      }
+      if (r.err == 1) { return InferResult{r, -1}; }
+      var structTypeId = vecint_get(r.tm.structTypeIds, si);
+      var ttPtr = typetable_make_pointer(r.env.tt, structTypeId);
+      r.env = TypeEnv{ttPtr, r.env.structSizes, r.env.structNames, r.env.structTypeIds};
+      var ptrId = ttPtr.types.length - 1;
+      r = ctx_set_type(r, idx, ptrId);
+      return InferResult{r, ptrId};
+    }
+
+    var fi = find_fn_index_by_name_args(r.pmr, r.tm, r.arena, r.tokens, r.src, name, n.c);
     if (fi == -1) { r.err = 1; return InferResult{r, -1}; }
     var expectedCount = tm_fn_param_count(r.tm, fi);
-    if (expectedCount != -1 && expectedCount != n.c) { r.err = 1; return InferResult{r, -1}; }
+    var paramStart = tm_fn_param_type_start(r.tm, fi);
     var head = n.b;
     var argIdx = 0;
     while (head != -1 && r.err == 0) {
@@ -508,6 +608,24 @@ def infer_expr(ctx ResolveCtx, idx int) InferResult {
       }
       head = argNode.b;
       argIdx = argIdx + 1;
+    }
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (expectedCount > argIdx) {
+      var di = argIdx;
+      while (di < expectedCount && r.err == 0) {
+        var defRoot = vecint_get(r.pmr.meta.paramDefaultRoot, paramStart + di);
+        if (defRoot == -1) { r.err = 1; break; }
+        var defRes = infer_expr(r, defRoot);
+        r = defRes.ctx;
+        if (r.err == 1) { break; }
+        var targetType = tm_fn_param_type(r.tm, fi, di);
+        if (targetType != -1) {
+          if (type_can_coerce(r.env.tt, defRes.typeId, targetType) == 0 && type_can_cast(r.env.tt, defRes.typeId, targetType) == 0) {
+            r.err = 1; break;
+          }
+        }
+        di = di + 1;
+      }
     }
     if (r.err == 1) { return InferResult{r, -1}; }
     var retId = tm_fn_return_type(r.tm, fi);
@@ -788,7 +906,7 @@ def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
   var bodyIdx = fn.a;
   var retType = -1;
   if (fi != -1) { retType = tm_fn_return_type(r.tm, fi); }
-  var fnCtx = ResolveCtx{r.arena, r.tokens, r.src, fnScope, r.env, r.tm, fi, retType, 0, 0};
+  var fnCtx = ResolveCtx{r.pmr, r.arena, r.tokens, r.src, fnScope, r.env, r.tm, fi, retType, 0, 0};
   if (bodyIdx != -1) {
     fnCtx = resolve_block_nodes(fnCtx, bodyIdx, 0);
   }
@@ -854,7 +972,7 @@ def resolve_module_ast_with_pmr(pmr ParseModuleResult, tm TypeModuleTypes) Resol
       var vtid = -1;
       if (vi != -1 && vi < tm.varTypeIds.length) { vtid = vecint_get(tm.varTypeIds, vi); }
       var resVar = scope_define_var(scope, name, vtid);
-      if (resVar.err != 0) { return ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
+      if (resVar.err != 0) { return ResolveCtx{pmr, pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
       scope = resVar.scope;
     } else if (n0.kind == NODE_STRUCT_DECL) {
       var nameS = tok_str(pmr.tokens, n0.c, pmr.src);
@@ -862,7 +980,7 @@ def resolve_module_ast_with_pmr(pmr ParseModuleResult, tm TypeModuleTypes) Resol
       var stid = -1;
       if (si != -1 && si < tm.structTypeIds.length) { stid = vecint_get(tm.structTypeIds, si); }
       var resS = scope_define_struct(scope, nameS, stid);
-      if (resS.err != 0) { return ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
+      if (resS.err != 0) { return ResolveCtx{pmr, pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
       scope = resS.scope;
     } else if (n0.kind == NODE_FUNCTION) {
       var nameF = tok_str(pmr.tokens, n0.c, pmr.src);
@@ -870,13 +988,13 @@ def resolve_module_ast_with_pmr(pmr ParseModuleResult, tm TypeModuleTypes) Resol
       var retId = -1;
       if (fi != -1 && fi < tm.fnReturnTypeId.length) { retId = vecint_get(tm.fnReturnTypeId, fi); }
       var resF = scope_define_function(scope, nameF, n0.d, retId, n0.value, n0.typeId);
-      if (resF.err != 0) { return ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
+      if (resF.err != 0) { return ResolveCtx{pmr, pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
       scope = resF.scope;
     }
     i = i + 1;
   }
   // Resolve global initializers (outside function bodies).
-  var ctx = ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 0, 0};
+  var ctx = ResolveCtx{pmr, pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 0, 0};
   i = 0;
   while (i < pmr.arena.nodes.length && ctx.err == 0) {
     if (range_contains(fnStarts, fnEnds, i) == 1) { i = i + 1; continue; }

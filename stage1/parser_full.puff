@@ -27,7 +27,7 @@ def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
   var i = p.idx;
   while (i < p.tokens.length) {
     var k = token_kind_at(p.tokens, i);
-    if (k == terminator || k == TOKEN_RIGHT_BRACE || k == TOKEN_EOF) { break; }
+    if (k == terminator || k == TOKEN_RIGHT_BRACE || k == TOKEN_RIGHT_PAREN || k == TOKEN_EOF) { break; }
     i = i + 1;
   }
   var ctx = p;
@@ -67,6 +67,12 @@ def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
       } else if (knd == NODE_LIST) {
         if (n.a != -1) { n.a = n.a + base; }
         if (n.b != -1) { n.b = n.b + base; }
+      } else if (knd == NODE_LIST_LITERAL) {
+        if (n.c == LIST_INIT_LIST) {
+          if (n.a != -1) { n.a = n.a + base; }
+        } else if (n.c == LIST_INIT_REPEAT) {
+          if (n.a != -1) { n.a = n.a + base; }
+        }
       } else if (knd == NODE_ASSIGN) {
         if (n.a != -1) { n.a = n.a + base; }
         if (n.b != -1) { n.b = n.b + base; }
@@ -80,8 +86,6 @@ def p_parse_expr_root(p ParseCtx, terminator int, out ParseCtx~) int {
   out~ = ctx;
   return rootIdx;
 }
-
-// Variant that stops on either terminatorA or terminatorB (if non-negative).
 
 def parse_block(p ParseCtx, out ParseCtx~) int {
   var ctx = p;
@@ -475,10 +479,8 @@ def parse_module(tokens Vec, src byte~, n int) ParseModuleResult {
     var defRoot = -1;
     if (p_kind(ctx) == TOKEN_EQUAL) {
       ctx = p_advance(ctx);
-      defRoot = -2; // sentinel indicating default exists
-      while (p_kind(ctx) != TOKEN_COMMA && p_kind(ctx) != TOKEN_RIGHT_PAREN && p_kind(ctx) != TOKEN_EOF && p_kind(ctx) != TOKEN_RIGHT_BRACE) {
-        ctx = p_advance(ctx);
-      }
+      defRoot = p_parse_expr_root(ctx, TOKEN_COMMA, &ctx);
+      if (ctx.err != 0) { break; }
     }
     ctx.meta.paramTypeStartByte = vecint_push(ctx.meta.paramTypeStartByte, tStartByte);
     ctx.meta.paramTypeLen = vecint_push(ctx.meta.paramTypeLen, tLen);
@@ -563,6 +565,7 @@ def node_kind_name(k int) String {
   if (k == NODE_DOT) { return String{byte~(&"DOT"[0]), 3}; }
   if (k == NODE_LEN) { return String{byte~(&"LEN"[0]), 3}; }
   if (k == NODE_LIST) { return String{byte~(&"LIST"[0]), 4}; }
+  if (k == NODE_LIST_LITERAL) { return String{byte~(&"LIST_LITERAL"[0]), 12}; }
   if (k == NODE_CAST) { return String{byte~(&"CAST"[0]), 4}; }
   if (k == NODE_PRINT) { return String{byte~(&"PRINT"[0]), 5}; }
   if (k == NODE_EXPR_STMT) { return String{byte~(&"EXPR_STMT"[0]), 9}; }
@@ -1021,6 +1024,11 @@ def tm_var_type_by_node(tm TypeModuleTypes, nodeIdx int) int {
 def tm_struct_type(tm TypeModuleTypes, structIdx int) int {
   if (structIdx < 0 || structIdx >= tm.structTypeIds.length) { return -1; }
   return vecint_get(tm.structTypeIds, structIdx);
+}
+
+def tm_struct_field_count(tm TypeModuleTypes, structIdx int) int {
+  if (structIdx < 0 || structIdx >= tm.structFieldCount.length) { return -1; }
+  return vecint_get(tm.structFieldCount, structIdx);
 }
 
 def tm_struct_field_type(tm TypeModuleTypes, structIdx int, fieldIdx int) int {

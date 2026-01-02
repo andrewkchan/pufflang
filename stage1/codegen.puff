@@ -87,6 +87,13 @@ def cg_llvm_type(tt TypeTable, typeId int) String {
   if (t.category == TYPECATEGORY_BOOL) { return String{byte~(&"i1"[0]), 2}; }
   if (t.category == TYPECATEGORY_VOID) { return String{byte~(&"void"[0]), 4}; }
   if (t.category == TYPECATEGORY_FLOAT) { return String{byte~(&"float"[0]), 5}; }
+  if (t.category == TYPECATEGORY_ARRAY) {
+    var elem = cg_llvm_type(tt, t.element);
+    var sb = sb_new();
+    sb = sb_append_string(sb, elem);
+    sb = sb_append_byte(sb, byte(42)); // '*'
+    return sb_to_string(sb);
+  }
   if (t.category == TYPECATEGORY_POINTER) { return String{byte~(&"i8*"[0]), 3}; }
   // Fallback to i32 for unknown/unsupported types.
   return String{byte~(&"i32"[0]), 3};
@@ -346,9 +353,6 @@ def cg_fresh_tmp(counter int~) String {
   return sb_to_string(sb);
 }
 
-// Placeholder mangling (currently identity).
-def cg_mangle_name(name String, argc int) String { return name; }
-
 def cg_fresh_label(counter int~) String {
   var sb = sb_new();
   sb = sb_append_cstr(sb, byte~(&"L"[0]));
@@ -448,6 +452,74 @@ def cg_find_fn_index(pmr ParseModuleResult, tm TypeModuleTypes, name String) int
     i = i + 1;
   }
   return -1;
+}
+
+def cg_find_fn_match(pmr ParseModuleResult, tm TypeModuleTypes, name String, argc int) int {
+  var best = -1;
+  var bestParams = 0;
+  var i = 0;
+  while (i < pmr.meta.fnNodeIndex.length) {
+    var fnIdx = vecint_get(pmr.meta.fnNodeIndex, i);
+    var fnNode = nodearena_get(pmr.arena, fnIdx);
+    var fnName = tok_string(pmr.tokens, fnNode.c, pmr.src);
+    if (str_eq(fnName.data, fnName.length, name.data, name.length) == 1) {
+      var paramCount = tm_fn_param_count(tm, i);
+      var start = tm_fn_param_type_start(tm, i);
+      var j = 0;
+      var minArgs = 0;
+      while (j < paramCount) {
+        var defRoot = vecint_get(pmr.meta.paramDefaultRoot, start + j);
+        if (defRoot == -1) { minArgs = minArgs + 1; }
+        j = j + 1;
+      }
+      if (argc >= minArgs && argc <= paramCount) {
+        if (argc == paramCount) { return i; }
+        if (best == -1 || paramCount < bestParams) { best = i; bestParams = paramCount; }
+      }
+    }
+    i = i + 1;
+  }
+  return best;
+}
+
+def cg_find_struct_index(pmr ParseModuleResult, name String) int {
+  var i = 0;
+  while (i < pmr.meta.structNodeIndex.length) {
+    var si = vecint_get(pmr.meta.structNodeIndex, i);
+    var sNode = nodearena_get(pmr.arena, si);
+    var sName = tok_string(pmr.tokens, sNode.c, pmr.src);
+    if (str_eq(sName.data, sName.length, name.data, name.length) == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Overload count for a function name.
+def cg_overload_count(pmr ParseModuleResult, name String) int {
+  var count = 0;
+  var i = 0;
+  while (i < pmr.meta.fnNodeIndex.length) {
+    var fnIdx = vecint_get(pmr.meta.fnNodeIndex, i);
+    var fnNode = nodearena_get(pmr.arena, fnIdx);
+    var fnName = tok_string(pmr.tokens, fnNode.c, pmr.src);
+    if (str_eq(fnName.data, fnName.length, name.data, name.length) == 1) { count = count + 1; }
+    i = i + 1;
+  }
+  return count;
+}
+
+// Mangle following Stage0 rules: main stays, single exported overload keeps name, else name__arity.
+def cg_mangle_name(name String, arity int, isExport int, overloadCount int) String {
+  if (name.length == 4 &&
+      (name.data)~ == byte(109) && (name.data + 1)~ == byte(97) && (name.data + 2)~ == byte(105) && (name.data + 3)~ == byte(110)) {
+    return name;
+  }
+  if (isExport == 1 && overloadCount == 1) { return name; }
+  var sb = sb_new();
+  sb = sb_append_string(sb, name);
+  sb = sb_append_cstr(sb, byte~(&"__"[0]));
+  sb = sb_append_int(sb, arity);
+  return sb_to_string(sb);
 }
 
 def cg_find_global_index(pmr ParseModuleResult, name String) int {
@@ -1226,12 +1298,68 @@ def cg_expr(
     var calleeNode = nodearena_get(pmr.arena, n.a);
     if (calleeNode.kind != NODE_VARIABLE) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
     var name = cg_tok_string(pmr.tokens, pmr.src, calleeNode.a);
-    var fi = cg_find_fn_index(pmr, tm, name);
+    // Struct construction via brace-call
+    if (n.d == 1) {
+      var si = cg_find_struct_index(pmr, name);
+      if (si == -1) { return ExprCodegenResult{String{pmr.src, 0}, name, String{pmr.src, 0}, 1}; }
+      var fieldCount = tm_struct_field_count(tm, si);
+      if (fieldCount != n.c) { return ExprCodegenResult{String{pmr.src, 0}, name, String{pmr.src, 0}, 1}; }
+      var structTypeId = vecint_get(tm.structTypeIds, si);
+      var st = typetable_get(tm.env.tt, structTypeId);
+      var sIdx = st.structId;
+      if (sIdx < 0 || sIdx >= tm.env.structSizes.length) { return ExprCodegenResult{String{pmr.src, 0}, name, String{pmr.src, 0}, 1}; }
+      var structSize = vecint_get(tm.env.structSizes, sIdx);
+      var tmpAlloc = cg_fresh_tmp(tmp);
+      var sbStruct = sb_new();
+      sbStruct = sb_append_cstr(sbStruct, byte~(&"  "[0]));
+      sbStruct = sb_append_string(sbStruct, tmpAlloc);
+      sbStruct = sb_append_cstr(sbStruct, byte~(&" = alloca i8, i32 "[0]));
+      sbStruct = sb_append_int(sbStruct, structSize);
+      sbStruct = sb_append_byte(sbStruct, byte(10));
+      var headS = n.b;
+      var idxS = 0;
+      while (headS != -1) {
+        var argNodeS = nodearena_get(pmr.arena, headS);
+        var argResS = cg_expr(pmr, tm, argNodeS.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+        if (argResS.err == 1) { return argResS; }
+        var offset = tm_struct_field_offset(tm, si, idxS);
+        var fTypeId = tm_struct_field_type(tm, si, idxS);
+        var fTy = cg_llvm_type(tm.env.tt, fTypeId);
+        var tmpGep = cg_fresh_tmp(tmp);
+        sbStruct = sb_append_string(sbStruct, argResS.instr);
+        sbStruct = sb_append_cstr(sbStruct, byte~(&"  "[0]));
+        sbStruct = sb_append_string(sbStruct, tmpGep);
+        sbStruct = sb_append_cstr(sbStruct, byte~(&" = getelementptr i8, i8* "[0]));
+        sbStruct = sb_append_string(sbStruct, tmpAlloc);
+        sbStruct = sb_append_cstr(sbStruct, byte~(&", i32 "[0]));
+        sbStruct = sb_append_int(sbStruct, offset);
+        sbStruct = sb_append_byte(sbStruct, byte(10));
+        var tmpBC = cg_fresh_tmp(tmp);
+        sbStruct = sb_append_cstr(sbStruct, byte~(&"  "[0]));
+        sbStruct = sb_append_string(sbStruct, tmpBC);
+        sbStruct = sb_append_cstr(sbStruct, byte~(&" = bitcast i8* "[0]));
+        sbStruct = sb_append_string(sbStruct, tmpGep);
+        sbStruct = sb_append_cstr(sbStruct, byte~(&" to "[0]));
+        sbStruct = sb_append_string(sbStruct, fTy);
+        sbStruct = sb_append_byte(sbStruct, byte(42));
+        sbStruct = sb_append_byte(sbStruct, byte(10));
+        var storeResS = cg_store(tmpBC, fTy, argResS, tmp);
+        sbStruct = sb_append_string(sbStruct, storeResS.instr);
+        headS = argNodeS.b;
+        idxS = idxS + 1;
+      }
+      return ExprCodegenResult{sb_to_string(sbStruct), tmpAlloc, String{byte~(&"i8*"[0]), 3}, 0};
+    }
+    var fi = cg_find_fn_match(pmr, tm, name, n.c);
     if (fi == -1) { return ExprCodegenResult{String{pmr.src, 0}, name, String{pmr.src, 0}, 1}; }
     var retId = tm_fn_return_type(tm, fi);
     var retTy = cg_llvm_type(tm.env.tt, retId);
     var paramCount = tm_fn_param_count(tm, fi);
-    if (paramCount != n.c) { return ExprCodegenResult{String{pmr.src, 0}, name, retTy, 1}; }
+    if (paramCount < n.c || paramCount == -1) { return ExprCodegenResult{String{pmr.src, 0}, name, retTy, 1}; }
+    var overloadCount = cg_overload_count(pmr, name);
+    var fnIdxActual = vecint_get(pmr.meta.fnNodeIndex, fi);
+    var fnNodeActual = nodearena_get(pmr.arena, fnIdxActual);
+    var mangledName = cg_mangle_name(name, paramCount, fnNodeActual.value, overloadCount);
     // Evaluate arguments
     var argInstr = sb_new();
     var argVals = sb_new();
@@ -1253,6 +1381,25 @@ def cg_expr(
       head = argNode.b;
       idx = idx + 1;
     }
+    // fill defaults
+    if (idx < paramCount) {
+      var pStart = tm_fn_param_type_start(tm, fi);
+      while (idx < paramCount) {
+        var defRoot = vecint_get(pmr.meta.paramDefaultRoot, pStart + idx);
+        if (defRoot == -1) { return ExprCodegenResult{String{pmr.src, 0}, name, retTy, 1}; }
+        var defRes = cg_expr(pmr, tm, defRoot, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+        if (defRes.err == 1) { return defRes; }
+        argInstr = sb_append_string(argInstr, defRes.instr);
+        var pTyId = tm_fn_param_type(tm, fi, idx);
+        if (pTyId == -1) { pTyId = 5; }
+        var pTy = cg_llvm_type(tm.env.tt, pTyId);
+        if (idx > 0) { argVals = sb_append_cstr(argVals, byte~(&", "[0])); }
+        argVals = sb_append_string(argVals, pTy);
+        argVals = sb_append_byte(argVals, byte(32));
+        argVals = sb_append_string(argVals, defRes.value);
+        idx = idx + 1;
+      }
+    }
     var tmpName3 = cg_fresh_tmp(tmp);
     var sbCall = sb_new();
     sbCall = sb_append_string(sbCall, sb_to_string(argInstr));
@@ -1261,7 +1408,7 @@ def cg_expr(
       // void return
       sbCall = sb_append_cstr(sbCall, byte~(&"call void "[0]));
       sbCall = sb_append_byte(sbCall, byte(64));
-      sbCall = sb_append_string(sbCall, name);
+      sbCall = sb_append_string(sbCall, mangledName);
       sbCall = sb_append_byte(sbCall, byte(40)); // (
       sbCall = sb_append_string(sbCall, sb_to_string(argVals));
       sbCall = sb_append_byte(sbCall, byte(41)); // )
@@ -1273,7 +1420,7 @@ def cg_expr(
       sbCall = sb_append_string(sbCall, retTy);
       sbCall = sb_append_byte(sbCall, byte(32));
       sbCall = sb_append_byte(sbCall, byte(64));
-      sbCall = sb_append_string(sbCall, name);
+      sbCall = sb_append_string(sbCall, mangledName);
       sbCall = sb_append_byte(sbCall, byte(40)); // (
       sbCall = sb_append_string(sbCall, sb_to_string(argVals));
       sbCall = sb_append_byte(sbCall, byte(41)); // )
@@ -1679,7 +1826,8 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
   var retTy = cg_llvm_type(tm.env.tt, retId);
   var name = tok_string(pmr.tokens, fn.c, pmr.src);
   var paramCount = tm_fn_param_count(tm, fi);
-  var mangled = name;
+  var overloadCount = cg_overload_count(pmr, name);
+  var mangled = cg_mangle_name(name, paramCount, fn.value, overloadCount);
 
   var paramNames = cg_collect_param_names(pmr, fn);
   var paramTypes = vecstr_new(4);
@@ -1696,7 +1844,11 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
 
   var sb = sb_new();
   // Function header
-  sb = sb_append_cstr(sb, byte~(&"define "[0]));
+  if (fn.value == 1 || (name.length == 4 && (name.data)~ == byte(109) && (name.data + 1)~ == byte(97) && (name.data + 2)~ == byte(105) && (name.data + 3)~ == byte(110))) {
+    sb = sb_append_cstr(sb, byte~(&"define "[0]));
+  } else {
+    sb = sb_append_cstr(sb, byte~(&"define internal "[0]));
+  }
   sb = sb_append_string(sb, retTy);
   sb = sb_append_byte(sb, byte(32)); // space
   sb = sb_append_byte(sb, byte(64)); // '@'
@@ -1805,12 +1957,14 @@ def cg_function_decl(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int)
   var retTy = cg_llvm_type(tm.env.tt, retId);
   var name = tok_string(pmr.tokens, fn.c, pmr.src);
   var paramCount = tm_fn_param_count(tm, fi);
+  var overloadCount = cg_overload_count(pmr, name);
+  var mangled = cg_mangle_name(name, paramCount, fn.value, overloadCount);
   var sb = sb_new();
   sb = sb_append_cstr(sb, byte~(&"declare "[0]));
   sb = sb_append_string(sb, retTy);
   sb = sb_append_byte(sb, byte(32));
   sb = sb_append_byte(sb, byte(64));
-  sb = sb_append_string(sb, name);
+  sb = sb_append_string(sb, mangled);
   sb = sb_append_byte(sb, byte(40)); // '('
   var paramStart = tm_fn_param_type_start(tm, fi);
   var pi = 0;
