@@ -270,6 +270,24 @@ def find_fn_index_by_name_arity(tm TypeModuleTypes, arena NodeArena, tokens Vec,
   return -1;
 }
 
+def struct_index_for_type(tm TypeModuleTypes, typeId int) int {
+  return tm_struct_index_for_type(tm, typeId);
+}
+
+def struct_field_index_by_name(tm TypeModuleTypes, structIdx int, tokens Vec, src byte~, name String) int {
+  if (structIdx < 0 || structIdx >= tm.structFieldNameStart.length) { return -1; }
+  var start = vecint_get(tm.structFieldNameStart, structIdx);
+  var count = vecint_get(tm.structFieldCount, structIdx);
+  var i = 0;
+  while (i < count) {
+    var tokIdx = vecint_get(tm.structFieldNames, start + i);
+    var fname = tok_str(tokens, tokIdx, src);
+    if (str_eq(fname.data, fname.length, name.data, name.length) == 1) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
 // Type inference with scope + TypeEnv; annotates node.typeId and propagates env.
 def infer_expr(ctx ResolveCtx, idx int) InferResult {
   var r = ctx;
@@ -440,6 +458,27 @@ def infer_expr(ctx ResolveCtx, idx int) InferResult {
     r = ctx_set_type(r, idx, tptr.element);
     return InferResult{r, tptr.element};
   }
+  if (k == NODE_DOT) {
+    var base = infer_expr(r, n.a);
+    r = base.ctx;
+    if (r.err == 1) { return InferResult{r, -1}; }
+    if (base.typeId == -1) { r.err = 1; return InferResult{r, -1}; }
+    var baseType = typetable_get(r.env.tt, base.typeId);
+    var structTypeId = base.typeId;
+    if (baseType.category == TYPECATEGORY_POINTER) {
+      structTypeId = baseType.element;
+      baseType = typetable_get(r.env.tt, structTypeId);
+    }
+    if (baseType.category != TYPECATEGORY_STRUCT) { r.err = 1; return InferResult{r, -1}; }
+    var sIdx = struct_index_for_type(r.tm, structTypeId);
+    if (sIdx == -1) { r.err = 1; return InferResult{r, -1}; }
+    var fieldName = tok_str(r.tokens, n.b, r.src);
+    var fIdx = struct_field_index_by_name(r.tm, sIdx, r.tokens, r.src, fieldName);
+    if (fIdx == -1) { r.err = 1; return InferResult{r, -1}; }
+    var fType = tm_struct_field_type(r.tm, sIdx, fIdx);
+    r = ctx_set_type(r, idx, fType);
+    return InferResult{r, fType};
+  }
 
   if (k == NODE_CALL) {
     // infer callee (for validation) and arguments
@@ -547,7 +586,10 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
   if (k == NODE_ASSIGN) {
     var name = tok_str(r.tokens, n.a, r.src);
     var found = scope_lookup_index_any(r.scope, name);
-    if (found == -1) { r.err = 1; return r; }
+    if (found == -1) {
+      // Likely an assignment expression node visited while scanning block contents; skip here.
+      return r;
+    }
     var rhs = infer_expr(r, n.b);
     r = rhs.ctx;
     if (r.err == 1) { return r; }
@@ -588,6 +630,7 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
   if (k == NODE_PRINT || k == NODE_EXPR_STMT) {
     var e = infer_expr(r, n.a);
     r = e.ctx;
+    if (r.err == 1) { return r; }
     return r;
   }
   if (k == NODE_BREAK) {
@@ -715,7 +758,12 @@ def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
   // parameters
   var added = 0;
   var idx = fn.b;
-  while (idx != -1 && added < fn.d) {
+  var expectedParams = fn.d;
+  if (fi != -1) {
+    var cnt = tm_fn_param_count(r.tm, fi);
+    if (cnt != -1) { expectedParams = cnt; }
+  }
+  while (idx != -1 && added < expectedParams) {
     if (idx >= r.tokens.length) { break; }
     var k = token_kind_at(r.tokens, idx);
     if (k == TOKEN_IDENTIFIER) {
@@ -726,6 +774,14 @@ def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
       if (res.err != 0) { r.err = 1; return r; }
       fnScope = res.scope;
       added = added + 1;
+      idx = idx + 1;
+      while (idx < r.tokens.length) {
+        var k2 = token_kind_at(r.tokens, idx);
+        if (k2 == TOKEN_COMMA) { idx = idx + 1; break; }
+        if (k2 == TOKEN_RIGHT_PAREN) { break; }
+        idx = idx + 1;
+      }
+      continue;
     }
     idx = idx + 1;
   }
@@ -738,6 +794,8 @@ def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
   }
   if (fnCtx.err == 1) { r.err = 1; return r; }
   if (fnCtx.hasReturn == 0) { r.err = 1; return r; }
+  // Clean up parameter scope
+  fnCtx.scope = scope_exit(fnCtx.scope);
   r.hasReturn = 1;
   return r;
 }
@@ -759,6 +817,15 @@ def resolve_module_ast(src byte~, n int) int {
   var tm = module_type_ids(pmr);
   if (tm.err == 1) { return 0; }
 
+  var ctx = resolve_module_ast_with_pmr(pmr, tm);
+  if (ctx.err == 1) { return 0; }
+  if (ctx.hasReturn == 0) { return 0; }
+  return 1;
+}
+
+// Resolver variant that operates on an existing ParseModuleResult and TypeModuleTypes,
+// returning the final resolver context (with updated arena/types) instead of a boolean.
+def resolve_module_ast_with_pmr(pmr ParseModuleResult, tm TypeModuleTypes) ResolveCtx {
   // Precompute ranges for function bodies to separate global scope definitions.
   var fnStarts = vecint_new(4);
   var fnEnds = vecint_new(4);
@@ -787,7 +854,7 @@ def resolve_module_ast(src byte~, n int) int {
       var vtid = -1;
       if (vi != -1 && vi < tm.varTypeIds.length) { vtid = vecint_get(tm.varTypeIds, vi); }
       var resVar = scope_define_var(scope, name, vtid);
-      if (resVar.err != 0) { return 0; }
+      if (resVar.err != 0) { return ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
       scope = resVar.scope;
     } else if (n0.kind == NODE_STRUCT_DECL) {
       var nameS = tok_str(pmr.tokens, n0.c, pmr.src);
@@ -795,7 +862,7 @@ def resolve_module_ast(src byte~, n int) int {
       var stid = -1;
       if (si != -1 && si < tm.structTypeIds.length) { stid = vecint_get(tm.structTypeIds, si); }
       var resS = scope_define_struct(scope, nameS, stid);
-      if (resS.err != 0) { return 0; }
+      if (resS.err != 0) { return ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
       scope = resS.scope;
     } else if (n0.kind == NODE_FUNCTION) {
       var nameF = tok_str(pmr.tokens, n0.c, pmr.src);
@@ -803,7 +870,7 @@ def resolve_module_ast(src byte~, n int) int {
       var retId = -1;
       if (fi != -1 && fi < tm.fnReturnTypeId.length) { retId = vecint_get(tm.fnReturnTypeId, fi); }
       var resF = scope_define_function(scope, nameF, n0.d, retId, n0.value, n0.typeId);
-      if (resF.err != 0) { return 0; }
+      if (resF.err != 0) { return ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
       scope = resF.scope;
     }
     i = i + 1;
@@ -855,7 +922,7 @@ def resolve_module_ast(src byte~, n int) int {
     }
     i = i + 1;
   }
-  if (ctx.err == 1) { return 0; }
+  if (ctx.err == 1) { return ctx; }
   // Resolve functions.
   i = 0;
   while (i < pmr.arena.nodes.length && ctx.err == 0) {
@@ -866,7 +933,7 @@ def resolve_module_ast(src byte~, n int) int {
     }
     i = i + 1;
   }
-  if (ctx.err == 1) { return 0; }
-  if (ctx.hasReturn == 0) { return 0; }
-  return 1;
+  if (ctx.err == 1) { return ctx; }
+  if (ctx.hasReturn == 0) { return ctx; }
+  return ctx;
 }

@@ -168,7 +168,20 @@ def base_type_id(env TypeEnv, tokens Vec, src byte~, idx int) TypeParseIdResult 
   if (k == TOKEN_BYTE) { return TypeParseIdResult{env, idx + 1, 2, 0}; }
   if (k == TOKEN_BOOL) { return TypeParseIdResult{env, idx + 1, 1, 0}; }
   if (k == TOKEN_VOID) { return TypeParseIdResult{env, idx + 1, 8, 0}; }
-  // Struct names require resolver lookup; treat as error here.
+  if (k == TOKEN_IDENTIFIER) {
+    // Resolve struct names recorded in the environment.
+    var name = tok_lex(tokens, idx, src);
+    var i = 0;
+    while (i < env.structNames.length) {
+      var sname = vecstr_get(env.structNames, i);
+      if (str_eq(sname.data, sname.length, name.data, name.length) == 1) {
+        var tid = vecint_get(env.structTypeIds, i);
+        return TypeParseIdResult{env, idx + 1, tid, 0};
+      }
+      i = i + 1;
+    }
+    return TypeParseIdResult{env, idx + 1, -1, 1};
+  }
   return TypeParseIdResult{env, idx, -1, 1};
 }
 
@@ -186,12 +199,12 @@ def parse_type_id(env TypeEnv, tokens Vec, src byte~, idx int) TypeParseIdResult
     var closeTok = lenTok + 1;
     if (token_kind_at(tokens, closeTok) != TOKEN_RIGHT_BRACKET) { return TypeParseIdResult{inner.env, closeTok, -1, 1}; }
     var ttArr = typetable_make_array(inner.env.tt, inner.typeId, arrLen);
-    var envArr = TypeEnv{ttArr, inner.env.structSizes};
+    var envArr = TypeEnv{ttArr, inner.env.structSizes, inner.env.structNames, inner.env.structTypeIds};
     var nextIdx = closeTok + 1;
     // postfix pointers after array
     while (token_kind_at(tokens, nextIdx) == TOKEN_TILDE) {
       var ttPtr = typetable_make_pointer(envArr.tt, envArr.tt.types.length - 1);
-      envArr = TypeEnv{ttPtr, envArr.structSizes};
+      envArr = TypeEnv{ttPtr, envArr.structSizes, envArr.structNames, envArr.structTypeIds};
       nextIdx = nextIdx + 1;
     }
     return TypeParseIdResult{envArr, nextIdx, envArr.tt.types.length - 1, 0};
@@ -204,7 +217,7 @@ def parse_type_id(env TypeEnv, tokens Vec, src byte~, idx int) TypeParseIdResult
   var next = base.next;
   while (token_kind_at(tokens, next) == TOKEN_TILDE) {
     var tt2 = typetable_make_pointer(outEnv.tt, outId);
-    outEnv = TypeEnv{tt2, outEnv.structSizes};
+    outEnv = TypeEnv{tt2, outEnv.structSizes, outEnv.structNames, outEnv.structTypeIds};
     outId = outEnv.tt.types.length - 1;
     next = next + 1;
   }

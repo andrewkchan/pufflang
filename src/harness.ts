@@ -547,6 +547,8 @@ def print_str(s String) {
 
 def main() {
 ${srcBuilder}
+  // Enable struct field codegen for Stage1.
+  CG_ENABLE_DOT = 1;
   var ir = compile_to_ir(src.data, src.length);
   print_str(ir);
 }
