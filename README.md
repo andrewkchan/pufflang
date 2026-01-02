@@ -85,3 +85,8 @@ Hello, world!
   ```
   npm run stage1 -- --run examples/hello.puff
   ```
+- Bootstrap smoke (Stage0→Stage1→run sample):
+  ```
+  npm run bootstrap:stage1
+  ```
+  This compiles a simple program via the Stage1 compiler and runs it; exit code should be 42.
