@@ -346,6 +346,9 @@ def cg_fresh_tmp(counter int~) String {
   return sb_to_string(sb);
 }
 
+// Placeholder mangling (currently identity).
+def cg_mangle_name(name String, argc int) String { return name; }
+
 def cg_fresh_label(counter int~) String {
   var sb = sb_new();
   sb = sb_append_cstr(sb, byte~(&"L"[0]));
@@ -1675,6 +1678,8 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
   var retId = tm_fn_return_type(tm, fi);
   var retTy = cg_llvm_type(tm.env.tt, retId);
   var name = tok_string(pmr.tokens, fn.c, pmr.src);
+  var paramCount = tm_fn_param_count(tm, fi);
+  var mangled = name;
 
   var paramNames = cg_collect_param_names(pmr, fn);
   var paramTypes = vecstr_new(4);
@@ -1695,11 +1700,10 @@ def cg_function(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int) FnCo
   sb = sb_append_string(sb, retTy);
   sb = sb_append_byte(sb, byte(32)); // space
   sb = sb_append_byte(sb, byte(64)); // '@'
-  sb = sb_append_string(sb, name);
+  sb = sb_append_string(sb, mangled);
   sb = sb_append_byte(sb, byte(40)); // '('
 
   var paramStart = tm_fn_param_type_start(tm, fi);
-  var paramCount = tm_fn_param_count(tm, fi);
   var pi = 0;
   while (pi < paramCount) {
     var pid = vecint_get(tm.paramTypeIds, paramStart + pi);
@@ -1800,6 +1804,7 @@ def cg_function_decl(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int)
   var retId = tm_fn_return_type(tm, fi);
   var retTy = cg_llvm_type(tm.env.tt, retId);
   var name = tok_string(pmr.tokens, fn.c, pmr.src);
+  var paramCount = tm_fn_param_count(tm, fi);
   var sb = sb_new();
   sb = sb_append_cstr(sb, byte~(&"declare "[0]));
   sb = sb_append_string(sb, retTy);
@@ -1808,7 +1813,6 @@ def cg_function_decl(pmr ParseModuleResult, tm TypeModuleTypes, fn Node, fi int)
   sb = sb_append_string(sb, name);
   sb = sb_append_byte(sb, byte(40)); // '('
   var paramStart = tm_fn_param_type_start(tm, fi);
-  var paramCount = tm_fn_param_count(tm, fi);
   var pi = 0;
   while (pi < paramCount) {
     var pid = vecint_get(tm.paramTypeIds, paramStart + pi);
