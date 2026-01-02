@@ -16,8 +16,10 @@ function printUsage() {
 function main() {
   const args = process.argv.slice(2)
   if (args.length === 0) {
-    printUsage()
-    process.exit(1)
+    // If no file provided, read from stdin.
+    const source = fs.readFileSync(0, "utf8")
+    compileAndMaybeRun(source, null, false)
+    return
   }
 
   let emitIrPath: string | null = null
@@ -47,13 +49,22 @@ function main() {
     process.exit(1)
   }
 
-  const absPath = path.resolve(inputPath)
-  if (!fs.existsSync(absPath)) {
-    console.error(`Input file not found: ${absPath}`)
-    process.exit(1)
+  let source: string
+  if (!inputPath || inputPath === "-") {
+    source = fs.readFileSync(0, "utf8")
+  } else {
+    const absPath = path.resolve(inputPath)
+    if (!fs.existsSync(absPath)) {
+      console.error(`Input file not found: ${absPath}`)
+      process.exit(1)
+    }
+    source = fs.readFileSync(absPath, "utf8")
   }
-  const source = fs.readFileSync(absPath, "utf8")
 
+  compileAndMaybeRun(source, emitIrPath, runBinary)
+}
+
+function compileAndMaybeRun(source: string, emitIrPath: string | null, runBinary: boolean) {
   const irRes = runStage1CompileToIr(source)
   if (irRes.status !== 0) {
     process.stderr.write(irRes.stderr || "")
