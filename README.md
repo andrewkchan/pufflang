@@ -85,6 +85,10 @@ Hello, world!
   ```
   npm run stage1 -- --run examples/hello.puff
   ```
+- Or pipe from stdin (use `-` for clarity):
+  ```
+  echo "def main() int { return 6; }" | npm run stage1 -- --run -
+  ```
 - Bootstrap smoke (Stage0→Stage1→run sample):
   ```
   npm run bootstrap:stage1
