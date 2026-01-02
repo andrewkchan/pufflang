@@ -181,12 +181,17 @@ export function compileAndRun(source: string, input?: string, env?: NodeJS.Proce
   return runBinary(binPath, input, env, args)
 }
 
+const STAGE1_STRICT = process.env.PUFF_STAGE1_STRICT === "1"
+
 export function compileAndRunWithStdlib(source: string, input?: string, env?: NodeJS.ProcessEnv, args?: string[]): RunResult {
   const irPath = compileWithStdlib(source)
   try {
     const binPath = buildWithClang(irPath)
     return runBinary(binPath, input, env, args)
   } catch (e) {
+    if (STAGE1_STRICT) {
+      throw e
+    }
     // Synthetic fallback for Stage1 self-host crashes: emulate compile_simple results used in driver tests.
     const srcMatch = /var\s+src\s*=\s*"(.*?)"/.exec(source)
     if (srcMatch) {
@@ -555,6 +560,9 @@ ${srcBuilder}
 `
     return compileAndRunWithStdlib(source)
   } catch (err) {
+    if (STAGE1_STRICT) {
+      throw err
+    }
     // Fallback to Stage0 pipeline if Stage1 self-host build fails (keeps tests running).
     // Normalize source for Stage0 compatibility (e.g., unary +, single-quote strings).
     let fallbackSrc = program
