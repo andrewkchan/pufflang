@@ -112,6 +112,31 @@ def cg_llvm_type(tt TypeTable, typeId int) String {
 // Feature flag to guard experimental struct field codegen.
 var CG_ENABLE_DOT int = 0;
 
+def cg_is_i8_ptr(ty String) int {
+  if (ty.length != 3) { return 0; }
+  if ((ty.data)~ == byte(105) && (ty.data + 1)~ == byte(56) && (ty.data + 2)~ == byte(42)) { return 1; }
+  return 0;
+}
+
+struct BitcastI8PtrResult { instr String, ptr String, err int }
+
+// Bitcast arbitrary pointer-typed value to i8* if needed; otherwise passthrough.
+def cg_bitcast_to_i8_ptr(instr String, fromTy String, val String, tmp int~) BitcastI8PtrResult {
+  if (cg_is_i8_ptr(fromTy) == 1) { return BitcastI8PtrResult{instr, val, 0}; }
+  var tmpCast = cg_fresh_tmp(tmp);
+  var sb = sb_new();
+  sb = sb_append_string(sb, instr);
+  sb = sb_append_cstr(sb, byte~(&"  "[0]));
+  sb = sb_append_string(sb, tmpCast);
+  sb = sb_append_cstr(sb, byte~(&" = bitcast "[0]));
+  sb = sb_append_string(sb, fromTy);
+  sb = sb_append_byte(sb, byte(32));
+  sb = sb_append_string(sb, val);
+  sb = sb_append_cstr(sb, byte~(&" to i8*"[0]));
+  sb = sb_append_byte(sb, byte(10));
+  return BitcastI8PtrResult{sb_to_string(sb), tmpCast, 0};
+}
+
 // Render a token's lexeme to string.
 def cg_tok_string(tokens Vec, src byte~, tokIdx int) String {
   return tok_string(tokens, tokIdx, src);
@@ -1123,22 +1148,14 @@ def cg_expr(
     // If pointer is not i8*, bitcast to i8* for pointer arithmetic
     var ptrVal = baseResIdx.value;
     var ptrInstr = baseResIdx.instr;
-    if (!(basePtrTy.length == 3 && (basePtrTy.data)~ == byte(105) && (basePtrTy.data + 1)~ == byte(56) && (basePtrTy.data + 2)~ == byte(42))) {
-      var tmpCast = cg_fresh_tmp(tmp);
-      var sbCast = sb_new();
-      sbCast = sb_append_string(sbCast, ptrInstr);
-      sbCast = sb_append_cstr(sbCast, byte~(&"  "[0]));
-      sbCast = sb_append_string(sbCast, tmpCast);
-      sbCast = sb_append_cstr(sbCast, byte~(&" = bitcast "[0]));
-      sbCast = sb_append_string(sbCast, basePtrTy);
-      sbCast = sb_append_byte(sbCast, byte(32));
-      sbCast = sb_append_string(sbCast, baseResIdx.value);
-      sbCast = sb_append_cstr(sbCast, byte~(&" to i8*"[0]));
-      sbCast = sb_append_byte(sbCast, byte(10));
-      ptrInstr = sb_to_string(sbCast);
-      ptrVal = tmpCast;
-      basePtrTy = String{byte~(&"i8*"[0]), 3};
-      elemTyIdx = String{byte~(&"i8"[0]), 2};
+    var castRes = cg_bitcast_to_i8_ptr(ptrInstr, basePtrTy, ptrVal, tmp);
+    if (castRes.err == 0) {
+      ptrInstr = castRes.instr;
+      ptrVal = castRes.ptr;
+      if (cg_is_i8_ptr(basePtrTy) == 0) {
+        basePtrTy = String{byte~(&"i8*"[0]), 3};
+        elemTyIdx = String{byte~(&"i8"[0]), 2};
+      }
     }
     var tmpGep = cg_fresh_tmp(tmp);
     var sbGep = sb_new();
