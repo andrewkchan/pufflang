@@ -575,7 +575,12 @@ ${srcBuilder}
   print_str(ir);
 }
 `
-    return compileAndRunWithStdlib(source)
+    const res = compileAndRunWithStdlib(source)
+    const trimmed = res.stdout.trim()
+    if (trimmed.length === 0 || !trimmed.includes("@main")) {
+      throw new Error("Stage1 produced empty/invalid IR")
+    }
+    return res
   } catch (err) {
     if (STAGE1_STRICT) {
       throw err
