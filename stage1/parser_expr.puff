@@ -37,12 +37,15 @@ def n_update(arena NodeArena, opTok int, operand int, isPrefix int, off int) Nod
 def n_binary(arena NodeArena, left int, right int, opTok int, off int) NodeArena { return push_node(arena, Node{NODE_BINARY, left, right, opTok + off, 0, 0, -1}); }
 def n_logical(arena NodeArena, left int, right int, opTok int, off int) NodeArena { return push_node(arena, Node{NODE_LOGICAL, left, right, opTok + off, 0, 0, -1}); }
 def n_ternary(arena NodeArena, cond int, thenIdx int, elseIdx int) NodeArena { return push_node(arena, Node{NODE_TERNARY, cond, thenIdx, elseIdx, 0, 0, -1}); }
-def n_call(arena NodeArena, callee int, head int, count int) NodeArena { return push_node(arena, Node{NODE_CALL, callee, head, count, 0, 0, -1}); }
+// callKind: 0 = paren call, 1 = brace (struct) call
+def n_call(arena NodeArena, callee int, head int, count int, callKind int) NodeArena { return push_node(arena, Node{NODE_CALL, callee, head, count, callKind, 0, -1}); }
 def n_index(arena NodeArena, callee int, idxExpr int, brTok int, off int) NodeArena { return push_node(arena, Node{NODE_INDEX, callee, idxExpr, brTok + off, 0, 0, -1}); }
 def n_deref(arena NodeArena, operand int, opTok int, off int) NodeArena { return push_node(arena, Node{NODE_DEREF, operand, opTok + off, 0, 0, 0, -1}); }
 def n_dot(arena NodeArena, callee int, identTok int, off int) NodeArena { return push_node(arena, Node{NODE_DOT, callee, identTok + off, 0, 0, 0, -1}); }
 def n_len(arena NodeArena, value int) NodeArena { return push_node(arena, Node{NODE_LEN, value, 0, 0, 0, 0, -1}); }
 def n_assign(arena NodeArena, left int, right int, opTok int, off int) NodeArena { return push_node(arena, Node{NODE_ASSIGN, left, right, opTok + off, 0, 0, -1}); }
+def n_list_literal_list(arena NodeArena, head int, count int) NodeArena { return push_node(arena, Node{NODE_LIST_LITERAL, head, count, LIST_INIT_LIST, 0, 0, -1}); }
+def n_list_literal_repeat(arena NodeArena, value int, length int) NodeArena { return push_node(arena, Node{NODE_LIST_LITERAL, value, length, LIST_INIT_REPEAT, 0, 0, -1}); }
 
 // Build linked list of arguments via NODE_LIST nodes: a=expr root, b=next, c=LIST_INIT_LIST.
 // Returns the updated arena and writes the head index to outHead.
@@ -100,13 +103,62 @@ def parse_postfix(ctx ParseAstCtx, out ParseAstCtx~) int {
     p = pa_advance(p);
     p.arena = n_len(p.arena, inner);
     lhs = p.arena.nodes.length - 1;
+  } else if (k == TOKEN_LEFT_BRACKET) {
+    // array/repeat literal
+    p = pa_advance(p);
+    var values = vecint_new(4);
+    var isRepeat = 0;
+    var repeatLen = 0;
+    if (pa_kind(p) != TOKEN_RIGHT_BRACKET) {
+      var firstVal = parse_expression_ast_internal(p, &p);
+      values = vecint_push(values, firstVal);
+      if (pa_kind(p) == TOKEN_SEMICOLON) {
+        // repeat literal [x; n]
+        isRepeat = 1;
+        p = pa_advance(p);
+        if (pa_kind(p) != TOKEN_NUMBER && pa_kind(p) != TOKEN_NUMBER_DECIMAL && pa_kind(p) != TOKEN_NUMBER_HEX) { p.err = 1; out~ = p; return firstVal; }
+        // parse integer literal for length
+        var lenTok = p.idx;
+        var lenStr = tok_lexeme(p.tokens, lenTok, p.src);
+        var li = 0;
+        var lval = 0;
+        var neg = 0;
+        if (lenStr.length > 0 && (lenStr.data)~ == byte(45)) { neg = 1; }
+        while (li < lenStr.length) {
+          var ch = (lenStr.data + li)~;
+          if (ch >= byte(48) && ch <= byte(57)) {
+            lval = lval * 10 + (int(ch) - 48);
+          }
+          li = li + 1;
+        }
+        if (neg == 1) { lval = 0 - lval; }
+        repeatLen = lval;
+        p = pa_advance(p);
+      } else {
+        while (pa_kind(p) == TOKEN_COMMA) {
+          p = pa_advance(p);
+          var val = parse_expression_ast_internal(p, &p);
+          values = vecint_push(values, val);
+        }
+      }
+    }
+    if (pa_kind(p) != TOKEN_RIGHT_BRACKET) { p.err = 1; out~ = p; return -1; }
+    p = pa_advance(p);
+    if (isRepeat == 1) {
+      p.arena = n_list_literal_repeat(p.arena, vecint_get(values, 0), repeatLen);
+    } else {
+      var headLit = -1;
+      p.arena = build_arg_list(p.arena, values, &headLit);
+      p.arena = n_list_literal_list(p.arena, headLit, values.length);
+    }
+    lhs = p.arena.nodes.length - 1;
   } else {
     p.err = 1;
     out~ = p;
     return -1;
   }
 
-  // postfix operations: call, index, deref (~), member
+  // postfix operations: call (paren/brace), index, deref (~), member
   var cont = 1;
   while (cont == 1 && p.err == 0) {
     var pk = pa_kind(p);
@@ -125,7 +177,26 @@ def parse_postfix(ctx ParseAstCtx, out ParseAstCtx~) int {
       p = pa_advance(p);
       var head = -1;
       p.arena = build_arg_list(p.arena, args, &head);
-      p.arena = n_call(p.arena, lhs, head, args.length);
+      p.arena = n_call(p.arena, lhs, head, args.length, 0);
+      lhs = p.arena.nodes.length - 1;
+      continue;
+    }
+    if (pk == TOKEN_LEFT_BRACE) {
+      var argsB = vecint_new(4);
+      p = pa_advance(p);
+      if (pa_kind(p) != TOKEN_RIGHT_BRACE) {
+        while (1 == 1) {
+          var argRootB = parse_expression_ast_internal(p, &p);
+          argsB = vecint_push(argsB, argRootB);
+          if (pa_kind(p) == TOKEN_COMMA) { p = pa_advance(p); continue; }
+          break;
+        }
+      }
+      if (pa_kind(p) != TOKEN_RIGHT_BRACE) { p.err = 1; out~ = p; return lhs; }
+      p = pa_advance(p);
+      var headB = -1;
+      p.arena = build_arg_list(p.arena, argsB, &headB);
+      p.arena = n_call(p.arena, lhs, headB, argsB.length, 1);
       lhs = p.arena.nodes.length - 1;
       continue;
     }
