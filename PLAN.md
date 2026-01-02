@@ -24,12 +24,12 @@ Deliver a self-hosted Puffscript toolchain: a solid Stage0 (TypeScript → LLVM 
 - Acceptance: Stdlib tests remain green.
 
 ### Phase 5 — Stage1 compiler in Puffscript (in progress)
-- Status: scanner parity; expression parser covers precedence/logical/bitwise/shift/unary/++/--; parser_full parses defs/import defs/structs/vars, var/return/print/if/while/for/break/continue/assign/expr, summaries/counts with names/flags; resolver scaffolding for EOF/return + duplicate vars; harness helpers for summaries/counts/resolver.
+- Status: parser_full builds expression/statement NodeArena; resolver handles return coverage and struct dot typing; TypeEnv collects struct metadata; codegen covers literals, unary/binary/logical/ternary, calls, control flow, pointer arithmetic/index/deref/len, globals, and struct field load/store (dot on pointer-to-struct). Stage1 CLI + bootstrap smoke tests are in place.
 - Next:
-  - Integrate parser_full with expression AST (not just spans); build real NodeArena for statements/expressions.
-  - Extend resolver to types/overloads/default args/import/export/structs; enforce return coverage.
-  - Begin Stage1 codegen scaffolding (LLVM IR emitters mirroring Stage0) and CLI to compile .puff → .ll → binary.
-- Acceptance: Stage0 builds Stage1 binary that can compile sample programs; Stage1 passes a focused subset of Stage0 tests via harness/CLI.
+  - Add array/struct literal lowering (alloca + stores) and NODE_LIST support.
+  - Extend resolver/codegen for default args/import/export and arity-based mangling aligned with Stage0 (without perturbing compiler internals).
+  - Add tests for literals/mangling/import/export coverage.
+- Acceptance: Stage0 builds Stage1 binary that can compile sample programs; Stage1 passes a focused subset of Stage0 tests via harness/CLI and bootstrap.
 
 #### Helper modules now available for integration
 - `types.puff`: typetable + predicates, coercion/cast helpers.
@@ -40,9 +40,9 @@ Deliver a self-hosted Puffscript toolchain: a solid Stage0 (TypeScript → LLVM 
 - `exprtypes.puff`: expression AST type inference built on parser_expr + typerules + literaltypes + typeenv.
 
 #### Immediate next steps
-- Wire `exprtypes` into a Stage1 resolver pass to populate `Node.typeId` for literals/unary/binary/logical/ternary.
-- Add focused Stage1 tests that import only the needed helper modules to avoid duplicate TYPECATEGORY declarations (e.g., mini harness invoking `infer_expression_type` on numeric, pointer arithmetic, comparisons, and string literals).
-- Thread `TypeEnv` through parsing/resolving for string literal array allocation and struct size lookup.
+- Array/struct literal lowering via NODE_LIST (alloca + stores).
+- Resolver/codegen support for default args/import/export naming, matching Stage0 mangling (skip compiler internals).
+- Expand bootstrap to cover a small suite under Stage1-built compiler when stable.
 
 ### Phase 6 — Bootstrapping proof
 - Script Stage0 → Stage1 → Stage2; hash/compare IR or binaries; run selected suites under Stage1-produced compiler.
