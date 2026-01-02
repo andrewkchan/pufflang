@@ -1062,6 +1062,12 @@ def tm_struct_field_name_tok(tm TypeModuleTypes, structIdx int, fieldIdx int) in
   return vecint_get(tm.structFieldNames, start + fieldIdx);
 }
 
+def tm_struct_field_name(tm TypeModuleTypes, structIdx int, fieldIdx int, tokens Vec, src byte~) String {
+  var tokIdx = tm_struct_field_name_tok(tm, structIdx, fieldIdx);
+  if (tokIdx == -1) { return String{src, 0}; }
+  return tok_string(tokens, tokIdx, src);
+}
+
 def tm_struct_index_for_type(tm TypeModuleTypes, typeId int) int {
   var i = 0;
   while (i < tm.structTypeIds.length) {
