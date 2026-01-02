@@ -1031,6 +1031,21 @@ def tm_struct_field_type(tm TypeModuleTypes, structIdx int, fieldIdx int) int {
   return vecint_get(tm.structFieldTypeIds, start + fieldIdx);
 }
 
+def tm_struct_field_index_by_name(tm TypeModuleTypes, structIdx int, tokens Vec, src byte~, nameTok int) int {
+  if (structIdx < 0 || structIdx >= tm.structFieldNameStart.length) { return -1; }
+  var start = vecint_get(tm.structFieldNameStart, structIdx);
+  var count = vecint_get(tm.structFieldCount, structIdx);
+  var i = 0;
+  while (i < count) {
+    var tokIdx = vecint_get(tm.structFieldNames, start + i);
+    if (tokIdx != -1) {
+      if (tok_eq(tokens, src, tokIdx, nameTok) == 1) { return i; }
+    }
+    i = i + 1;
+  }
+  return -1;
+}
+
 def tm_struct_field_offset(tm TypeModuleTypes, structIdx int, fieldIdx int) int {
   if (structIdx < 0 || structIdx >= tm.structFieldOffsetStart.length) { return -1; }
   var start = vecint_get(tm.structFieldOffsetStart, structIdx);
