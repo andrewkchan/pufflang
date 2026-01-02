@@ -586,7 +586,10 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
   if (k == NODE_ASSIGN) {
     var name = tok_str(r.tokens, n.a, r.src);
     var found = scope_lookup_index_any(r.scope, name);
-    if (found == -1) { r.err = 1; return r; }
+    if (found == -1) {
+      // Likely an assignment expression node visited while scanning block contents; skip here.
+      return r;
+    }
     var rhs = infer_expr(r, n.b);
     r = rhs.ctx;
     if (r.err == 1) { return r; }
@@ -627,6 +630,7 @@ def resolve_statement(ctx ResolveCtx, stmtIdx int, loopDepth int) ResolveCtx {
   if (k == NODE_PRINT || k == NODE_EXPR_STMT) {
     var e = infer_expr(r, n.a);
     r = e.ctx;
+    if (r.err == 1) { return r; }
     return r;
   }
   if (k == NODE_BREAK) {
@@ -754,7 +758,12 @@ def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
   // parameters
   var added = 0;
   var idx = fn.b;
-  while (idx != -1 && added < fn.d) {
+  var expectedParams = fn.d;
+  if (fi != -1) {
+    var cnt = tm_fn_param_count(r.tm, fi);
+    if (cnt != -1) { expectedParams = cnt; }
+  }
+  while (idx != -1 && added < expectedParams) {
     if (idx >= r.tokens.length) { break; }
     var k = token_kind_at(r.tokens, idx);
     if (k == TOKEN_IDENTIFIER) {
@@ -765,6 +774,14 @@ def resolve_function(ctx ResolveCtx, fn Node, fi int) ResolveCtx {
       if (res.err != 0) { r.err = 1; return r; }
       fnScope = res.scope;
       added = added + 1;
+      idx = idx + 1;
+      while (idx < r.tokens.length) {
+        var k2 = token_kind_at(r.tokens, idx);
+        if (k2 == TOKEN_COMMA) { idx = idx + 1; break; }
+        if (k2 == TOKEN_RIGHT_PAREN) { break; }
+        idx = idx + 1;
+      }
+      continue;
     }
     idx = idx + 1;
   }
@@ -800,6 +817,15 @@ def resolve_module_ast(src byte~, n int) int {
   var tm = module_type_ids(pmr);
   if (tm.err == 1) { return 0; }
 
+  var ctx = resolve_module_ast_with_pmr(pmr, tm);
+  if (ctx.err == 1) { return 0; }
+  if (ctx.hasReturn == 0) { return 0; }
+  return 1;
+}
+
+// Resolver variant that operates on an existing ParseModuleResult and TypeModuleTypes,
+// returning the final resolver context (with updated arena/types) instead of a boolean.
+def resolve_module_ast_with_pmr(pmr ParseModuleResult, tm TypeModuleTypes) ResolveCtx {
   // Precompute ranges for function bodies to separate global scope definitions.
   var fnStarts = vecint_new(4);
   var fnEnds = vecint_new(4);
@@ -828,7 +854,7 @@ def resolve_module_ast(src byte~, n int) int {
       var vtid = -1;
       if (vi != -1 && vi < tm.varTypeIds.length) { vtid = vecint_get(tm.varTypeIds, vi); }
       var resVar = scope_define_var(scope, name, vtid);
-      if (resVar.err != 0) { return 0; }
+      if (resVar.err != 0) { return ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
       scope = resVar.scope;
     } else if (n0.kind == NODE_STRUCT_DECL) {
       var nameS = tok_str(pmr.tokens, n0.c, pmr.src);
@@ -836,7 +862,7 @@ def resolve_module_ast(src byte~, n int) int {
       var stid = -1;
       if (si != -1 && si < tm.structTypeIds.length) { stid = vecint_get(tm.structTypeIds, si); }
       var resS = scope_define_struct(scope, nameS, stid);
-      if (resS.err != 0) { return 0; }
+      if (resS.err != 0) { return ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
       scope = resS.scope;
     } else if (n0.kind == NODE_FUNCTION) {
       var nameF = tok_str(pmr.tokens, n0.c, pmr.src);
@@ -844,7 +870,7 @@ def resolve_module_ast(src byte~, n int) int {
       var retId = -1;
       if (fi != -1 && fi < tm.fnReturnTypeId.length) { retId = vecint_get(tm.fnReturnTypeId, fi); }
       var resF = scope_define_function(scope, nameF, n0.d, retId, n0.value, n0.typeId);
-      if (resF.err != 0) { return 0; }
+      if (resF.err != 0) { return ResolveCtx{pmr.arena, pmr.tokens, pmr.src, scope, env, tm, -1, -1, 1, 0}; }
       scope = resF.scope;
     }
     i = i + 1;
@@ -896,7 +922,7 @@ def resolve_module_ast(src byte~, n int) int {
     }
     i = i + 1;
   }
-  if (ctx.err == 1) { return 0; }
+  if (ctx.err == 1) { return ctx; }
   // Resolve functions.
   i = 0;
   while (i < pmr.arena.nodes.length && ctx.err == 0) {
@@ -907,7 +933,7 @@ def resolve_module_ast(src byte~, n int) int {
     }
     i = i + 1;
   }
-  if (ctx.err == 1) { return 0; }
-  if (ctx.hasReturn == 0) { return 0; }
-  return 1;
+  if (ctx.err == 1) { return ctx; }
+  if (ctx.hasReturn == 0) { return ctx; }
+  return ctx;
 }

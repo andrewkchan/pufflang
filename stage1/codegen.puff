@@ -5,28 +5,22 @@ def cg_field_ptr_from_dot(
   pmr ParseModuleResult,
   tm TypeModuleTypes,
   dotIdx int,
-  paramNames VecStr,
-  paramTypes VecStr,
-  paramSlots VecStr,
-  paramSlotTypes VecStr,
-  localNames VecStr,
-  localPtrs VecStr,
-  localTypes VecStr,
+  baseInstr String,
+  baseVal String,
+  baseTy String,
   tmp int~
 ) FieldPtrResult {
   var n = nodearena_get(pmr.arena, dotIdx);
-  var base = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
-  if (base.err == 1) { return FieldPtrResult{base.instr, base.value, base.valTy, 1}; }
-  if (cg_is_pointer_type(base.valTy) == 0) { return FieldPtrResult{base.instr, base.value, base.valTy, 1}; }
+  if (cg_is_pointer_type(baseTy) == 0) { return FieldPtrResult{baseInstr, baseVal, baseTy, 1}; }
   var structTypeId = nodearena_get(pmr.arena, n.a).typeId;
   var baseType = typetable_get(tm.env.tt, structTypeId);
   if (baseType.category == TYPECATEGORY_POINTER) {
     structTypeId = baseType.element;
     baseType = typetable_get(tm.env.tt, structTypeId);
   }
-  if (baseType.category != TYPECATEGORY_STRUCT) { return FieldPtrResult{base.instr, base.value, base.valTy, 1}; }
+  if (baseType.category != TYPECATEGORY_STRUCT) { return FieldPtrResult{baseInstr, baseVal, baseTy, 1}; }
   var sIdx = tm_struct_index_for_type(tm, structTypeId);
-  if (sIdx == -1) { return FieldPtrResult{base.instr, base.value, base.valTy, 1}; }
+  if (sIdx == -1) { return FieldPtrResult{baseInstr, baseVal, baseTy, 1}; }
   // Linear search by token equality using recorded field name tokens.
   var fIdx = -1;
   var count = 0;
@@ -41,29 +35,18 @@ def cg_field_ptr_from_dot(
     }
     i = i + 1;
   }
-  if (fIdx == -1) { return FieldPtrResult{base.instr, base.value, base.valTy, 1}; }
+  if (fIdx == -1) { return FieldPtrResult{baseInstr, baseVal, baseTy, 1}; }
   var fTypeId = tm_struct_field_type(tm, sIdx, fIdx);
-  if (fTypeId == -1) { return FieldPtrResult{base.instr, base.value, base.valTy, 1}; }
+  if (fTypeId == -1) { return FieldPtrResult{baseInstr, baseVal, baseTy, 1}; }
   var fTy = cg_llvm_type(tm.env.tt, fTypeId);
   var offset = tm_struct_field_offset(tm, sIdx, fIdx);
-  if (offset == -1) { return FieldPtrResult{base.instr, base.value, base.valTy, 1}; }
+  if (offset == -1) { return FieldPtrResult{baseInstr, baseVal, baseTy, 1}; }
+  var castRes = cg_bitcast_to_i8_ptr(baseInstr, baseTy, baseVal, tmp);
   var sb = sb_new();
-  sb = sb_append_string(sb, base.instr);
-  var ptrVal = base.value;
-  var ptrTy = base.valTy;
-  if (!(ptrTy.length == 3 && (ptrTy.data)~ == byte(105) && (ptrTy.data + 1)~ == byte(56) && (ptrTy.data + 2)~ == byte(42))) {
-    var tmpCast = cg_fresh_tmp(tmp);
-    sb = sb_append_cstr(sb, byte~(&"  "[0]));
-    sb = sb_append_string(sb, tmpCast);
-    sb = sb_append_cstr(sb, byte~(&" = bitcast "[0]));
-    sb = sb_append_string(sb, ptrTy);
-    sb = sb_append_byte(sb, byte(32));
-    sb = sb_append_string(sb, ptrVal);
-    sb = sb_append_cstr(sb, byte~(&" to i8*"[0]));
-    sb = sb_append_byte(sb, byte(10));
-    ptrVal = tmpCast;
-    ptrTy = String{byte~(&"i8*"[0]), 3};
-  }
+  sb = sb_append_string(sb, castRes.instr);
+  var ptrVal = castRes.ptr;
+  var ptrTy = baseTy;
+  if (cg_is_i8_ptr(ptrTy) == 0) { ptrTy = String{byte~(&"i8*"[0]), 3}; }
   var tmpGep = cg_fresh_tmp(tmp);
   sb = sb_append_cstr(sb, byte~(&"  "[0]));
   sb = sb_append_string(sb, tmpGep);
@@ -329,6 +312,14 @@ def cg_collect_param_names(pmr ParseModuleResult, fn Node) VecStr {
       var s = tok_string(pmr.tokens, idx, pmr.src);
       names = vecstr_push(names, s);
       collected = collected + 1;
+      idx = idx + 1;
+      while (idx < pmr.tokens.length) {
+        var k2 = token_kind_at(pmr.tokens, idx);
+        if (k2 == TOKEN_COMMA) { idx = idx + 1; break; }
+        if (k2 == TOKEN_RIGHT_PAREN) { break; }
+        idx = idx + 1;
+      }
+      continue;
     }
     if (k == TOKEN_RIGHT_PAREN) { break; }
     idx = idx + 1;
@@ -600,6 +591,26 @@ def cg_expr(
     sbInstr = sb_append_byte(sbInstr, byte(10));
     return ExprCodegenResult{sb_to_string(sbInstr), tmpName, tyMinus, 0};
   }
+  if (n.kind == NODE_DOT) {
+    if (CG_ENABLE_DOT == 0) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
+    var baseDot = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+    if (baseDot.err == 1) { return baseDot; }
+    var fptr = cg_field_ptr_from_dot(pmr, tm, exprIdx, baseDot.instr, baseDot.value, baseDot.valTy, tmp);
+    if (fptr.err == 1) { return ExprCodegenResult{fptr.instr, fptr.ptr, fptr.ty, 1}; }
+    var tmpLdDot = cg_fresh_tmp(tmp);
+    var sbDot = sb_new();
+    sbDot = sb_append_string(sbDot, fptr.instr);
+    sbDot = sb_append_cstr(sbDot, byte~(&"  "[0]));
+    sbDot = sb_append_string(sbDot, tmpLdDot);
+    sbDot = sb_append_cstr(sbDot, byte~(&" = load "[0]));
+    sbDot = sb_append_string(sbDot, fptr.ty);
+    sbDot = sb_append_cstr(sbDot, byte~(&", "[0]));
+    sbDot = sb_append_string(sbDot, fptr.ty);
+    sbDot = sb_append_cstr(sbDot, byte~(&"* "[0]));
+    sbDot = sb_append_string(sbDot, fptr.ptr);
+    sbDot = sb_append_byte(sbDot, byte(10));
+    return ExprCodegenResult{sb_to_string(sbDot), tmpLdDot, fptr.ty, 0};
+  }
   if (n.kind == NODE_VARIABLE) {
     var name = cg_tok_string(pmr.tokens, pmr.src, n.a);
     // locals
@@ -674,29 +685,46 @@ def cg_expr(
   }
   if (n.kind == NODE_ASSIGN) {
     var lhsNode = nodearena_get(pmr.arena, n.a);
-    if (lhsNode.kind != NODE_VARIABLE) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
-    var aname = cg_tok_string(pmr.tokens, pmr.src, lhsNode.a);
-    var slotPtr2 = String{pmr.src, 0};
-    var slotTy2 = String{pmr.src, 0};
-    var li3 = cg_find_name(localNames, aname);
-    if (li3 != -1) {
-      slotPtr2 = vecstr_get(localPtrs, li3);
-      slotTy2 = vecstr_get(localTypes, li3);
-    } else {
-      var pi3 = cg_match_param(paramNames, aname);
-      if (pi3 != -1) {
-        slotPtr2 = vecstr_get(paramSlots, pi3);
-        slotTy2 = vecstr_get(paramSlotTypes, pi3);
+    if (lhsNode.kind == NODE_VARIABLE) {
+      var aname = cg_tok_string(pmr.tokens, pmr.src, lhsNode.a);
+      var slotPtr2 = String{pmr.src, 0};
+      var slotTy2 = String{pmr.src, 0};
+      var li3 = cg_find_name(localNames, aname);
+      if (li3 != -1) {
+        slotPtr2 = vecstr_get(localPtrs, li3);
+        slotTy2 = vecstr_get(localTypes, li3);
+      } else {
+        var pi3 = cg_match_param(paramNames, aname);
+        if (pi3 != -1) {
+          slotPtr2 = vecstr_get(paramSlots, pi3);
+          slotTy2 = vecstr_get(paramSlotTypes, pi3);
+        }
       }
+      if (slotPtr2.length == 0 || slotTy2.length == 0) {
+        return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
+      }
+      var rhs2 = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+      if (rhs2.err == 1) { return rhs2; }
+      var storeRes3 = cg_store(slotPtr2, slotTy2, rhs2, tmp);
+      if (storeRes3.err == 1) { return storeRes3; }
+      return storeRes3;
     }
-    if (slotPtr2.length == 0 || slotTy2.length == 0) {
-      return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
+    if (lhsNode.kind == NODE_DOT) {
+      if (CG_ENABLE_DOT == 0) { return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1}; }
+      var baseAssignDot = cg_expr(pmr, tm, lhsNode.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+      if (baseAssignDot.err == 1) { return baseAssignDot; }
+      var fptr2 = cg_field_ptr_from_dot(pmr, tm, n.a, baseAssignDot.instr, baseAssignDot.value, baseAssignDot.valTy, tmp);
+      if (fptr2.err == 1) { return ExprCodegenResult{fptr2.instr, fptr2.ptr, fptr2.ty, 1}; }
+      var rhsDot = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
+      if (rhsDot.err == 1) { return rhsDot; }
+      var storeDot = cg_store(fptr2.ptr, fptr2.ty, rhsDot, tmp);
+      if (storeDot.err == 1) { return storeDot; }
+      var sbDot = sb_new();
+      sbDot = sb_append_string(sbDot, fptr2.instr);
+      sbDot = sb_append_string(sbDot, storeDot.instr);
+      return ExprCodegenResult{sb_to_string(sbDot), storeDot.value, storeDot.valTy, 0};
     }
-    var rhs2 = cg_expr(pmr, tm, n.b, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
-    if (rhs2.err == 1) { return rhs2; }
-    var storeRes3 = cg_store(slotPtr2, slotTy2, rhs2, tmp);
-    if (storeRes3.err == 1) { return storeRes3; }
-    return storeRes3;
+    return ExprCodegenResult{String{pmr.src, 0}, String{pmr.src, 0}, String{pmr.src, 0}, 1};
   }
   if (n.kind == NODE_BINARY) {
     var left = cg_expr(pmr, tm, n.a, paramNames, paramTypes, paramSlots, paramSlotTypes, localNames, localPtrs, localTypes, tmp);
@@ -1306,26 +1334,75 @@ def cg_emit_stmt_range(
       lp = vecstr_push(lp, slot);
       lt = vecstr_push(lt, vty);
     } else if (stmt.kind == NODE_ASSIGN) {
-      var aname = tok_string(pmr.tokens, stmt.a, pmr.src);
-      var slotPtr = String{pmr.src, 0};
-      var slotTy = String{pmr.src, 0};
-      var li2 = cg_find_name(ln, aname);
-      if (li2 != -1) {
-        slotPtr = vecstr_get(lp, li2);
-        slotTy = vecstr_get(lt, li2);
-      } else {
-        var pi2 = cg_match_param(paramNames, aname);
-        if (pi2 != -1) {
-          slotPtr = vecstr_get(paramSlots, pi2);
-          slotTy = vecstr_get(paramSlotTypes, pi2);
+      if (stmt.a < 0 || stmt.a >= pmr.tokens.length) { i = i + 1; continue; }
+      var tokKind = token_kind_at(pmr.tokens, stmt.a);
+      if (tokKind != TOKEN_IDENTIFIER) { i = i + 1; continue; }
+      var handledAssign = 0;
+      if (stmt.a >= 0 && stmt.a < pmr.tokens.length) {
+        var tkKind = token_kind_at(pmr.tokens, stmt.a);
+        if (tkKind == TOKEN_IDENTIFIER) {
+          var aname = tok_string(pmr.tokens, stmt.a, pmr.src);
+          var slotPtr = String{pmr.src, 0};
+          var slotTy = String{pmr.src, 0};
+          var li2 = cg_find_name(ln, aname);
+          if (li2 != -1) {
+            slotPtr = vecstr_get(lp, li2);
+            slotTy = vecstr_get(lt, li2);
+          } else {
+            var pi2 = cg_match_param(paramNames, aname);
+            if (pi2 != -1) {
+              slotPtr = vecstr_get(paramSlots, pi2);
+              slotTy = vecstr_get(paramSlotTypes, pi2);
+            }
+          }
+          if (slotPtr.length == 0 || slotTy.length == 0) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          var rhs = cg_expr(pmr, tm, stmt.b, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+          if (rhs.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          var storeRes2 = cg_store(slotPtr, slotTy, rhs, tmp);
+          if (storeRes2.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          sb = sb_append_string(sb, storeRes2.instr);
+          handledAssign = 1;
         }
       }
-      if (slotPtr.length == 0 || slotTy.length == 0) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
-      var rhs = cg_expr(pmr, tm, stmt.b, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
-      if (rhs.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
-      var storeRes2 = cg_store(slotPtr, slotTy, rhs, tmp);
-      if (storeRes2.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
-      sb = sb_append_string(sb, storeRes2.instr);
+      if (handledAssign == 0 && stmt.a >= 0 && stmt.a < pmr.arena.nodes.length) {
+        var lhsNode = nodearena_get(pmr.arena, stmt.a);
+        if (lhsNode.kind == NODE_VARIABLE) {
+          var aname2 = cg_tok_string(pmr.tokens, pmr.src, lhsNode.a);
+          var slotPtr3 = String{pmr.src, 0};
+          var slotTy3 = String{pmr.src, 0};
+          var li4 = cg_find_name(ln, aname2);
+          if (li4 != -1) {
+            slotPtr3 = vecstr_get(lp, li4);
+            slotTy3 = vecstr_get(lt, li4);
+          } else {
+            var pi4 = cg_match_param(paramNames, aname2);
+            if (pi4 != -1) {
+              slotPtr3 = vecstr_get(paramSlots, pi4);
+              slotTy3 = vecstr_get(paramSlotTypes, pi4);
+            }
+          }
+          if (slotPtr3.length == 0 || slotTy3.length == 0) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          var rhsVar = cg_expr(pmr, tm, stmt.b, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+          if (rhsVar.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          var storeVar = cg_store(slotPtr3, slotTy3, rhsVar, tmp);
+          if (storeVar.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          sb = sb_append_string(sb, storeVar.instr);
+          handledAssign = 1;
+        } else if (lhsNode.kind == NODE_DOT && CG_ENABLE_DOT == 1) {
+          var baseDotStmt = cg_expr(pmr, tm, lhsNode.a, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+          if (baseDotStmt.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          var fptrStmt = cg_field_ptr_from_dot(pmr, tm, stmt.a, baseDotStmt.instr, baseDotStmt.value, baseDotStmt.valTy, tmp);
+          if (fptrStmt.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          var rhsDotStmt = cg_expr(pmr, tm, stmt.b, paramNames, paramTypes, paramSlots, paramSlotTypes, ln, lp, lt, tmp);
+          if (rhsDotStmt.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          var storeDotStmt = cg_store(fptrStmt.ptr, fptrStmt.ty, rhsDotStmt, tmp);
+          if (storeDotStmt.err == 1) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
+          sb = sb_append_string(sb, fptrStmt.instr);
+          sb = sb_append_string(sb, storeDotStmt.instr);
+          handledAssign = 1;
+        }
+      }
+      if (handledAssign == 0) { return StmtEmitResult{sb_to_string(sb), emittedRet, ln, lp, lt, term, 1}; }
     } else if (stmt.kind == NODE_RETURN) {
       if (retTy.length == 4 && (retTy.data)~ == byte(118)) {
         sb = sb_append_cstr(sb, byte~(&"  ret void"[0]));
